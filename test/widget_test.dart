@@ -3,8 +3,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:right_answer/main.dart';
 
 void main() {
-  TestWidgetsFlutterBinding.ensureInitialized();
-
   testWidgets('App smoke test', (WidgetTester tester) async {
     await tester.pumpWidget(const RightAnswerApp());
     await tester.pump();

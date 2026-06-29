@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter_markdown/flutter_markdown.dart';
+import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:uuid/uuid.dart';
 import '../constants/tool_types.dart';
 import '../models/chunk.dart';
@@ -38,28 +38,32 @@ class _ResultScreenState extends State<ResultScreen> {
   bool _showChunks = false;
 
   Future<void> _save() async {
-    await _repo.insert(SavedOutput(
-      id: Uuid().v4(),
-      subjectId: widget.subjectId,
-      chapterId: widget.chapterId,
-      toolType: widget.toolType,
-      question: widget.question,
-      answer: widget.result.answer,
-      language: widget.language,
-      usedChunkIds: widget.usedChunks.map((c) => c.id).toList(),
-      createdAt: DateTime.now(),
-    ));
+    await _repo.insert(
+      SavedOutput(
+        id: Uuid().v4(),
+        subjectId: widget.subjectId,
+        chapterId: widget.chapterId,
+        toolType: widget.toolType,
+        question: widget.question,
+        answer: widget.result.answer,
+        language: widget.language,
+        usedChunkIds: widget.usedChunks.map((c) => c.id).toList(),
+        createdAt: DateTime.now(),
+      ),
+    );
     if (mounted) {
       setState(() => _saved = true);
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('Saved successfully!')));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Saved successfully!')));
     }
   }
 
   void _copy() {
     Clipboard.setData(ClipboardData(text: widget.result.answer));
-    ScaffoldMessenger.of(context)
-        .showSnackBar(const SnackBar(content: Text('Copied to clipboard')));
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('Copied to clipboard')));
   }
 
   @override
@@ -71,7 +75,11 @@ class _ResultScreenState extends State<ResultScreen> {
       appBar: AppBar(
         title: Text(ToolType.displayName(widget.toolType)),
         actions: [
-          IconButton(icon: const Icon(Icons.copy_outlined), tooltip: 'Copy', onPressed: _copy),
+          IconButton(
+            icon: const Icon(Icons.copy_outlined),
+            tooltip: 'Copy',
+            onPressed: _copy,
+          ),
           IconButton(
             icon: Icon(_saved ? Icons.bookmark : Icons.bookmark_add_outlined),
             tooltip: _saved ? 'Saved' : 'Save',
@@ -92,19 +100,29 @@ class _ResultScreenState extends State<ResultScreen> {
                 const SizedBox(width: 6),
                 _statChip(context, Icons.output, '${r.outputTokens} out'),
                 const SizedBox(width: 6),
-                _statChip(context, Icons.attach_money, '\$${r.estimatedCost.toStringAsFixed(5)}'),
+                _statChip(
+                  context,
+                  Icons.attach_money,
+                  '\$${r.estimatedCost.toStringAsFixed(5)}',
+                ),
                 const Spacer(),
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 3,
+                  ),
                   decoration: BoxDecoration(
                     color: theme.colorScheme.primaryContainer,
                     borderRadius: BorderRadius.circular(6),
                   ),
-                  child: Text(widget.language,
-                      style: TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w600,
-                          color: theme.colorScheme.primary)),
+                  child: Text(
+                    widget.language,
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      color: theme.colorScheme.primary,
+                    ),
+                  ),
                 ),
               ],
             ),
@@ -114,18 +132,27 @@ class _ResultScreenState extends State<ResultScreen> {
           if (widget.question != null)
             Container(
               width: double.infinity,
-              color: theme.colorScheme.secondaryContainer.withValues(alpha: 0.4),
+              color: theme.colorScheme.secondaryContainer.withValues(
+                alpha: 0.4,
+              ),
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
               child: Row(
                 children: [
-                  Icon(Icons.help_outline, size: 14, color: theme.colorScheme.secondary),
+                  Icon(
+                    Icons.help_outline,
+                    size: 14,
+                    color: theme.colorScheme.secondary,
+                  ),
                   const SizedBox(width: 8),
                   Expanded(
-                    child: Text(widget.question!,
-                        style: TextStyle(
-                            fontSize: 13,
-                            fontStyle: FontStyle.italic,
-                            color: theme.colorScheme.onSecondaryContainer)),
+                    child: Text(
+                      widget.question!,
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontStyle: FontStyle.italic,
+                        color: theme.colorScheme.onSecondaryContainer,
+                      ),
+                    ),
                   ),
                 ],
               ),
@@ -139,9 +166,15 @@ class _ResultScreenState extends State<ResultScreen> {
               selectable: true,
               styleSheet: MarkdownStyleSheet.fromTheme(theme).copyWith(
                 p: theme.textTheme.bodyMedium?.copyWith(height: 1.6),
-                h1: theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
-                h2: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
-                h3: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w600),
+                h1: theme.textTheme.titleLarge?.copyWith(
+                  fontWeight: FontWeight.w700,
+                ),
+                h2: theme.textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.w700,
+                ),
+                h3: theme.textTheme.titleSmall?.copyWith(
+                  fontWeight: FontWeight.w600,
+                ),
                 code: TextStyle(
                   fontFamily: 'monospace',
                   backgroundColor: theme.colorScheme.surfaceContainer,
@@ -149,9 +182,14 @@ class _ResultScreenState extends State<ResultScreen> {
                 ),
                 blockquoteDecoration: BoxDecoration(
                   border: Border(
-                    left: BorderSide(color: theme.colorScheme.primary, width: 3),
+                    left: BorderSide(
+                      color: theme.colorScheme.primary,
+                      width: 3,
+                    ),
                   ),
-                  color: theme.colorScheme.primaryContainer.withValues(alpha: 0.2),
+                  color: theme.colorScheme.primaryContainer.withValues(
+                    alpha: 0.2,
+                  ),
                 ),
               ),
             ),
@@ -165,16 +203,25 @@ class _ResultScreenState extends State<ResultScreen> {
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
               child: Row(
                 children: [
-                  Icon(Icons.layers_outlined, size: 16,
-                      color: theme.colorScheme.onSurface.withValues(alpha: 0.5)),
+                  Icon(
+                    Icons.layers_outlined,
+                    size: 16,
+                    color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
+                  ),
                   const SizedBox(width: 8),
-                  Text('${widget.usedChunks.length} context chunks used',
-                      style: TextStyle(
-                          fontSize: 12,
-                          color: theme.colorScheme.onSurface.withValues(alpha: 0.5))),
+                  Text(
+                    '${widget.usedChunks.length} context chunks used',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
+                    ),
+                  ),
                   const Spacer(),
-                  Icon(_showChunks ? Icons.expand_less : Icons.expand_more,
-                      size: 18, color: theme.colorScheme.onSurface.withValues(alpha: 0.4)),
+                  Icon(
+                    _showChunks ? Icons.expand_less : Icons.expand_more,
+                    size: 18,
+                    color: theme.colorScheme.onSurface.withValues(alpha: 0.4),
+                  ),
                 ],
               ),
             ),
@@ -199,14 +246,19 @@ class _ResultScreenState extends State<ResultScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text('Chunk ${c.chunkIndex + 1}',
-                            style: TextStyle(
-                                fontSize: 10,
-                                fontWeight: FontWeight.w700,
-                                color: theme.colorScheme.primary)),
+                        Text(
+                          'Chunk ${c.chunkIndex + 1}',
+                          style: TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.w700,
+                            color: theme.colorScheme.primary,
+                          ),
+                        ),
                         const SizedBox(height: 4),
                         Text(
-                          c.text.length > 200 ? '${c.text.substring(0, 200)}…' : c.text,
+                          c.text.length > 200
+                              ? '${c.text.substring(0, 200)}…'
+                              : c.text,
                           style: const TextStyle(fontSize: 12, height: 1.5),
                         ),
                       ],
@@ -232,9 +284,16 @@ class _ResultScreenState extends State<ResultScreen> {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon, size: 12, color: theme.colorScheme.onSurface.withValues(alpha: 0.5)),
+          Icon(
+            icon,
+            size: 12,
+            color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
+          ),
           const SizedBox(width: 4),
-          Text(label, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w500)),
+          Text(
+            label,
+            style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w500),
+          ),
         ],
       ),
     );
