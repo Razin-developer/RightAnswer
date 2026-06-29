@@ -71,7 +71,7 @@ jobs:
         run: flutter pub get
 
       - name: Build debug APK
-        run: flutter build apk --debug --dart-define=OPENAI_API_KEY=${{ env.OPENAI_API_KEY }}
+        run: flutter build apk --debug --dart-define=OPENAI_API_KEY="${{ secrets.OPENAI_API_KEY }}"
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
