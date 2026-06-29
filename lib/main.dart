@@ -14,9 +14,11 @@ final navigatorKey = GlobalKey<NavigatorState>();
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  final settingsRepo = SettingsRepository();
+  await settingsRepo.delete(SettingKeys.openAiApiKey);
 
   // ── Load persisted theme before first paint ───────────────────────────────
-  final savedTheme = await SettingsRepository().get(SettingKeys.themeMode);
+  final savedTheme = await settingsRepo.get(SettingKeys.themeMode);
   if (savedTheme != null) themeNotifier.setFromString(savedTheme);
 
   // ── Notifications ─────────────────────────────────────────────────────────
@@ -32,8 +34,9 @@ void main() async {
 
   // ── Connectivity: trigger queue processing when back online ───────────────
   ConnectivityService.instance.onReconnect(() async {
-    final pending = await QueueService.instance.getAll()
-        .then((list) => list.where((r) => r.status == 'pending').length);
+    final pending = await QueueService.instance.getAll().then(
+      (list) => list.where((r) => r.status == 'pending').length,
+    );
     if (pending > 0) {
       await NotificationService.instance.showConnectivityRestored(pending);
     }
@@ -42,11 +45,16 @@ void main() async {
   await ConnectivityService.instance.initialize();
 
   // ── Reschedule daily reminder if enabled ──────────────────────────────────
-  final settings = await SettingsRepository().getAll();
+  final settings = await settingsRepo.getAll();
   if (settings[SettingKeys.dailyReminderEnabled] == 'true') {
-    final hour = int.tryParse(settings[SettingKeys.dailyReminderHour] ?? '') ?? 8;
-    final min  = int.tryParse(settings[SettingKeys.dailyReminderMinute] ?? '') ?? 0;
-    await NotificationService.instance.scheduleDailyReminder(hour: hour, minute: min);
+    final hour =
+        int.tryParse(settings[SettingKeys.dailyReminderHour] ?? '') ?? 8;
+    final min =
+        int.tryParse(settings[SettingKeys.dailyReminderMinute] ?? '') ?? 0;
+    await NotificationService.instance.scheduleDailyReminder(
+      hour: hour,
+      minute: min,
+    );
   }
 
   runApp(const RightAnswerApp());

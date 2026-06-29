@@ -2,10 +2,10 @@ name: Flutter Build APK
 
 on:
   push:
-    branches: [ main, master, develop ]
+    branches: [main, master, develop]
   pull_request:
-    branches: [ main, master ]
-  workflow_dispatch:          # allow manual trigger from GitHub UI
+    branches: [main, master]
+  workflow_dispatch: # allow manual trigger from GitHub UI
     inputs:
       build_type:
         description: 'Build type (debug / release)'
@@ -71,7 +71,7 @@ jobs:
         run: flutter pub get
 
       - name: Build debug APK
-        run: flutter build apk --debug
+        run: flutter build apk --debug --dart-define=OPENAI_API_KEY=${{ env.OPENAI_API_KEY }}
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v4

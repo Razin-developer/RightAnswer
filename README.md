@@ -1,17 +1,25 @@
-# right_answer
+# RightAnswer
 
-A new Flutter project.
+Flutter app for chapter-based AI study tools with offline queueing.
 
-## Getting Started
+## OpenAI Configuration
 
-This project is a starting point for a Flutter application.
+The app no longer reads an API key from Settings or local storage.
 
-A few resources to get you started if this is your first Flutter project:
+Provide the key at run or build time:
 
-- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
-- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
+```bash
+flutter run --dart-define=OPENAI_API_KEY=your_key_here
+flutter build apk --debug --dart-define=OPENAI_API_KEY=your_key_here
+flutter build apk --release --dart-define=OPENAI_API_KEY=your_key_here
+```
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+You can also use `--dart-define-from-file` if you prefer keeping secrets in a local json file.
+
+## Development Checks
+
+```bash
+flutter pub get
+flutter analyze --no-fatal-infos
+flutter test
+```

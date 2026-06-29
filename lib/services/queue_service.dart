@@ -1,4 +1,5 @@
 import 'package:uuid/uuid.dart';
+import '../models/app_exception.dart';
 import '../models/queued_request.dart';
 import '../models/saved_output.dart';
 import '../repositories/chunk_repository.dart';
@@ -34,7 +35,9 @@ class QueueService {
   void addListener(void Function() l) => _listeners.add(l);
   void removeListener(void Function() l) => _listeners.remove(l);
   void _notify() {
-    for (final l in _listeners) { l(); }
+    for (final l in _listeners) {
+      l();
+    }
   }
 
   Future<void> initialize() async {
@@ -109,7 +112,10 @@ Future<int> processQueueItems({
       await queueRepo.updateStatus(req.id, 'processing');
       if (onProgress != null) await onProgress();
 
-      final chunks = await retrieval.searchChapter(req.chapterId, req.question ?? '');
+      final chunks = await retrieval.searchChapter(
+        req.chapterId,
+        req.question ?? '',
+      );
       final result = await openAI.generateFromContext(
         toolType: req.toolType,
         question: req.question,
@@ -120,22 +126,25 @@ Future<int> processQueueItems({
         outputLength: req.outputLength,
       );
 
-      await savedOutputRepo.insert(SavedOutput(
-        id: const Uuid().v4(),
-        subjectId: req.subjectId,
-        chapterId: req.chapterId,
-        toolType: req.toolType,
-        question: req.question,
-        answer: result.answer,
-        language: req.language,
-        usedChunkIds: chunks.map((c) => c.id).toList(),
-        createdAt: DateTime.now(),
-      ));
+      await savedOutputRepo.insert(
+        SavedOutput(
+          id: const Uuid().v4(),
+          subjectId: req.subjectId,
+          chapterId: req.chapterId,
+          toolType: req.toolType,
+          question: req.question,
+          answer: result.answer,
+          language: req.language,
+          usedChunkIds: chunks.map((c) => c.id).toList(),
+          createdAt: DateTime.now(),
+        ),
+      );
 
       await queueRepo.updateStatus(req.id, 'done');
       processed++;
     } catch (e) {
-      await queueRepo.updateStatus(req.id, 'failed', error: e.toString());
+      final appError = AppException.from(e);
+      await queueRepo.updateStatus(req.id, 'failed', error: appError.message);
     }
     if (onProgress != null) await onProgress();
   }
@@ -154,9 +163,9 @@ Future<void> _processQueueItems({
   required SavedOutputRepository savedOutputRepo,
   Future<void> Function()? onProgress,
 }) => processQueueItems(
-      queueRepo: queueRepo,
-      retrieval: retrieval,
-      openAI: openAI,
-      savedOutputRepo: savedOutputRepo,
-      onProgress: onProgress,
-    );
+  queueRepo: queueRepo,
+  retrieval: retrieval,
+  openAI: openAI,
+  savedOutputRepo: savedOutputRepo,
+  onProgress: onProgress,
+);

@@ -13,11 +13,15 @@ class SettingsRepository {
 
   Future<void> set(String key, String value) async {
     final db = await _db.database;
-    await db.insert(
-      'settings',
-      {'key': key, 'value': value},
-      conflictAlgorithm: ConflictAlgorithm.replace,
-    );
+    await db.insert('settings', {
+      'key': key,
+      'value': value,
+    }, conflictAlgorithm: ConflictAlgorithm.replace);
+  }
+
+  Future<void> delete(String key) async {
+    final db = await _db.database;
+    await db.delete('settings', where: 'key = ?', whereArgs: [key]);
   }
 
   Future<Map<String, String>> getAll() async {

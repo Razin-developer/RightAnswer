@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
+import '../models/app_exception.dart';
 import '../constants/tool_types.dart';
 import '../models/queued_request.dart';
 import '../services/connectivity_service.dart';
 import '../services/queue_service.dart';
+import '../widgets/app_feedback.dart';
 
 class QueueScreen extends StatefulWidget {
   const QueueScreen({super.key});
@@ -29,22 +31,36 @@ class _QueueScreenState extends State<QueueScreen> {
     super.dispose();
   }
 
-  void _onQueueChange() { if (mounted) _load(); }
+  void _onQueueChange() {
+    if (mounted) _load();
+  }
 
   Future<void> _load() async {
     final items = await QueueService.instance.getAll();
-    if (mounted) setState(() { _items = items; _loading = false; });
+    if (mounted) {
+      setState(() {
+        _items = items;
+        _loading = false;
+      });
+    }
   }
 
   Future<void> _processNow() async {
     if (!ConnectivityService.instance.isOnline) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('No internet connection')));
+      AppFeedback.showToast(context, 'No internet connection');
       return;
     }
     setState(() => _processing = true);
-    await QueueService.instance.processQueue();
-    if (mounted) setState(() => _processing = false);
+    try {
+      await QueueService.instance.processQueue();
+    } catch (e) {
+      if (mounted) {
+        await AppFeedback.showErrorDialog(context, AppException.from(e));
+      }
+    }
+    if (mounted) {
+      setState(() => _processing = false);
+    }
     _load();
   }
 
@@ -92,11 +108,20 @@ class _QueueScreenState extends State<QueueScreen> {
                 onPressed: _processing ? null : _processNow,
                 icon: _processing
                     ? const SizedBox(
-                        width: 14, height: 14,
-                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                        width: 14,
+                        height: 14,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.white,
+                        ),
+                      )
                     : const Icon(Icons.play_arrow),
-                label: Text(_processing ? 'Processing…' : 'Process $pending pending now'),
-                style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(44)),
+                label: Text(
+                  _processing ? 'Processing…' : 'Process $pending pending now',
+                ),
+                style: FilledButton.styleFrom(
+                  minimumSize: const Size.fromHeight(44),
+                ),
               ),
             ),
 
@@ -105,15 +130,15 @@ class _QueueScreenState extends State<QueueScreen> {
             child: _loading
                 ? const Center(child: CircularProgressIndicator())
                 : _items.isEmpty
-                    ? _emptyState(theme)
-                    : RefreshIndicator(
-                        onRefresh: _load,
-                        child: ListView.builder(
-                          padding: const EdgeInsets.fromLTRB(16, 12, 16, 40),
-                          itemCount: _items.length,
-                          itemBuilder: (ctx, i) => _itemCard(_items[i], theme),
-                        ),
-                      ),
+                ? _emptyState(theme)
+                : RefreshIndicator(
+                    onRefresh: _load,
+                    child: ListView.builder(
+                      padding: const EdgeInsets.fromLTRB(16, 12, 16, 40),
+                      itemCount: _items.length,
+                      itemBuilder: (ctx, i) => _itemCard(_items[i], theme),
+                    ),
+                  ),
           ),
         ],
       ),
@@ -121,20 +146,32 @@ class _QueueScreenState extends State<QueueScreen> {
   }
 
   Widget _emptyState(ThemeData theme) => Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(Icons.check_circle_outline, size: 64, color: Colors.green.shade400),
-            const SizedBox(height: 16),
-            Text('Queue is empty',
-                style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700)),
-            const SizedBox(height: 6),
-            Text('Requests generated while offline appear here',
-                style: TextStyle(
-                    fontSize: 13, color: theme.colorScheme.onSurface.withValues(alpha: 0.5))),
-          ],
+    child: Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(
+          Icons.check_circle_outline,
+          size: 64,
+          color: Colors.green.shade400,
         ),
-      );
+        const SizedBox(height: 16),
+        Text(
+          'Queue is empty',
+          style: theme.textTheme.titleMedium?.copyWith(
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+        const SizedBox(height: 6),
+        Text(
+          'Requests generated while offline appear here',
+          style: TextStyle(
+            fontSize: 13,
+            color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
+          ),
+        ),
+      ],
+    ),
+  );
 
   Widget _itemCard(QueuedRequest r, ThemeData theme) {
     final (icon, color, label) = _statusMeta(r.status, theme);
@@ -149,7 +186,10 @@ class _QueueScreenState extends State<QueueScreen> {
               Row(
                 children: [
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 3,
+                    ),
                     decoration: BoxDecoration(
                       color: color.withValues(alpha: 0.12),
                       borderRadius: BorderRadius.circular(6),
@@ -159,42 +199,69 @@ class _QueueScreenState extends State<QueueScreen> {
                       children: [
                         Icon(icon, size: 12, color: color),
                         const SizedBox(width: 5),
-                        Text(label,
-                            style: TextStyle(
-                                fontSize: 11, fontWeight: FontWeight.w700, color: color)),
+                        Text(
+                          label,
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w700,
+                            color: color,
+                          ),
+                        ),
                       ],
                     ),
                   ),
                   const SizedBox(width: 8),
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 7,
+                      vertical: 3,
+                    ),
                     decoration: BoxDecoration(
                       color: theme.colorScheme.primaryContainer,
                       borderRadius: BorderRadius.circular(6),
                     ),
-                    child: Text(ToolType.displayName(r.toolType),
-                        style: TextStyle(
-                            fontSize: 11, fontWeight: FontWeight.w600,
-                            color: theme.colorScheme.primary)),
+                    child: Text(
+                      ToolType.displayName(r.toolType),
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        color: theme.colorScheme.primary,
+                      ),
+                    ),
                   ),
                   const Spacer(),
-                  Text(_fmtDate(r.createdAt),
-                      style: TextStyle(
-                          fontSize: 11, color: theme.colorScheme.onSurface.withValues(alpha: 0.4))),
+                  Text(
+                    _fmtDate(r.createdAt),
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: theme.colorScheme.onSurface.withValues(alpha: 0.4),
+                    ),
+                  ),
                 ],
               ),
               const SizedBox(height: 8),
               if (r.subjectName != null || r.chapterTitle != null)
-                Text([r.subjectName, r.chapterTitle].whereType<String>().join(' › '),
-                    style: TextStyle(
-                        fontSize: 12, fontWeight: FontWeight.w500,
-                        color: theme.colorScheme.onSurface.withValues(alpha: 0.6))),
+                Text(
+                  [
+                    r.subjectName,
+                    r.chapterTitle,
+                  ].whereType<String>().join(' › '),
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w500,
+                    color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
+                  ),
+                ),
               if (r.question != null) ...[
                 const SizedBox(height: 4),
-                Text('Q: ${r.question}',
-                    style: TextStyle(
-                        fontSize: 12, fontStyle: FontStyle.italic,
-                        color: theme.colorScheme.onSurface.withValues(alpha: 0.6))),
+                Text(
+                  'Q: ${r.question}',
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontStyle: FontStyle.italic,
+                    color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
+                  ),
+                ),
               ],
               if (r.errorMessage != null) ...[
                 const SizedBox(height: 6),
@@ -203,10 +270,14 @@ class _QueueScreenState extends State<QueueScreen> {
                   decoration: BoxDecoration(
                     color: Colors.red.withValues(alpha: 0.08),
                     borderRadius: BorderRadius.circular(6),
-                    border: Border.all(color: Colors.red.withValues(alpha: 0.3)),
+                    border: Border.all(
+                      color: Colors.red.withValues(alpha: 0.3),
+                    ),
                   ),
-                  child: Text(r.errorMessage!,
-                      style: const TextStyle(fontSize: 11, color: Colors.red)),
+                  child: Text(
+                    r.errorMessage!,
+                    style: const TextStyle(fontSize: 11, color: Colors.red),
+                  ),
                 ),
               ],
               const SizedBox(height: 10),
@@ -218,8 +289,12 @@ class _QueueScreenState extends State<QueueScreen> {
                       icon: const Icon(Icons.refresh, size: 14),
                       label: const Text('Retry'),
                       style: OutlinedButton.styleFrom(
-                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                          visualDensity: VisualDensity.compact),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 6,
+                        ),
+                        visualDensity: VisualDensity.compact,
+                      ),
                     ),
                   const Spacer(),
                   if (r.status != 'processing')
@@ -239,12 +314,13 @@ class _QueueScreenState extends State<QueueScreen> {
     );
   }
 
-  (IconData, Color, String) _statusMeta(String status, ThemeData t) => switch (status) {
-        'pending'    => (Icons.schedule, Colors.orange, 'Pending'),
+  (IconData, Color, String) _statusMeta(String status, ThemeData t) =>
+      switch (status) {
+        'pending' => (Icons.schedule, Colors.orange, 'Pending'),
         'processing' => (Icons.sync, Colors.blue, 'Processing'),
-        'done'       => (Icons.check_circle, Colors.green, 'Done'),
-        'failed'     => (Icons.error_outline, Colors.red, 'Failed'),
-        _            => (Icons.help_outline, t.colorScheme.onSurface, status),
+        'done' => (Icons.check_circle, Colors.green, 'Done'),
+        'failed' => (Icons.error_outline, Colors.red, 'Failed'),
+        _ => (Icons.help_outline, t.colorScheme.onSurface, status),
       };
 
   String _fmtDate(DateTime dt) =>
@@ -270,8 +346,10 @@ class _StatusBanner extends StatelessWidget {
           children: [
             const Icon(Icons.wifi, size: 16, color: Colors.green),
             const SizedBox(width: 8),
-            const Text('Online — queue is empty',
-                style: TextStyle(fontSize: 13, color: Colors.green)),
+            const Text(
+              'Online — queue is empty',
+              style: TextStyle(fontSize: 13, color: Colors.green),
+            ),
           ],
         ),
       );
@@ -303,8 +381,10 @@ class _StatusBanner extends StatelessWidget {
         children: [
           Icon(Icons.wifi, size: 16, color: theme.colorScheme.primary),
           const SizedBox(width: 8),
-          Text('Online — $pending ${pending == 1 ? 'request' : 'requests'} ready to process',
-              style: TextStyle(fontSize: 13, color: theme.colorScheme.primary)),
+          Text(
+            'Online — $pending ${pending == 1 ? 'request' : 'requests'} ready to process',
+            style: TextStyle(fontSize: 13, color: theme.colorScheme.primary),
+          ),
         ],
       ),
     );
@@ -335,7 +415,9 @@ class _ConnectivityChipState extends State<ConnectivityChip> {
     super.dispose();
   }
 
-  void _rebuild() { if (mounted) setState(() {}); }
+  void _rebuild() {
+    if (mounted) setState(() {});
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -366,7 +448,11 @@ class _ConnectivityChipState extends State<ConnectivityChip> {
                   ),
                   child: Text(
                     pending > 9 ? '9+' : '$pending',
-                    style: const TextStyle(fontSize: 9, color: Colors.white, fontWeight: FontWeight.bold),
+                    style: const TextStyle(
+                      fontSize: 9,
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                    ),
                   ),
                 ),
               ),
