@@ -45,7 +45,6 @@ class _ChatScreenState extends State<ChatScreen> {
 
   bool _isGenerating = false;
   bool _isRecording = false;
-  bool _showOptions = false;
   bool _isTemporary = false;
 
   String? _selectedImagePath;
@@ -119,7 +118,6 @@ class _ChatScreenState extends State<ChatScreen> {
       return;
     }
 
-    // Create the persistent chat record on first message
     if (_currentChat == null) {
       final now = DateTime.now();
       final newChat = Chat(
@@ -198,7 +196,6 @@ class _ChatScreenState extends State<ChatScreen> {
         await _chatRepo.touchUpdatedAt(chatId);
         await _loadAllChats();
 
-        // Auto-name after the very first exchange
         final userCount = _messages.where((m) => m.isUser).length;
         if (userCount == 1 && _currentChat?.name == 'New Chat') {
           _autoNameChat(chatId, text);
@@ -317,30 +314,9 @@ class _ChatScreenState extends State<ChatScreen> {
     await _loadAllChats();
   }
 
-  Future<void> _pickImage() async {
-    final result = await showModalBottomSheet<ImageSource>(
-      context: context,
-      builder: (ctx) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(
-              leading: const Icon(Icons.photo_library_outlined),
-              title: const Text('Choose from Gallery'),
-              onTap: () => Navigator.pop(ctx, ImageSource.gallery),
-            ),
-            ListTile(
-              leading: const Icon(Icons.camera_alt_outlined),
-              title: const Text('Take a Photo'),
-              onTap: () => Navigator.pop(ctx, ImageSource.camera),
-            ),
-          ],
-        ),
-      ),
-    );
-    if (result == null) return;
+  Future<void> _pickImage(ImageSource source) async {
     try {
-      final picked = await ImagePicker().pickImage(source: result, imageQuality: 85);
+      final picked = await ImagePicker().pickImage(source: source, imageQuality: 85);
       if (picked != null && mounted) setState(() => _selectedImagePath = picked.path);
     } catch (e) {
       if (mounted) AppFeedback.showToast(context, 'Could not access image: ${e.toString()}');
@@ -417,6 +393,69 @@ class _ChatScreenState extends State<ChatScreen> {
     AppFeedback.showToast(context, 'Copied to clipboard');
   }
 
+  void _openPlusMenu() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (_) => _PlusMenuSheet(
+        responseLength: _responseLength,
+        reasoningLevel: _reasoningLevel,
+        onLengthChanged: (v) => setState(() => _responseLength = v),
+        onReasoningChanged: (v) => setState(() => _reasoningLevel = v),
+        onCamera: () {
+          Navigator.pop(context);
+          _pickImage(ImageSource.camera);
+        },
+        onPhotos: () {
+          Navigator.pop(context);
+          _pickImage(ImageSource.gallery);
+        },
+        onFiles: () {
+          Navigator.pop(context);
+          _pickImage(ImageSource.gallery);
+        },
+        onSolve: () {
+          Navigator.pop(context);
+          _insertQuickAction('Solve');
+        },
+        onExplain: () {
+          Navigator.pop(context);
+          _insertQuickAction('Explain');
+        },
+        onChapterSummary: () {
+          Navigator.pop(context);
+          _insertQuickAction('Summarize this chapter');
+        },
+        onKeyPoints: () {
+          Navigator.pop(context);
+          _insertQuickAction('Key points of');
+        },
+        onLearningObjectives: () {
+          Navigator.pop(context);
+          _insertQuickAction('Learning objectives for');
+        },
+      ),
+    );
+  }
+
+  void _openFullscreen() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        fullscreenDialog: true,
+        builder: (_) => _FullscreenInputScreen(
+          controller: _inputCtrl,
+          onSend: () {
+            Navigator.pop(context);
+            _sendMessage();
+          },
+          isGenerating: _isGenerating,
+        ),
+      ),
+    );
+  }
+
   // ── Build ──────────────────────────────────────────────────────────────────
 
   @override
@@ -451,7 +490,7 @@ class _ChatScreenState extends State<ChatScreen> {
             children: [
               Flexible(
                 child: Text(
-                  _currentChat?.name ?? 'New Chat',
+                  _currentChat?.name ?? 'RightAnswer',
                   style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
                   overflow: TextOverflow.ellipsis,
                 ),
@@ -480,22 +519,25 @@ class _ChatScreenState extends State<ChatScreen> {
             Container(
               width: double.infinity,
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              color: Colors.purple.withValues(alpha: 0.1),
+              color: theme.colorScheme.secondaryContainer.withValues(alpha: 0.5),
               child: Row(
                 children: [
-                  const Icon(Icons.flash_on_rounded, size: 14, color: Colors.purple),
+                  Icon(Icons.flash_on_rounded, size: 14, color: theme.colorScheme.secondary),
                   const SizedBox(width: 8),
-                  const Expanded(
+                  Expanded(
                     child: Text(
                       'Temporary — not saved to history',
-                      style: TextStyle(fontSize: 12, color: Colors.purple),
+                      style: TextStyle(fontSize: 12, color: theme.colorScheme.secondary),
                     ),
                   ),
                   GestureDetector(
                     onTap: () => setState(() => _isTemporary = false),
-                    child: const Text(
+                    child: Text(
                       'Save',
-                      style: TextStyle(fontSize: 12, color: Colors.purple, fontWeight: FontWeight.w700),
+                      style: TextStyle(
+                          fontSize: 12,
+                          color: theme.colorScheme.secondary,
+                          fontWeight: FontWeight.w700),
                     ),
                   ),
                 ],
@@ -539,21 +581,11 @@ class _ChatScreenState extends State<ChatScreen> {
             isGenerating: _isGenerating,
             isRecording: _isRecording,
             selectedImagePath: _selectedImagePath,
-            responseLength: _responseLength,
-            reasoningLevel: _reasoningLevel,
-            showOptions: _showOptions,
             onSend: _sendMessage,
             onVoice: _toggleVoice,
-            onImage: _pickImage,
             onRemoveImage: () => setState(() => _selectedImagePath = null),
-            onToggleOptions: () => setState(() => _showOptions = !_showOptions),
-            onLengthChanged: (v) => setState(() => _responseLength = v),
-            onReasoningChanged: (v) => setState(() => _reasoningLevel = v),
-            onSolve: () => _insertQuickAction('Solve'),
-            onExplain: () => _insertQuickAction('Explain'),
-            onChapterSummary: () => _insertQuickAction('Summarize this chapter'),
-            onKeyPoints: () => _insertQuickAction('Key points of'),
-            onLearningObjectives: () => _insertQuickAction('Learning objectives for'),
+            onOpenPlus: _openPlusMenu,
+            onFullscreen: _openFullscreen,
           ),
         ],
       ),
@@ -586,7 +618,6 @@ class _ChatDrawer extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
 
-    // Group chats by subject
     final Map<String, List<Chat>> grouped = {};
     for (final c in chats) {
       final key = c.subjectName ?? 'Other';
@@ -605,7 +636,8 @@ class _ChatDrawer extends StatelessWidget {
               child: Row(
                 children: [
                   Container(
-                    width: 32, height: 32,
+                    width: 32,
+                    height: 32,
                     decoration: BoxDecoration(
                       color: theme.colorScheme.primary,
                       borderRadius: BorderRadius.circular(9),
@@ -631,14 +663,13 @@ class _ChatDrawer extends StatelessWidget {
                   _DrawerBtn(
                     icon: Icons.add_comment_outlined,
                     label: 'New Chat',
-                    color: theme.colorScheme.primary,
                     onTap: onNewChat,
                   ),
                   const SizedBox(height: 6),
                   _DrawerBtn(
-                    icon: Icons.flash_on_rounded,
+                    icon: Icons.bolt_rounded,
                     label: 'Temporary Chat',
-                    color: Colors.purple,
+                    isSecondary: true,
                     onTap: onTempChat,
                   ),
                 ],
@@ -690,13 +721,22 @@ class _ChatDrawer extends StatelessWidget {
 class _DrawerBtn extends StatelessWidget {
   final IconData icon;
   final String label;
-  final Color color;
+  final bool isSecondary;
   final VoidCallback onTap;
 
-  const _DrawerBtn({required this.icon, required this.label, required this.color, required this.onTap});
+  const _DrawerBtn({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+    this.isSecondary = false,
+  });
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final color = isSecondary
+        ? theme.colorScheme.onSurface.withValues(alpha: 0.65)
+        : theme.colorScheme.primary;
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(10),
@@ -704,15 +744,24 @@ class _DrawerBtn extends StatelessWidget {
         width: double.infinity,
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
         decoration: BoxDecoration(
-          color: color.withValues(alpha: 0.08),
+          color: isSecondary
+              ? theme.colorScheme.surfaceContainerHighest
+              : theme.colorScheme.primary.withValues(alpha: 0.08),
           borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: color.withValues(alpha: 0.2)),
+          border: Border.all(
+            color: isSecondary
+                ? theme.dividerColor
+                : theme.colorScheme.primary.withValues(alpha: 0.2),
+          ),
         ),
         child: Row(
           children: [
             Icon(icon, size: 16, color: color),
             const SizedBox(width: 10),
-            Text(label, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: color)),
+            Text(
+              label,
+              style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: color),
+            ),
           ],
         ),
       ),
@@ -754,11 +803,11 @@ class _ChatGroup extends StatelessWidget {
           ),
         ),
         ...chats.map((chat) => _ChatTile(
-          chat: chat,
-          isSelected: chat.id == currentChatId,
-          onSelect: () => onSelect(chat),
-          onDelete: () => onDelete(chat.id),
-        )),
+              chat: chat,
+              isSelected: chat.id == currentChatId,
+              onSelect: () => onSelect(chat),
+              onDelete: () => onDelete(chat.id),
+            )),
       ],
     );
   }
@@ -786,7 +835,9 @@ class _ChatTile extends StatelessWidget {
         margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 1),
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
         decoration: BoxDecoration(
-          color: isSelected ? theme.colorScheme.primary.withValues(alpha: 0.1) : Colors.transparent,
+          color: isSelected
+              ? theme.colorScheme.primary.withValues(alpha: 0.1)
+              : Colors.transparent,
           borderRadius: BorderRadius.circular(8),
         ),
         child: Row(
@@ -807,7 +858,27 @@ class _ChatTile extends StatelessWidget {
             ),
             const SizedBox(width: 4),
             GestureDetector(
-              onTap: onDelete,
+              onTap: () async {
+                final ok = await showDialog<bool>(
+                  context: context,
+                  builder: (ctx) => AlertDialog(
+                    title: const Text('Delete Chat'),
+                    content: Text('Delete "${chat.name}"? This cannot be undone.'),
+                    actions: [
+                      TextButton(
+                        onPressed: () => Navigator.pop(ctx, false),
+                        child: const Text('Cancel'),
+                      ),
+                      FilledButton(
+                        style: FilledButton.styleFrom(backgroundColor: Colors.red),
+                        onPressed: () => Navigator.pop(ctx, true),
+                        child: const Text('Delete'),
+                      ),
+                    ],
+                  ),
+                );
+                if (ok == true) onDelete();
+              },
               child: Icon(
                 Icons.close_rounded,
                 size: 14,
@@ -900,12 +971,12 @@ class _ContextBar extends StatelessWidget {
             if (hasContext)
               GestureDetector(
                 onTap: onClear,
-                child: Icon(Icons.close_rounded, size: 16,
-                    color: theme.colorScheme.primary.withValues(alpha: 0.5)),
+                child: Icon(Icons.close_rounded,
+                    size: 16, color: theme.colorScheme.primary.withValues(alpha: 0.5)),
               )
             else
-              Icon(Icons.expand_more_rounded, size: 18,
-                  color: theme.colorScheme.onSurface.withValues(alpha: 0.35)),
+              Icon(Icons.expand_more_rounded,
+                  size: 18, color: theme.colorScheme.onSurface.withValues(alpha: 0.35)),
           ],
         ),
       ),
@@ -915,7 +986,7 @@ class _ContextBar extends StatelessWidget {
 
 // ── Message Bubble ────────────────────────────────────────────────────────────
 
-class _MessageBubble extends StatefulWidget {
+class _MessageBubble extends StatelessWidget {
   final ChatMessage message;
   final VoidCallback onCopy;
   final VoidCallback onRead;
@@ -929,93 +1000,90 @@ class _MessageBubble extends StatefulWidget {
   });
 
   @override
-  State<_MessageBubble> createState() => _MessageBubbleState();
-}
-
-class _MessageBubbleState extends State<_MessageBubble> {
-  bool _showActions = false;
-
-  @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final msg = widget.message;
+    final msg = message;
     final isUser = msg.isUser;
 
     return Align(
       alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
-      child: GestureDetector(
-        onTap: () => setState(() => _showActions = !_showActions),
-        child: Container(
-          margin: EdgeInsets.only(
-            top: 6,
-            bottom: 2,
-            left: isUser ? 48 : 0,
-            right: isUser ? 0 : 48,
-          ),
-          child: Column(
-            crossAxisAlignment: isUser ? CrossAxisAlignment.end : CrossAxisAlignment.start,
-            children: [
-              if (msg.imagePath != null)
-                Container(
-                  margin: const EdgeInsets.only(bottom: 6),
-                  width: 200,
-                  height: 140,
-                  clipBehavior: Clip.antiAlias,
-                  decoration: BoxDecoration(borderRadius: BorderRadius.circular(12)),
-                  child: Image.file(File(msg.imagePath!), fit: BoxFit.cover),
-                ),
+      child: Container(
+        margin: EdgeInsets.only(
+          top: 6,
+          bottom: 2,
+          left: isUser ? 48 : 0,
+          right: isUser ? 0 : 48,
+        ),
+        child: Column(
+          crossAxisAlignment: isUser ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+          children: [
+            if (msg.imagePath != null)
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                decoration: BoxDecoration(
-                  color: isUser
-                      ? theme.colorScheme.primary
-                      : theme.colorScheme.surfaceContainerHighest,
-                  borderRadius: BorderRadius.only(
-                    topLeft: const Radius.circular(16),
-                    topRight: const Radius.circular(16),
-                    bottomLeft: Radius.circular(isUser ? 16 : 4),
-                    bottomRight: Radius.circular(isUser ? 4 : 16),
-                  ),
+                margin: const EdgeInsets.only(bottom: 6),
+                width: 200,
+                height: 140,
+                clipBehavior: Clip.antiAlias,
+                decoration: BoxDecoration(borderRadius: BorderRadius.circular(12)),
+                child: Image.file(File(msg.imagePath!), fit: BoxFit.cover),
+              ),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              decoration: BoxDecoration(
+                color: isUser
+                    ? theme.colorScheme.primary
+                    : theme.colorScheme.surfaceContainerHighest,
+                borderRadius: BorderRadius.only(
+                  topLeft: const Radius.circular(16),
+                  topRight: const Radius.circular(16),
+                  bottomLeft: Radius.circular(isUser ? 16 : 4),
+                  bottomRight: Radius.circular(isUser ? 4 : 16),
                 ),
-                child: isUser
-                    ? SelectableText(
-                        msg.content,
-                        style: const TextStyle(fontSize: 14, color: Colors.white, height: 1.45),
-                      )
-                    : MarkdownBody(
-                        data: msg.content,
-                        selectable: true,
-                        styleSheet: MarkdownStyleSheet.fromTheme(theme).copyWith(
-                          p: const TextStyle(fontSize: 14, height: 1.55),
-                          code: TextStyle(
-                            fontSize: 12,
-                            fontFamily: 'monospace',
-                            backgroundColor: theme.colorScheme.surfaceContainerLowest,
-                          ),
+              ),
+              child: isUser
+                  ? SelectableText(
+                      msg.content,
+                      style: const TextStyle(
+                          fontSize: 14, color: Colors.white, height: 1.45),
+                    )
+                  : MarkdownBody(
+                      data: msg.content,
+                      selectable: true,
+                      styleSheet:
+                          MarkdownStyleSheet.fromTheme(theme).copyWith(
+                        p: const TextStyle(fontSize: 14, height: 1.55),
+                        code: TextStyle(
+                          fontSize: 12,
+                          fontFamily: 'monospace',
+                          backgroundColor:
+                              theme.colorScheme.surfaceContainerLowest,
                         ),
                       ),
-              ),
-              if (_showActions) ...[
-                const SizedBox(height: 4),
-                Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    _ActionBtn(icon: Icons.copy_outlined, label: 'Copy', onTap: widget.onCopy),
+                    ),
+            ),
+            if (!isUser) ...[
+              const SizedBox(height: 4),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  _ActionBtn(
+                      icon: Icons.copy_outlined, label: 'Copy', onTap: onCopy),
+                  const SizedBox(width: 4),
+                  _ActionBtn(
+                      icon: Icons.volume_up_outlined,
+                      label: 'Read',
+                      onTap: onRead),
+                  if (onRegenerate != null) ...[
                     const SizedBox(width: 4),
-                    _ActionBtn(icon: Icons.volume_up_outlined, label: 'Read', onTap: widget.onRead),
-                    if (widget.onRegenerate != null) ...[
-                      const SizedBox(width: 4),
-                      _ActionBtn(
-                        icon: Icons.refresh_rounded,
-                        label: 'Retry',
-                        onTap: widget.onRegenerate!,
-                      ),
-                    ],
+                    _ActionBtn(
+                      icon: Icons.refresh_rounded,
+                      label: 'Retry',
+                      onTap: onRegenerate!,
+                    ),
                   ],
-                ),
-              ],
+                ],
+              ),
             ],
-          ),
+          ],
         ),
       ),
     );
@@ -1069,14 +1137,16 @@ class _TypingIndicator extends StatefulWidget {
   State<_TypingIndicator> createState() => _TypingIndicatorState();
 }
 
-class _TypingIndicatorState extends State<_TypingIndicator> with SingleTickerProviderStateMixin {
+class _TypingIndicatorState extends State<_TypingIndicator>
+    with SingleTickerProviderStateMixin {
   late final AnimationController _ctrl;
 
   @override
   void initState() {
     super.initState();
-    _ctrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 1200))
-      ..repeat();
+    _ctrl =
+        AnimationController(vsync: this, duration: const Duration(milliseconds: 1200))
+          ..repeat();
   }
 
   @override
@@ -1110,9 +1180,7 @@ class _TypingIndicatorState extends State<_TypingIndicator> with SingleTickerPro
               3,
               (i) {
                 final delay = i * 0.33;
-                final opacity = ((_ctrl.value - delay).abs() < 0.33)
-                    ? 1.0
-                    : 0.3;
+                final opacity = ((_ctrl.value - delay).abs() < 0.33) ? 1.0 : 0.3;
                 return Container(
                   margin: EdgeInsets.only(left: i > 0 ? 4 : 0),
                   width: 7,
@@ -1197,42 +1265,22 @@ class _InputArea extends StatelessWidget {
   final bool isGenerating;
   final bool isRecording;
   final String? selectedImagePath;
-  final String responseLength;
-  final String reasoningLevel;
-  final bool showOptions;
   final VoidCallback onSend;
   final VoidCallback onVoice;
-  final VoidCallback onImage;
   final VoidCallback onRemoveImage;
-  final VoidCallback onToggleOptions;
-  final void Function(String) onLengthChanged;
-  final void Function(String) onReasoningChanged;
-  final VoidCallback onSolve;
-  final VoidCallback onExplain;
-  final VoidCallback onChapterSummary;
-  final VoidCallback onKeyPoints;
-  final VoidCallback onLearningObjectives;
+  final VoidCallback onOpenPlus;
+  final VoidCallback onFullscreen;
 
   const _InputArea({
     required this.inputCtrl,
     required this.isGenerating,
     required this.isRecording,
     required this.selectedImagePath,
-    required this.responseLength,
-    required this.reasoningLevel,
-    required this.showOptions,
     required this.onSend,
     required this.onVoice,
-    required this.onImage,
     required this.onRemoveImage,
-    required this.onToggleOptions,
-    required this.onLengthChanged,
-    required this.onReasoningChanged,
-    required this.onSolve,
-    required this.onExplain,
-    required this.onChapterSummary,
-    required this.onKeyPoints,
-    required this.onLearningObjectives,
+    required this.onOpenPlus,
+    required this.onFullscreen,
   });
 
   @override
@@ -1248,231 +1296,484 @@ class _InputArea extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            // Quick actions
-            Padding(
-              padding: const EdgeInsets.fromLTRB(12, 10, 12, 4),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: SingleChildScrollView(
-                      scrollDirection: Axis.horizontal,
-                      child: Row(
-                        children: [
-                          _QuickChip(icon: Icons.calculate_outlined, label: 'Solve', onTap: onSolve),
-                          const SizedBox(width: 8),
-                          _QuickChip(icon: Icons.lightbulb_outline, label: 'Explain', onTap: onExplain),
-                          const SizedBox(width: 8),
-                          _QuickChip(icon: Icons.summarize_outlined, label: 'Chapter Summary', onTap: onChapterSummary),
-                          const SizedBox(width: 8),
-                          _QuickChip(icon: Icons.format_list_bulleted_rounded, label: 'Key Points', onTap: onKeyPoints),
-                          const SizedBox(width: 8),
-                          _QuickChip(icon: Icons.track_changes_rounded, label: 'Learning Objectives', onTap: onLearningObjectives),
-                        ],
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  GestureDetector(
-                    onTap: onToggleOptions,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                      decoration: BoxDecoration(
-                        color: showOptions
-                            ? theme.colorScheme.primary.withValues(alpha: 0.1)
-                            : Colors.transparent,
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(color: theme.dividerColor),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(Icons.tune_rounded, size: 14,
-                              color: showOptions
-                                  ? theme.colorScheme.primary
-                                  : theme.colorScheme.onSurface.withValues(alpha: 0.5)),
-                          const SizedBox(width: 4),
-                          Text(
-                            'Options',
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: showOptions
-                                  ? theme.colorScheme.primary
-                                  : theme.colorScheme.onSurface.withValues(alpha: 0.5),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-
-            // Options row
-            if (showOptions)
-              Padding(
-                padding: const EdgeInsets.fromLTRB(12, 0, 12, 6),
-                child: Row(
-                  children: [
-                    Text(
-                      'Length:',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: theme.colorScheme.onSurface.withValues(alpha: 0.55),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    _SegmentBtn(
-                        label: 'S',
-                        selected: responseLength == 'small',
-                        onTap: () => onLengthChanged('small')),
-                    const SizedBox(width: 4),
-                    _SegmentBtn(
-                        label: 'M',
-                        selected: responseLength == 'normal',
-                        onTap: () => onLengthChanged('normal')),
-                    const SizedBox(width: 4),
-                    _SegmentBtn(
-                        label: 'L',
-                        selected: responseLength == 'large',
-                        onTap: () => onLengthChanged('large')),
-                    const SizedBox(width: 16),
-                    Text(
-                      'Think:',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: theme.colorScheme.onSurface.withValues(alpha: 0.55),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    _SegmentBtn(
-                        label: 'Low',
-                        selected: reasoningLevel == 'low',
-                        onTap: () => onReasoningChanged('low')),
-                    const SizedBox(width: 4),
-                    _SegmentBtn(
-                        label: 'Mid',
-                        selected: reasoningLevel == 'mid',
-                        onTap: () => onReasoningChanged('mid')),
-                    const SizedBox(width: 4),
-                    _SegmentBtn(
-                        label: 'High',
-                        selected: reasoningLevel == 'high',
-                        onTap: () => onReasoningChanged('high')),
-                  ],
-                ),
-              ),
-
-            // Image preview
             if (selectedImagePath != null)
               Padding(
-                padding: const EdgeInsets.fromLTRB(12, 0, 12, 6),
-                child: Stack(
-                  children: [
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(10),
-                      child: Image.file(
-                        File(selectedImagePath!),
-                        height: 80,
-                        width: 80,
-                        fit: BoxFit.cover,
-                      ),
-                    ),
-                    Positioned(
-                      top: 4,
-                      right: 4,
-                      child: GestureDetector(
-                        onTap: onRemoveImage,
-                        child: Container(
-                          padding: const EdgeInsets.all(2),
-                          decoration: const BoxDecoration(
-                            color: Colors.black54,
-                            shape: BoxShape.circle,
-                          ),
-                          child: const Icon(Icons.close, size: 12, color: Colors.white),
+                padding: const EdgeInsets.fromLTRB(14, 10, 14, 0),
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: Stack(
+                    children: [
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(10),
+                        child: Image.file(
+                          File(selectedImagePath!),
+                          height: 80,
+                          width: 80,
+                          fit: BoxFit.cover,
                         ),
                       ),
-                    ),
-                  ],
+                      Positioned(
+                        top: 4,
+                        right: 4,
+                        child: GestureDetector(
+                          onTap: onRemoveImage,
+                          child: Container(
+                            padding: const EdgeInsets.all(2),
+                            decoration: const BoxDecoration(
+                              color: Colors.black54,
+                              shape: BoxShape.circle,
+                            ),
+                            child: const Icon(Icons.close, size: 12, color: Colors.white),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
-
-            // Main input row
             Padding(
-              padding: const EdgeInsets.fromLTRB(10, 0, 10, 10),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  IconButton(
-                    icon: const Icon(Icons.image_outlined),
-                    onPressed: isGenerating ? null : onImage,
-                    iconSize: 22,
-                    color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
-                    tooltip: 'Attach image',
-                  ),
-                  Expanded(
-                    child: TextField(
-                      controller: inputCtrl,
-                      maxLines: 5,
-                      minLines: 1,
-                      enabled: !isGenerating,
-                      textCapitalization: TextCapitalization.sentences,
-                      decoration: InputDecoration(
-                        hintText: isRecording ? 'Listening...' : 'Ask anything...',
-                        hintStyle: TextStyle(
-                          color: isRecording
-                              ? Colors.red
-                              : theme.colorScheme.onSurface.withValues(alpha: 0.4),
-                        ),
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(20),
-                          borderSide: BorderSide(color: theme.dividerColor),
-                        ),
-                        enabledBorder: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(20),
-                          borderSide: BorderSide(color: theme.dividerColor),
-                        ),
-                        focusedBorder: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(20),
-                          borderSide: BorderSide(
-                              color: theme.colorScheme.primary, width: 1.5),
-                        ),
-                        contentPadding:
-                            const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                        isDense: true,
-                      ),
-                      onSubmitted: isGenerating ? null : (_) => onSend(),
+              padding: const EdgeInsets.fromLTRB(10, 8, 10, 10),
+              child: ValueListenableBuilder(
+                valueListenable: inputCtrl,
+                builder: (context, value, child) {
+                  final hasText = value.text.isNotEmpty;
+                  return Container(
+                    decoration: BoxDecoration(
+                      color: theme.colorScheme.surfaceContainerHighest,
+                      borderRadius: BorderRadius.circular(28),
+                      border: Border.all(color: theme.dividerColor),
                     ),
-                  ),
-                  IconButton(
-                    icon: Icon(
-                      isRecording ? Icons.stop_rounded : Icons.mic_outlined,
-                      color: isRecording ? Colors.red : theme.colorScheme.onSurface.withValues(alpha: 0.5),
-                    ),
-                    onPressed: isGenerating ? null : onVoice,
-                    iconSize: 22,
-                    tooltip: isRecording ? 'Stop recording' : 'Voice input',
-                  ),
-                  AnimatedContainer(
-                    duration: const Duration(milliseconds: 200),
-                    child: isGenerating
-                        ? const Padding(
-                            padding: EdgeInsets.all(12),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        IconButton(
+                          icon: const Icon(Icons.add_rounded),
+                          iconSize: 22,
+                          color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
+                          onPressed: isGenerating ? null : onOpenPlus,
+                          tooltip: 'More options',
+                        ),
+                        Expanded(
+                          child: TextField(
+                            controller: inputCtrl,
+                            maxLines: 5,
+                            minLines: 1,
+                            enabled: !isGenerating,
+                            textCapitalization: TextCapitalization.sentences,
+                            decoration: InputDecoration(
+                              hintText: isRecording ? 'Listening...' : 'Ask RightAnswer...',
+                              hintStyle: TextStyle(
+                                color: isRecording
+                                    ? Colors.red
+                                    : theme.colorScheme.onSurface.withValues(alpha: 0.4),
+                              ),
+                              border: InputBorder.none,
+                              contentPadding:
+                                  const EdgeInsets.symmetric(vertical: 12),
+                              isDense: true,
+                            ),
+                            onSubmitted: isGenerating ? null : (_) => onSend(),
+                          ),
+                        ),
+                        if (hasText)
+                          IconButton(
+                            icon: const Icon(Icons.open_in_full_rounded),
+                            iconSize: 18,
+                            color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
+                            onPressed: onFullscreen,
+                            tooltip: 'Fullscreen',
+                          ),
+                        if (isGenerating)
+                          const Padding(
+                            padding: EdgeInsets.all(14),
                             child: SizedBox(
                               width: 20,
                               height: 20,
                               child: CircularProgressIndicator(strokeWidth: 2),
                             ),
                           )
-                        : IconButton(
-                            icon: Icon(Icons.send_rounded, color: theme.colorScheme.primary),
-                            onPressed: onSend,
+                        else if (hasText)
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(4, 6, 8, 6),
+                            child: GestureDetector(
+                              onTap: onSend,
+                              child: Container(
+                                width: 36,
+                                height: 36,
+                                decoration: BoxDecoration(
+                                  color: theme.colorScheme.primary,
+                                  shape: BoxShape.circle,
+                                ),
+                                child: const Icon(Icons.arrow_upward_rounded,
+                                    color: Colors.white, size: 20),
+                              ),
+                            ),
+                          )
+                        else
+                          IconButton(
+                            icon: Icon(
+                              isRecording ? Icons.stop_rounded : Icons.mic_outlined,
+                              color: isRecording
+                                  ? Colors.red
+                                  : theme.colorScheme.onSurface.withValues(alpha: 0.5),
+                            ),
+                            onPressed: onVoice,
                             iconSize: 22,
-                            tooltip: 'Send',
+                            tooltip: isRecording ? 'Stop recording' : 'Voice input',
                           ),
-                  ),
+                      ],
+                    ),
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ── Plus Menu Sheet ───────────────────────────────────────────────────────────
+
+class _PlusMenuSheet extends StatefulWidget {
+  final String responseLength;
+  final String reasoningLevel;
+  final void Function(String) onLengthChanged;
+  final void Function(String) onReasoningChanged;
+  final VoidCallback onCamera;
+  final VoidCallback onPhotos;
+  final VoidCallback onFiles;
+  final VoidCallback onSolve;
+  final VoidCallback onExplain;
+  final VoidCallback onChapterSummary;
+  final VoidCallback onKeyPoints;
+  final VoidCallback onLearningObjectives;
+
+  const _PlusMenuSheet({
+    required this.responseLength,
+    required this.reasoningLevel,
+    required this.onLengthChanged,
+    required this.onReasoningChanged,
+    required this.onCamera,
+    required this.onPhotos,
+    required this.onFiles,
+    required this.onSolve,
+    required this.onExplain,
+    required this.onChapterSummary,
+    required this.onKeyPoints,
+    required this.onLearningObjectives,
+  });
+
+  @override
+  State<_PlusMenuSheet> createState() => _PlusMenuSheetState();
+}
+
+class _PlusMenuSheetState extends State<_PlusMenuSheet> {
+  String? _expandedPanel;
+  late String _reasoningLevel;
+  late String _responseLength;
+
+  @override
+  void initState() {
+    super.initState();
+    _reasoningLevel = widget.reasoningLevel;
+    _responseLength = widget.responseLength;
+  }
+
+  double _reasoningToSlider(String v) => v == 'low' ? 0 : v == 'mid' ? 1 : 2;
+
+  String _sliderToReasoning(double v) =>
+      v <= 0.5 ? 'low' : v <= 1.5 ? 'mid' : 'high';
+
+  double _lengthToSlider(String v) =>
+      v == 'small' ? 0 : v == 'normal' ? 1 : 2;
+
+  String _sliderToLength(double v) =>
+      v <= 0.5 ? 'small' : v <= 1.5 ? 'normal' : 'large';
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
+    return Container(
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surface,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      child: SafeArea(
+        top: false,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              margin: const EdgeInsets.only(top: 10, bottom: 4),
+              width: 36,
+              height: 4,
+              decoration: BoxDecoration(
+                color: theme.dividerColor,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  'Options',
+                  style: theme.textTheme.titleSmall
+                      ?.copyWith(fontWeight: FontWeight.w700),
+                ),
+              ),
+            ),
+            // Media row
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 4),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                children: [
+                  _MediaBtn(
+                      icon: Icons.camera_alt_outlined,
+                      label: 'Camera',
+                      onTap: widget.onCamera),
+                  _MediaBtn(
+                      icon: Icons.photo_library_outlined,
+                      label: 'Photos',
+                      onTap: widget.onPhotos),
+                  _MediaBtn(
+                      icon: Icons.attach_file_rounded,
+                      label: 'Files',
+                      onTap: widget.onFiles),
                 ],
               ),
+            ),
+            Divider(
+                height: 1,
+                color: theme.dividerColor,
+                indent: 16,
+                endIndent: 16),
+            // Reasoning row
+            ListTile(
+              dense: true,
+              leading: Icon(Icons.psychology_outlined,
+                  size: 20, color: theme.colorScheme.primary),
+              title: const Text('Reasoning',
+                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+              subtitle: Text(
+                _reasoningLevel[0].toUpperCase() + _reasoningLevel.substring(1),
+                style: TextStyle(
+                    fontSize: 12,
+                    color: theme.colorScheme.onSurface.withValues(alpha: 0.5)),
+              ),
+              trailing: Icon(
+                _expandedPanel == 'reasoning'
+                    ? Icons.expand_less
+                    : Icons.expand_more,
+                size: 20,
+              ),
+              onTap: () => setState(() => _expandedPanel =
+                  _expandedPanel == 'reasoning' ? null : 'reasoning'),
+            ),
+            if (_expandedPanel == 'reasoning')
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
+                child: Column(
+                  children: [
+                    Slider(
+                      value: _reasoningToSlider(_reasoningLevel),
+                      min: 0,
+                      max: 2,
+                      divisions: 2,
+                      onChanged: (v) {
+                        final newVal = _sliderToReasoning(v);
+                        setState(() => _reasoningLevel = newVal);
+                        widget.onReasoningChanged(newVal);
+                      },
+                    ),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: ['Low', 'Mid', 'High'].map((label) {
+                        final active = _reasoningLevel == label.toLowerCase();
+                        return Text(
+                          label,
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight:
+                                active ? FontWeight.w700 : FontWeight.normal,
+                            color: active
+                                ? theme.colorScheme.primary
+                                : theme.colorScheme.onSurface
+                                    .withValues(alpha: 0.5),
+                          ),
+                        );
+                      }).toList(),
+                    ),
+                  ],
+                ),
+              ),
+            Divider(
+                height: 1,
+                color: theme.dividerColor,
+                indent: 16,
+                endIndent: 16),
+            // Length row
+            ListTile(
+              dense: true,
+              leading: Icon(Icons.straighten_outlined,
+                  size: 20, color: theme.colorScheme.primary),
+              title: const Text('Length',
+                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+              subtitle: Text(
+                _responseLength[0].toUpperCase() + _responseLength.substring(1),
+                style: TextStyle(
+                    fontSize: 12,
+                    color: theme.colorScheme.onSurface.withValues(alpha: 0.5)),
+              ),
+              trailing: Icon(
+                _expandedPanel == 'length'
+                    ? Icons.expand_less
+                    : Icons.expand_more,
+                size: 20,
+              ),
+              onTap: () => setState(() =>
+                  _expandedPanel = _expandedPanel == 'length' ? null : 'length'),
+            ),
+            if (_expandedPanel == 'length')
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
+                child: Column(
+                  children: [
+                    Slider(
+                      value: _lengthToSlider(_responseLength),
+                      min: 0,
+                      max: 2,
+                      divisions: 2,
+                      onChanged: (v) {
+                        final newVal = _sliderToLength(v);
+                        setState(() => _responseLength = newVal);
+                        widget.onLengthChanged(newVal);
+                      },
+                    ),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children:
+                          [('Small', 'small'), ('Normal', 'normal'), ('Large', 'large')]
+                              .map((pair) {
+                        final active = _responseLength == pair.$2;
+                        return Text(
+                          pair.$1,
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight:
+                                active ? FontWeight.w700 : FontWeight.normal,
+                            color: active
+                                ? theme.colorScheme.primary
+                                : theme.colorScheme.onSurface
+                                    .withValues(alpha: 0.5),
+                          ),
+                        );
+                      }).toList(),
+                    ),
+                  ],
+                ),
+              ),
+            Divider(
+                height: 1,
+                color: theme.dividerColor,
+                indent: 16,
+                endIndent: 16),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 10, 16, 4),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  'QUICK ACTIONS',
+                  style: TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 0.8,
+                    color: theme.colorScheme.onSurface.withValues(alpha: 0.4),
+                  ),
+                ),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 4, 12, 12),
+              child: SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(
+                  children: [
+                    _QuickChip(
+                        icon: Icons.calculate_outlined,
+                        label: 'Solve',
+                        onTap: widget.onSolve),
+                    const SizedBox(width: 8),
+                    _QuickChip(
+                        icon: Icons.lightbulb_outline,
+                        label: 'Explain',
+                        onTap: widget.onExplain),
+                    const SizedBox(width: 8),
+                    _QuickChip(
+                        icon: Icons.summarize_outlined,
+                        label: 'Chapter Summary',
+                        onTap: widget.onChapterSummary),
+                    const SizedBox(width: 8),
+                    _QuickChip(
+                        icon: Icons.format_list_bulleted_rounded,
+                        label: 'Key Points',
+                        onTap: widget.onKeyPoints),
+                    const SizedBox(width: 8),
+                    _QuickChip(
+                        icon: Icons.track_changes_rounded,
+                        label: 'Learning Objectives',
+                        onTap: widget.onLearningObjectives),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _MediaBtn extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+
+  const _MediaBtn(
+      {required this.icon, required this.label, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(14),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 52,
+              height: 52,
+              decoration: BoxDecoration(
+                color: theme.colorScheme.surfaceContainerHighest,
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: Icon(icon,
+                  size: 24,
+                  color: theme.colorScheme.onSurface.withValues(alpha: 0.7)),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              label,
+              style: TextStyle(
+                  fontSize: 11,
+                  color: theme.colorScheme.onSurface.withValues(alpha: 0.6)),
             ),
           ],
         ),
@@ -1486,7 +1787,8 @@ class _QuickChip extends StatelessWidget {
   final String label;
   final VoidCallback onTap;
 
-  const _QuickChip({required this.icon, required this.label, required this.onTap});
+  const _QuickChip(
+      {required this.icon, required this.label, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
@@ -1503,7 +1805,9 @@ class _QuickChip extends StatelessWidget {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(icon, size: 13, color: theme.colorScheme.onSurface.withValues(alpha: 0.6)),
+            Icon(icon,
+                size: 13,
+                color: theme.colorScheme.onSurface.withValues(alpha: 0.6)),
             const SizedBox(width: 5),
             Text(
               label,
@@ -1519,36 +1823,75 @@ class _QuickChip extends StatelessWidget {
   }
 }
 
-class _SegmentBtn extends StatelessWidget {
-  final String label;
-  final bool selected;
-  final VoidCallback onTap;
+// ── Fullscreen Input Screen ───────────────────────────────────────────────────
 
-  const _SegmentBtn({required this.label, required this.selected, required this.onTap});
+class _FullscreenInputScreen extends StatelessWidget {
+  final TextEditingController controller;
+  final VoidCallback onSend;
+  final bool isGenerating;
+
+  const _FullscreenInputScreen({
+    required this.controller,
+    required this.onSend,
+    required this.isGenerating,
+  });
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return GestureDetector(
-      onTap: onTap,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 160),
-        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
-        decoration: BoxDecoration(
-          color: selected ? theme.colorScheme.primary : Colors.transparent,
-          borderRadius: BorderRadius.circular(6),
-          border: Border.all(
-            color: selected ? theme.colorScheme.primary : theme.dividerColor,
-          ),
-        ),
-        child: Text(
-          label,
+    return Scaffold(
+      appBar: AppBar(
+        automaticallyImplyLeading: false,
+        title: Text(
+          'Compose',
           style: TextStyle(
-            fontSize: 11,
+            fontSize: 15,
             fontWeight: FontWeight.w600,
-            color: selected ? Colors.white : theme.colorScheme.onSurface.withValues(alpha: 0.6),
+            color: theme.colorScheme.onSurface.withValues(alpha: 0.7),
           ),
         ),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.close_fullscreen_rounded),
+            onPressed: () => Navigator.pop(context),
+            tooltip: 'Minimize',
+          ),
+          const SizedBox(width: 4),
+        ],
+      ),
+      body: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 8, 20, 16),
+          child: TextField(
+            controller: controller,
+            maxLines: null,
+            expands: true,
+            autofocus: true,
+            textAlignVertical: TextAlignVertical.top,
+            textCapitalization: TextCapitalization.sentences,
+            decoration: InputDecoration(
+              hintText: 'Ask RightAnswer...',
+              hintStyle: TextStyle(
+                  color: theme.colorScheme.onSurface.withValues(alpha: 0.4)),
+              border: InputBorder.none,
+            ),
+            style: const TextStyle(fontSize: 16, height: 1.5),
+          ),
+        ),
+      ),
+      floatingActionButton: FloatingActionButton(
+        onPressed: isGenerating ? null : onSend,
+        backgroundColor:
+            isGenerating ? theme.colorScheme.surfaceContainerHighest : theme.colorScheme.primary,
+        child: isGenerating
+            ? SizedBox(
+                width: 24,
+                height: 24,
+                child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: theme.colorScheme.onSurface.withValues(alpha: 0.4)),
+              )
+            : const Icon(Icons.arrow_upward_rounded, color: Colors.white),
       ),
     );
   }
@@ -1600,7 +1943,8 @@ class _ContextSelectorSheetState extends State<_ContextSelectorSheet> {
     _selectedChapterIds = widget.initialChapterIds.toSet();
     if (widget.initialSubjectId != null) _expanded.add(widget.initialSubjectId!);
     _load();
-    _searchCtrl.addListener(() => setState(() => _query = _searchCtrl.text.toLowerCase()));
+    _searchCtrl.addListener(
+        () => setState(() => _query = _searchCtrl.text.toLowerCase()));
   }
 
   @override
@@ -1619,12 +1963,17 @@ class _ContextSelectorSheetState extends State<_ContextSelectorSheet> {
         _chapterNames[c.id] = c.title;
       }
     }
-    // Restore subject name if any
     if (_selectedSubjectId != null) {
       final s = subjects.where((x) => x.id == _selectedSubjectId).firstOrNull;
       _selectedSubjectName = s?.name;
     }
-    if (mounted) setState(() { _subjects = subjects; _chapters = chapters; _loading = false; });
+    if (mounted) {
+      setState(() {
+        _subjects = subjects;
+        _chapters = chapters;
+        _loading = false;
+      });
+    }
   }
 
   List<Subject> get _filteredSubjects {
@@ -1632,15 +1981,20 @@ class _ContextSelectorSheetState extends State<_ContextSelectorSheet> {
     return _subjects.where((s) {
       if (s.name.toLowerCase().contains(_query)) return true;
       final chs = _chapters[s.id] ?? [];
-      return chs.any((c) => c.title.toLowerCase().contains(_query) || c.className.toLowerCase().contains(_query));
+      return chs.any((c) =>
+          c.title.toLowerCase().contains(_query) ||
+          c.className.toLowerCase().contains(_query));
     }).toList();
   }
 
   List<Chapter> _filteredChapters(String subjectId) {
     final chs = _chapters[subjectId] ?? [];
     if (_query.isEmpty) return chs;
-    return chs.where((c) =>
-        c.title.toLowerCase().contains(_query) || c.className.toLowerCase().contains(_query)).toList();
+    return chs
+        .where((c) =>
+            c.title.toLowerCase().contains(_query) ||
+            c.className.toLowerCase().contains(_query))
+        .toList();
   }
 
   void _toggleSubject(Subject s) {
@@ -1683,9 +2037,8 @@ class _ContextSelectorSheetState extends State<_ContextSelectorSheet> {
   }
 
   void _confirm() {
-    final names = _selectedChapterIds
-        .map((id) => _chapterNames[id] ?? id)
-        .toList();
+    final names =
+        _selectedChapterIds.map((id) => _chapterNames[id] ?? id).toList();
     widget.onSelected(
       _selectedSubjectId,
       _selectedSubjectName,
@@ -1719,7 +2072,6 @@ class _ContextSelectorSheetState extends State<_ContextSelectorSheet> {
         ),
         child: Column(
           children: [
-            // Handle
             Container(
               margin: const EdgeInsets.only(top: 10),
               width: 36,
@@ -1735,7 +2087,8 @@ class _ContextSelectorSheetState extends State<_ContextSelectorSheet> {
                 children: [
                   Text(
                     'Select Context',
-                    style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+                    style: theme.textTheme.titleMedium
+                        ?.copyWith(fontWeight: FontWeight.w700),
                   ),
                   const Spacer(),
                   if (_selectedSubjectId != null)
@@ -1754,8 +2107,10 @@ class _ContextSelectorSheetState extends State<_ContextSelectorSheet> {
                 decoration: InputDecoration(
                   hintText: 'Search subjects, chapters...',
                   prefixIcon: const Icon(Icons.search, size: 18),
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                  contentPadding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
+                  border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12)),
+                  contentPadding:
+                      const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
                   isDense: true,
                   suffixIcon: _query.isNotEmpty
                       ? IconButton(
@@ -1776,7 +2131,8 @@ class _ContextSelectorSheetState extends State<_ContextSelectorSheet> {
                                 ? 'No subjects yet. Add one in the Subjects tab.'
                                 : 'No results for "$_query"',
                             style: TextStyle(
-                              color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
+                              color: theme.colorScheme.onSurface
+                                  .withValues(alpha: 0.5),
                               fontSize: 13,
                             ),
                             textAlign: TextAlign.center,
@@ -1789,7 +2145,8 @@ class _ContextSelectorSheetState extends State<_ContextSelectorSheet> {
                             final s = filtered[i];
                             final chs = _filteredChapters(s.id);
                             final allSelected = chs.isNotEmpty &&
-                                chs.every((c) => _selectedChapterIds.contains(c.id));
+                                chs.every((c) =>
+                                    _selectedChapterIds.contains(c.id));
                             final someSelected =
                                 chs.any((c) => _selectedChapterIds.contains(c.id));
                             final isExpanded = _expanded.contains(s.id);
@@ -1805,11 +2162,14 @@ class _ContextSelectorSheetState extends State<_ContextSelectorSheet> {
                                             ? null
                                             : false,
                                     tristate: true,
-                                    onChanged: (v) => _selectAllInSubject(s, v != false),
+                                    onChanged: (v) =>
+                                        _selectAllInSubject(s, v != false),
                                   ),
                                   title: Text(
                                     s.name,
-                                    style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
+                                    style: const TextStyle(
+                                        fontWeight: FontWeight.w600,
+                                        fontSize: 14),
                                   ),
                                   subtitle: Text(
                                     '${chs.length} chapter${chs.length != 1 ? 's' : ''}',
@@ -1817,7 +2177,9 @@ class _ContextSelectorSheetState extends State<_ContextSelectorSheet> {
                                   ),
                                   trailing: IconButton(
                                     icon: Icon(
-                                      isExpanded ? Icons.expand_less : Icons.expand_more,
+                                      isExpanded
+                                          ? Icons.expand_less
+                                          : Icons.expand_more,
                                       size: 20,
                                     ),
                                     onPressed: () => _toggleSubject(s),
@@ -1826,16 +2188,22 @@ class _ContextSelectorSheetState extends State<_ContextSelectorSheet> {
                                 ),
                                 if (isExpanded)
                                   ...chs.map((ch) => CheckboxListTile(
-                                    dense: true,
-                                    contentPadding: const EdgeInsets.only(left: 40, right: 16),
-                                    value: _selectedChapterIds.contains(ch.id),
-                                    onChanged: (_) => _toggleChapter(s, ch),
-                                    title: Text(ch.title, style: const TextStyle(fontSize: 13)),
-                                    subtitle: Text(
-                                      ch.className,
-                                      style: const TextStyle(fontSize: 11),
-                                    ),
-                                  )),
+                                        dense: true,
+                                        contentPadding: const EdgeInsets.only(
+                                            left: 40, right: 16),
+                                        value:
+                                            _selectedChapterIds.contains(ch.id),
+                                        onChanged: (_) =>
+                                            _toggleChapter(s, ch),
+                                        title: Text(ch.title,
+                                            style:
+                                                const TextStyle(fontSize: 13)),
+                                        subtitle: Text(
+                                          ch.className,
+                                          style:
+                                              const TextStyle(fontSize: 11),
+                                        ),
+                                      )),
                                 Divider(height: 1, color: theme.dividerColor),
                               ],
                             );

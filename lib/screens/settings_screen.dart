@@ -28,7 +28,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
   String _tone = 'normal';
   String _outputLength = 'medium';
   String _themeMode = 'system';
-  String _model = 'gpt-4o-mini';
 
   bool _loading = true;
   Map<String, dynamic> _usage = {};
@@ -41,16 +40,65 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   static const _languages = [
     'English',
-    'Hindi',
-    'Urdu',
+    'Albanian',
+    'Amharic',
     'Arabic',
-    'French',
-    'Spanish',
-    'German',
-    'Mandarin',
+    'Armenian',
     'Bengali',
+    'Bosnian',
+    'Bulgarian',
+    'Burmese',
+    'Catalan',
+    'Chinese',
+    'Croatian',
+    'Czech',
+    'Danish',
+    'Dutch',
+    'Estonian',
+    'Finnish',
+    'French',
+    'Georgian',
+    'German',
+    'Greek',
+    'Gujarati',
+    'Hindi',
+    'Hungarian',
+    'Icelandic',
+    'Indonesian',
+    'Italian',
+    'Japanese',
+    'Kannada',
+    'Kazakh',
+    'Korean',
+    'Latvian',
+    'Lithuanian',
+    'Macedonian',
+    'Malay',
+    'Malayalam',
+    'Marathi',
+    'Mongolian',
+    'Norwegian',
+    'Persian',
+    'Polish',
     'Portuguese',
+    'Punjabi',
+    'Romanian',
+    'Russian',
+    'Serbian',
+    'Slovak',
+    'Slovenian',
+    'Somali',
+    'Spanish',
+    'Swahili',
+    'Swedish',
+    'Tagalog',
+    'Tamil',
+    'Telugu',
+    'Thai',
     'Turkish',
+    'Ukrainian',
+    'Urdu',
+    'Vietnamese',
   ];
 
   static const _grades = [
@@ -69,12 +117,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     'University',
   ];
 
-  static const _models = [
-    'gpt-4o-mini',
-    'gpt-4o',
-    'gpt-4-turbo',
-    'gpt-3.5-turbo',
-  ];
 
   @override
   void initState() {
@@ -94,7 +136,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _tone = all[SettingKeys.defaultTone] ?? 'normal';
       _outputLength = all[SettingKeys.defaultOutputLength] ?? 'medium';
       _themeMode = all[SettingKeys.themeMode] ?? 'system';
-      _model = all[SettingKeys.openAiModel] ?? 'gpt-4o-mini';
       _inputPriceCtrl.text = all[SettingKeys.inputTokenPrice] ?? '0.0005';
       _outputPriceCtrl.text = all[SettingKeys.outputTokenPrice] ?? '0.0015';
       _tokenLimitCtrl.text = all[SettingKeys.chatDailyTokenLimit] ?? '0';
@@ -254,11 +295,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ),
                 ],
               ),
-              const SizedBox(height: 14),
-              _dropdownRow('Model', _model, _models, (value) {
-                setState(() => _model = value!);
-                _save(SettingKeys.openAiModel, value!);
-              }, theme),
             ],
           ),
           const SizedBox(height: 20),

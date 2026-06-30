@@ -1158,96 +1158,157 @@ class _ExamDrawer extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Padding(
-              padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+              padding: const EdgeInsets.fromLTRB(16, 20, 16, 12),
               child: Row(
                 children: [
-                  Icon(Icons.quiz_rounded, color: theme.colorScheme.primary, size: 20),
-                  const SizedBox(width: 8),
-                  Text(
-                    'My Exams',
-                    style: TextStyle(
-                      fontWeight: FontWeight.w800,
-                      fontSize: 16,
+                  Container(
+                    width: 32,
+                    height: 32,
+                    decoration: BoxDecoration(
                       color: theme.colorScheme.primary,
+                      borderRadius: BorderRadius.circular(9),
+                    ),
+                    child: const Icon(Icons.auto_stories, color: Colors.white, size: 18),
+                  ),
+                  const SizedBox(width: 10),
+                  Text(
+                    'RightAnswer',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700,
+                      color: theme.colorScheme.onSurface,
                     ),
                   ),
                 ],
               ),
             ),
             Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-              child: FilledButton.icon(
-                onPressed: onNewExam,
-                icon: const Icon(Icons.add_rounded, size: 18),
-                label: const Text('New Exam'),
-                style: FilledButton.styleFrom(
-                  minimumSize: const Size(double.infinity, 40),
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              child: InkWell(
+                onTap: onNewExam,
+                borderRadius: BorderRadius.circular(10),
+                child: Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+                  decoration: BoxDecoration(
+                    color: theme.colorScheme.primary.withValues(alpha: 0.08),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(
+                        color: theme.colorScheme.primary.withValues(alpha: 0.2)),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(Icons.add_rounded,
+                          size: 16, color: theme.colorScheme.primary),
+                      const SizedBox(width: 10),
+                      Text(
+                        'New Exam',
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: theme.colorScheme.primary,
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ),
-            const Divider(),
+            Divider(height: 24, indent: 12, endIndent: 12, color: theme.dividerColor),
             Expanded(
               child: allExams.isEmpty
-                  ? Center(
+                  ? Padding(
+                      padding:
+                          const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                       child: Text(
                         'No exams yet',
                         style: TextStyle(
-                          color: theme.colorScheme.onSurface.withValues(alpha: 0.38),
+                          fontSize: 13,
+                          color: theme.colorScheme.onSurface.withValues(alpha: 0.4),
                         ),
                       ),
                     )
                   : ListView(
+                      padding: const EdgeInsets.only(bottom: 8),
                       children: groups.entries.map((entry) {
                         return Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Padding(
                               padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-                              child: Row(
-                                children: [
-                                  Icon(_ET.icon(entry.key), size: 12,
-                                      color: _ET.color(entry.key, theme.colorScheme)),
-                                  const SizedBox(width: 6),
-                                  Text(
-                                    _ET.label(entry.key).toUpperCase(),
-                                    style: TextStyle(
-                                      fontSize: 10,
-                                      fontWeight: FontWeight.w800,
-                                      letterSpacing: 0.8,
-                                      color: _ET.color(entry.key, theme.colorScheme),
-                                    ),
-                                  ),
-                                ],
+                              child: Text(
+                                _ET.label(entry.key).toUpperCase(),
+                                style: TextStyle(
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.w800,
+                                  letterSpacing: 0.8,
+                                  color: theme.colorScheme.onSurface
+                                      .withValues(alpha: 0.4),
+                                ),
                               ),
                             ),
                             ...entry.value.map((exam) {
                               final selected = exam.id == currentExamId;
-                              return ListTile(
-                                selected: selected,
-                                dense: true,
-                                contentPadding: const EdgeInsets.symmetric(horizontal: 16),
-                                title: Text(
-                                  exam.name,
-                                  maxLines: 2,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: TextStyle(
-                                    fontSize: 13,
-                                    fontWeight: selected ? FontWeight.w700 : FontWeight.w400,
-                                  ),
-                                ),
-                                subtitle: Text(
-                                  '${exam.questionCount} questions',
-                                  style: TextStyle(
-                                    fontSize: 11,
-                                    color: theme.colorScheme.onSurface.withValues(alpha: 0.45),
-                                  ),
-                                ),
-                                trailing: IconButton(
-                                  icon: Icon(Icons.delete_outline, size: 16,
-                                      color: theme.colorScheme.onSurface.withValues(alpha: 0.35)),
-                                  onPressed: () => onDeleteExam(exam: exam),
-                                ),
+                              return InkWell(
                                 onTap: () => onSelectExam(exam),
+                                child: Container(
+                                  margin: const EdgeInsets.symmetric(
+                                      horizontal: 8, vertical: 1),
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 10, vertical: 9),
+                                  decoration: BoxDecoration(
+                                    color: selected
+                                        ? theme.colorScheme.primary
+                                            .withValues(alpha: 0.1)
+                                        : Colors.transparent,
+                                    borderRadius: BorderRadius.circular(8),
+                                  ),
+                                  child: Row(
+                                    children: [
+                                      Expanded(
+                                        child: Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          children: [
+                                            Text(
+                                              exam.name,
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                              style: TextStyle(
+                                                fontSize: 13,
+                                                fontWeight: selected
+                                                    ? FontWeight.w600
+                                                    : FontWeight.normal,
+                                                color: selected
+                                                    ? theme.colorScheme.primary
+                                                    : theme.colorScheme.onSurface
+                                                        .withValues(alpha: 0.85),
+                                              ),
+                                            ),
+                                            Text(
+                                              '${exam.questionCount} questions',
+                                              style: TextStyle(
+                                                fontSize: 11,
+                                                color: theme.colorScheme.onSurface
+                                                    .withValues(alpha: 0.45),
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                      const SizedBox(width: 4),
+                                      GestureDetector(
+                                        onTap: () => onDeleteExam(exam: exam),
+                                        child: Icon(
+                                          Icons.close_rounded,
+                                          size: 14,
+                                          color: theme.colorScheme.onSurface
+                                              .withValues(alpha: 0.3),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
                               );
                             }),
                           ],
