@@ -3,6 +3,7 @@ import 'package:uuid/uuid.dart';
 import '../models/subject.dart';
 import '../repositories/subject_repository.dart';
 import '../services/connectivity_service.dart';
+import '../widgets/app_logo.dart';
 import 'queue_screen.dart';
 import 'subject_screen.dart';
 import 'saved_outputs_screen.dart';
@@ -61,19 +62,11 @@ class _HomeScreenState extends State<HomeScreen> {
     final theme = Theme.of(context);
     return Scaffold(
       appBar: AppBar(
-        title: Row(
+        title: const Row(
           children: [
-            Container(
-              width: 28,
-              height: 28,
-              decoration: BoxDecoration(
-                color: theme.colorScheme.primary,
-                borderRadius: BorderRadius.circular(7),
-              ),
-              child: const Icon(Icons.auto_stories, color: Colors.white, size: 16),
-            ),
-            const SizedBox(width: 10),
-            const Text('RightAnswer'),
+            AppLogo(size: 28),
+            SizedBox(width: 10),
+            Text('RightAnswer'),
           ],
         ),
         actions: [

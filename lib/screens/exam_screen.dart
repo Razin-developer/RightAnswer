@@ -19,6 +19,7 @@ import '../services/exam_ai_service.dart';
 import '../services/speech_service.dart';
 import '../models/app_exception.dart';
 import '../widgets/app_feedback.dart';
+import '../widgets/app_logo.dart';
 import 'settings_screen.dart';
 
 // ── Type helpers ─────────────────────────────────────────────────────────────
@@ -1161,15 +1162,7 @@ class _ExamDrawer extends StatelessWidget {
               padding: const EdgeInsets.fromLTRB(16, 20, 16, 12),
               child: Row(
                 children: [
-                  Container(
-                    width: 32,
-                    height: 32,
-                    decoration: BoxDecoration(
-                      color: theme.colorScheme.primary,
-                      borderRadius: BorderRadius.circular(9),
-                    ),
-                    child: const Icon(Icons.auto_stories, color: Colors.white, size: 18),
-                  ),
+                  const AppLogo(size: 32),
                   const SizedBox(width: 10),
                   Text(
                     'RightAnswer',
