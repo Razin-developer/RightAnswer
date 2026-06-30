@@ -1,5 +1,7 @@
 import 'package:flutter_tts/flutter_tts.dart';
 
+import '../constants/app_languages.dart';
+
 class TtsService {
   static final TtsService instance = TtsService._();
   TtsService._();
@@ -10,26 +12,42 @@ class TtsService {
   bool get isSpeaking => _speaking;
 
   Future<void> initialize() async {
-    await _tts.setLanguage('en-US');
-    await _tts.setSpeechRate(0.5);
-    await _tts.setVolume(1.0);
-    await _tts.setPitch(1.0);
-    _tts.setCompletionHandler(() => _speaking = false);
-    _tts.setErrorHandler((_) => _speaking = false);
+    try {
+      await _tts.setLanguage(defaultSpeechLocale);
+      await _tts.setSpeechRate(0.5);
+      await _tts.setVolume(1.0);
+      await _tts.setPitch(1.0);
+      _tts.setCompletionHandler(() => _speaking = false);
+      _tts.setErrorHandler((_) => _speaking = false);
+    } catch (_) {
+      _speaking = false;
+    }
   }
 
-  Future<void> speak(String text) async {
+  Future<void> speak(String text, {String? language}) async {
+    final trimmed = text.trim();
+    if (trimmed.isEmpty) return;
     if (_speaking) await stop();
-    _speaking = true;
-    await _tts.speak(text);
+    try {
+      final locale = speechLocaleForLanguage(language) ?? defaultSpeechLocale;
+      await _tts.setLanguage(locale);
+      _speaking = true;
+      await _tts.speak(trimmed);
+    } catch (_) {
+      _speaking = false;
+    }
   }
 
   Future<void> stop() async {
     _speaking = false;
-    await _tts.stop();
+    try {
+      await _tts.stop();
+    } catch (_) {
+      // Ignore plugin teardown issues and keep the UI responsive.
+    }
   }
 
-  Future<void> toggle(String text) async {
-    _speaking ? await stop() : await speak(text);
+  Future<void> toggle(String text, {String? language}) async {
+    _speaking ? await stop() : await speak(text, language: language);
   }
 }

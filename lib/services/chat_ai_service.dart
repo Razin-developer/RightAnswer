@@ -28,6 +28,22 @@ class ChatAIResult {
   });
 }
 
+class ChatAIStreamEvent {
+  final String content;
+  final bool isDone;
+  final int inputTokens;
+  final int outputTokens;
+  final double cost;
+
+  const ChatAIStreamEvent({
+    required this.content,
+    this.isDone = false,
+    this.inputTokens = 0,
+    this.outputTokens = 0,
+    this.cost = 0,
+  });
+}
+
 class ChatAIService {
   static final ChatAIService instance = ChatAIService._();
   ChatAIService._();
@@ -44,35 +60,67 @@ class ChatAIService {
     String? imagePath,
     required String responseLength,
     required String reasoningLevel,
+    String? responseLanguage,
     String? subjectName,
     List<String> chapterIds = const [],
     List<ChatMessage> history = const [],
   }) async {
+    ChatAIResult? result;
+    await for (final event in streamMessage(
+      userContent: userContent,
+      imagePath: imagePath,
+      responseLength: responseLength,
+      reasoningLevel: reasoningLevel,
+      responseLanguage: responseLanguage,
+      subjectName: subjectName,
+      chapterIds: chapterIds,
+      history: history,
+    )) {
+      if (event.isDone) {
+        result = ChatAIResult(
+          content: event.content,
+          inputTokens: event.inputTokens,
+          outputTokens: event.outputTokens,
+          cost: event.cost,
+        );
+      }
+    }
+    if (result != null) return result;
+    return const ChatAIResult(
+      content: '',
+      inputTokens: 0,
+      outputTokens: 0,
+      cost: 0,
+    );
+  }
+
+  Stream<ChatAIStreamEvent> streamMessage({
+    required String userContent,
+    String? imagePath,
+    required String responseLength,
+    required String reasoningLevel,
+    String? responseLanguage,
+    String? subjectName,
+    List<String> chapterIds = const [],
+    List<ChatMessage> history = const [],
+  }) async* {
     final apiKey = _requireApiKey();
-    final model = await _settingsRepo.get(SettingKeys.openAiModel) ?? 'gpt-4o-mini';
+    final model =
+        await _settingsRepo.get(SettingKeys.openAiModel) ?? 'gpt-4o-mini';
 
     await _checkDailyLimit();
 
-    // Gather relevant context chunks from selected chapters
-    String contextBlock = '';
-    if (chapterIds.isNotEmpty) {
-      final retrieval = RetrievalService(_chunkRepo);
-      final chunks = <String>[];
-      for (final cid in chapterIds) {
-        final found = await retrieval.searchChapter(cid, userContent.isEmpty ? 'overview' : userContent);
-        chunks.addAll(found.map((c) => c.text));
-      }
-      if (chunks.isNotEmpty) {
-        final joined = chunks.take(6).join('\n\n');
-        contextBlock = '\n\nSTUDY MATERIAL:\n$joined';
-      }
-    }
+    final contextBlock = await _buildContextBlock(chapterIds, userContent);
+    final systemPrompt = _buildSystemPrompt(
+      subjectName,
+      contextBlock,
+      reasoningLevel,
+      responseLanguage,
+    );
 
-    final systemPrompt = _buildSystemPrompt(subjectName, contextBlock, reasoningLevel);
-
-    // Cap history to last 18 messages to stay within token limits
-    final recent = history.length > 18 ? history.sublist(history.length - 18) : history;
-
+    final recent = history.length > 18
+        ? history.sublist(history.length - 18)
+        : history;
     final messages = [
       {'role': 'system', 'content': systemPrompt},
       ...recent.map(_toApiMsg),
@@ -84,39 +132,103 @@ class ChatAIService {
       'messages': messages,
       'temperature': _temperature(reasoningLevel),
       'max_tokens': _maxTokens(responseLength),
+      'stream': true,
+      'stream_options': {'include_usage': true},
     });
 
-    final resp = await _post('https://api.openai.com/v1/chat/completions', apiKey, body);
-    if (resp.statusCode != 200) throw _buildException(resp);
+    final promptEstimate = _estimateTokens(jsonEncode(messages));
+    final client = http.Client();
+    final buffer = StringBuffer();
+    Map<String, dynamic>? usage;
 
-    final data = jsonDecode(resp.body) as Map<String, dynamic>;
-    final content = data['choices'][0]['message']['content'] as String;
-    final usage = data['usage'] as Map<String, dynamic>?;
-    final inTok = (usage?['prompt_tokens'] as int?) ?? 0;
-    final outTok = (usage?['completion_tokens'] as int?) ?? 0;
+    try {
+      final request = http.Request(
+        'POST',
+        Uri.parse('https://api.openai.com/v1/chat/completions'),
+      );
+      request.headers.addAll({
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer $apiKey',
+      });
+      request.body = body;
 
-    final inPrice =
-        double.tryParse(await _settingsRepo.get(SettingKeys.inputTokenPrice) ?? '') ?? _defaultInputPrice;
-    final outPrice =
-        double.tryParse(await _settingsRepo.get(SettingKeys.outputTokenPrice) ?? '') ?? _defaultOutputPrice;
-    final cost = (inTok / 1000) * inPrice + (outTok / 1000) * outPrice;
+      final response = await client
+          .send(request)
+          .timeout(const Duration(seconds: 30));
+      if (response.statusCode != 200) {
+        final errorBody = await response.stream.bytesToString();
+        throw _buildException(http.Response(errorBody, response.statusCode));
+      }
 
-    await _usageRepo.insert(UsageLog(
-      id: const Uuid().v4(),
-      toolType: 'chat',
-      inputTokensEstimate: inTok,
-      outputTokensEstimate: outTok,
-      estimatedCost: cost,
-      createdAt: DateTime.now(),
-    ));
+      final lines = response.stream
+          .transform(utf8.decoder)
+          .transform(const LineSplitter())
+          .timeout(const Duration(seconds: 120));
 
-    return ChatAIResult(content: content, inputTokens: inTok, outputTokens: outTok, cost: cost);
+      await for (final line in lines) {
+        if (!line.startsWith('data:')) continue;
+        final payload = line.substring(5).trim();
+        if (payload.isEmpty) continue;
+        if (payload == '[DONE]') break;
+
+        final decoded = jsonDecode(payload) as Map<String, dynamic>;
+        final usageBlock = decoded['usage'] as Map<String, dynamic>?;
+        if (usageBlock != null) usage = usageBlock;
+
+        final choices = decoded['choices'] as List<dynamic>?;
+        if (choices == null || choices.isEmpty) continue;
+        final delta = choices.first['delta'] as Map<String, dynamic>?;
+        final piece = delta?['content'];
+        if (piece is String && piece.isNotEmpty) {
+          buffer.write(piece);
+          yield ChatAIStreamEvent(content: buffer.toString());
+        }
+      }
+
+      final content = buffer.toString().trim();
+      final inputTokens = (usage?['prompt_tokens'] as int?) ?? promptEstimate;
+      final outputTokens =
+          (usage?['completion_tokens'] as int?) ?? _estimateTokens(content);
+      final cost = await _calculateCost(inputTokens, outputTokens);
+
+      await _usageRepo.insert(
+        UsageLog(
+          id: const Uuid().v4(),
+          toolType: 'chat',
+          inputTokensEstimate: inputTokens,
+          outputTokensEstimate: outputTokens,
+          estimatedCost: cost,
+          createdAt: DateTime.now(),
+        ),
+      );
+
+      yield ChatAIStreamEvent(
+        content: content,
+        isDone: true,
+        inputTokens: inputTokens,
+        outputTokens: outputTokens,
+        cost: cost,
+      );
+    } on TimeoutException {
+      throw AppException.network(
+        'The AI response took too long. Please try again.',
+      );
+    } on SocketException {
+      throw AppException.network('No internet connection.');
+    } on http.ClientException {
+      throw AppException.network(
+        'Could not reach OpenAI. Please try again shortly.',
+      );
+    } finally {
+      client.close();
+    }
   }
 
   Future<String> generateChatName(String firstMessage) async {
     try {
       final apiKey = _requireApiKey();
-      final model = await _settingsRepo.get(SettingKeys.openAiModel) ?? 'gpt-4o-mini';
+      final model =
+          await _settingsRepo.get(SettingKeys.openAiModel) ?? 'gpt-4o-mini';
       final body = jsonEncode({
         'model': model,
         'messages': [
@@ -129,7 +241,11 @@ class ChatAIService {
         'max_tokens': 20,
         'temperature': 0.3,
       });
-      final resp = await _post('https://api.openai.com/v1/chat/completions', apiKey, body);
+      final resp = await _post(
+        'https://api.openai.com/v1/chat/completions',
+        apiKey,
+        body,
+      );
       if (resp.statusCode != 200) return _truncate(firstMessage, 40);
       final data = jsonDecode(resp.body) as Map<String, dynamic>;
       return (data['choices'][0]['message']['content'] as String).trim();
@@ -151,23 +267,57 @@ class ChatAIService {
     }
   }
 
-  String _buildSystemPrompt(String? subjectName, String contextBlock, String reasoningLevel) {
+  Future<String> _buildContextBlock(
+    List<String> chapterIds,
+    String userContent,
+  ) async {
+    if (chapterIds.isEmpty) return '';
+    final retrieval = RetrievalService(_chunkRepo);
+    final chunks = <String>[];
+    for (final chapterId in chapterIds) {
+      final found = await retrieval.searchChapter(
+        chapterId,
+        userContent.isEmpty ? 'overview' : userContent,
+      );
+      chunks.addAll(found.map((chunk) => chunk.text));
+    }
+    if (chunks.isEmpty) return '';
+    final joined = chunks.take(6).join('\n\n');
+    return '\n\nSTUDY MATERIAL:\n$joined';
+  }
+
+  String _buildSystemPrompt(
+    String? subjectName,
+    String contextBlock,
+    String reasoningLevel,
+    String? responseLanguage,
+  ) {
     final reasoning = switch (reasoningLevel) {
-      'high' => '\n\nReason through each answer step by step, showing your work clearly.',
+      'high' =>
+        '\n\nReason through each answer step by step, showing your work clearly.',
       'mid' => '\n\nThink carefully before answering.',
       _ => '',
     };
+    final languageInstruction =
+        responseLanguage == null || responseLanguage.trim().isEmpty
+        ? '\n\nReply in the same language the user is using unless they explicitly ask you to translate or switch languages.'
+        : '\n\nReply entirely in $responseLanguage unless the user explicitly asks you to switch languages.';
+
     if (contextBlock.isEmpty) {
       return 'You are RightAnswer, a helpful AI tutor for students. '
-          'Answer questions clearly, accurately, and in an educational way.$reasoning';
+          'Answer questions clearly, accurately, and in an educational way.'
+          '$reasoning$languageInstruction';
     }
     return 'You are RightAnswer, an AI tutor for ${subjectName ?? 'this subject'}. '
         'Use the provided study material to answer questions accurately. '
-        'If a question is clearly outside this material, answer helpfully but note it may be beyond the current scope.$reasoning$contextBlock';
+        'If a question is clearly outside this material, answer helpfully but note it may be beyond the current scope.'
+        '$reasoning$languageInstruction$contextBlock';
   }
 
   Map<String, dynamic> _buildUserMsg(String content, String? imagePath) {
-    final text = content.trim().isEmpty ? 'Please analyze this image and explain it.' : content;
+    final text = content.trim().isEmpty
+        ? 'Please analyze this image and explain it.'
+        : content;
     if (imagePath == null) return {'role': 'user', 'content': text};
     try {
       final bytes = File(imagePath).readAsBytesSync();
@@ -189,9 +339,11 @@ class ChatAIService {
     }
   }
 
-  Map<String, dynamic> _toApiMsg(ChatMessage m) => {
-    'role': m.role,
-    'content': m.imagePath != null ? '${m.content}\n[Image was attached]' : m.content,
+  Map<String, dynamic> _toApiMsg(ChatMessage message) => {
+    'role': message.role,
+    'content': message.imagePath != null
+        ? '${message.content}\n[Image was attached]'
+        : message.content,
   };
 
   int _maxTokens(String length) => switch (length) {
@@ -206,17 +358,36 @@ class ChatAIService {
     _ => 0.4,
   };
 
-  String _truncate(String s, int max) => s.length <= max ? s : '${s.substring(0, max)}...';
+  String _truncate(String value, int max) =>
+      value.length <= max ? value : '${value.substring(0, max)}...';
 
   String _requireApiKey() {
-    final k = AppConfig.openAiApiKey.trim();
-    if (k.isEmpty) {
+    final key = AppConfig.openAiApiKey.trim();
+    if (key.isEmpty) {
       throw AppException.configuration(
         'Missing OpenAI API key. Build with --dart-define=OPENAI_API_KEY=your_key.',
       );
     }
-    return k;
+    return key;
   }
+
+  Future<double> _calculateCost(int inputTokens, int outputTokens) async {
+    final inputPrice =
+        double.tryParse(
+          await _settingsRepo.get(SettingKeys.inputTokenPrice) ?? '',
+        ) ??
+        _defaultInputPrice;
+    final outputPrice =
+        double.tryParse(
+          await _settingsRepo.get(SettingKeys.outputTokenPrice) ?? '',
+        ) ??
+        _defaultOutputPrice;
+    return (inputTokens / 1000) * inputPrice +
+        (outputTokens / 1000) * outputPrice;
+  }
+
+  int _estimateTokens(String text) =>
+      RetrievalService(_chunkRepo).estimateTokens(text);
 
   Future<http.Response> _post(String url, String apiKey, String body) async {
     try {
@@ -234,17 +405,31 @@ class ChatAIService {
       throw AppException.network('Request timed out. Please try again.');
     } on SocketException {
       throw AppException.network('No internet connection.');
+    } on http.ClientException {
+      throw AppException.network(
+        'Could not reach OpenAI. Please try again shortly.',
+      );
     }
   }
 
-  AppException _buildException(http.Response r) {
-    var msg = 'Unexpected error from OpenAI.';
+  AppException _buildException(http.Response response) {
+    var message = 'Unexpected error from OpenAI.';
     try {
-      final d = jsonDecode(r.body) as Map<String, dynamic>;
-      msg = d['error']?['message'] as String? ?? msg;
-    } catch (_) {}
-    if (r.statusCode == 401 || r.statusCode == 403) return AppException.authentication('Invalid API key.');
-    if (r.statusCode == 429) return AppException.rateLimit(msg);
-    return AppException.service(msg);
+      final decoded = jsonDecode(response.body) as Map<String, dynamic>;
+      message = decoded['error']?['message'] as String? ?? message;
+    } catch (_) {
+      // Fall back to the generic message if the response is not JSON.
+    }
+
+    if (response.statusCode == 401 || response.statusCode == 403) {
+      return AppException.authentication('Invalid API key.');
+    }
+    if (response.statusCode == 429) return AppException.rateLimit(message);
+    if (response.statusCode >= 500) {
+      return AppException.service(
+        'OpenAI is having trouble right now. Please try again soon.',
+      );
+    }
+    return AppException.service(message);
   }
 }

@@ -16,16 +16,23 @@ import '../repositories/exam_question_repository.dart';
 import '../repositories/exam_repository.dart';
 import '../repositories/subject_repository.dart';
 import '../services/exam_ai_service.dart';
-import '../services/speech_service.dart';
 import '../models/app_exception.dart';
 import '../widgets/app_feedback.dart';
 import '../widgets/app_logo.dart';
+import '../widgets/voice_input_sheet.dart';
 import 'settings_screen.dart';
 
 // ── Type helpers ─────────────────────────────────────────────────────────────
 
 class _ET {
-  static const all = ['mcq', 'true_false', 'fill_blank', 'short_answer', 'long_answer', 'mixed'];
+  static const all = [
+    'mcq',
+    'true_false',
+    'fill_blank',
+    'short_answer',
+    'long_answer',
+    'mixed',
+  ];
 
   static String label(String t) => switch (t) {
     'mcq' => 'MCQ',
@@ -87,7 +94,6 @@ class _ExamScreenState extends State<ExamScreen> {
   final _examRepo = ExamRepository();
   final _questionRepo = ExamQuestionRepository();
   final _messageRepo = ExamMessageRepository();
-  final _speech = SpeechService.instance;
 
   Exam? _currentExam;
   List<ExamQuestion> _questions = [];
@@ -196,7 +202,10 @@ class _ExamScreenState extends State<ExamScreen> {
       final examId = const Uuid().v4();
       final examName = result.title.isNotEmpty
           ? result.title
-          : await ExamAIService.instance.generateExamName(prompt, _selectedType);
+          : await ExamAIService.instance.generateExamName(
+              prompt,
+              _selectedType,
+            );
 
       final exam = Exam(
         id: examId,
@@ -313,32 +322,39 @@ class _ExamScreenState extends State<ExamScreen> {
       );
 
       final examId = _currentExam!.id;
-      final updatedQuestions = result.questions.map((q) => ExamQuestion(
-        id: const Uuid().v4(),
-        examId: examId,
-        questionIndex: q.questionIndex,
-        type: q.type,
-        question: q.question,
-        options: q.options,
-        correctAnswer: q.correctAnswer,
-        explanation: q.explanation,
-      )).toList();
+      final updatedQuestions = result.questions
+          .map(
+            (q) => ExamQuestion(
+              id: const Uuid().v4(),
+              examId: examId,
+              questionIndex: q.questionIndex,
+              type: q.type,
+              question: q.question,
+              options: q.options,
+              correctAnswer: q.correctAnswer,
+              explanation: q.explanation,
+            ),
+          )
+          .toList();
 
       await _questionRepo.deleteByExam(examId);
       await _questionRepo.insertAll(updatedQuestions);
 
       final title = result.title.isNotEmpty ? result.title : _currentExam!.name;
-      await _examRepo.update(_currentExam!.copyWith(
-        name: title,
-        questionCount: updatedQuestions.length,
-        updatedAt: DateTime.now(),
-      ));
+      await _examRepo.update(
+        _currentExam!.copyWith(
+          name: title,
+          questionCount: updatedQuestions.length,
+          updatedAt: DateTime.now(),
+        ),
+      );
 
       final assistantMsg = ExamMessage(
         id: const Uuid().v4(),
         examId: examId,
         role: 'assistant',
-        content: 'Updated the exam: now ${updatedQuestions.length} question${updatedQuestions.length == 1 ? '' : 's'}.',
+        content:
+            'Updated the exam: now ${updatedQuestions.length} question${updatedQuestions.length == 1 ? '' : 's'}.',
         createdAt: DateTime.now(),
       );
       await _messageRepo.insert(assistantMsg);
@@ -395,7 +411,9 @@ class _ExamScreenState extends State<ExamScreen> {
         );
       }
     });
-    await _examRepo.update(_currentExam!.copyWith(questionCount: _questions.length));
+    await _examRepo.update(
+      _currentExam!.copyWith(questionCount: _questions.length),
+    );
   }
 
   // ── Rename & Delete exam ──────────────────────────────────────────────────
@@ -414,7 +432,10 @@ class _ExamScreenState extends State<ExamScreen> {
           onSubmitted: (v) => Navigator.pop(ctx, v.trim()),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
           FilledButton(
             onPressed: () => Navigator.pop(ctx, ctrl.text.trim()),
             child: const Text('Save'),
@@ -426,7 +447,8 @@ class _ExamScreenState extends State<ExamScreen> {
     if (result == null || result.isEmpty) return;
     await _examRepo.updateName(_currentExam!.id, result);
     await _loadAllExams();
-    if (mounted) setState(() => _currentExam = _currentExam!.copyWith(name: result));
+    if (mounted)
+      setState(() => _currentExam = _currentExam!.copyWith(name: result));
   }
 
   Future<void> _deleteExam({Exam? exam}) async {
@@ -438,7 +460,10 @@ class _ExamScreenState extends State<ExamScreen> {
         title: const Text('Delete Exam'),
         content: Text('Delete "${target.name}"? This cannot be undone.'),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
           FilledButton(
             style: FilledButton.styleFrom(backgroundColor: Colors.red),
             onPressed: () => Navigator.pop(ctx, true),
@@ -461,32 +486,31 @@ class _ExamScreenState extends State<ExamScreen> {
 
   // ── Voice ─────────────────────────────────────────────────────────────────
 
-  Future<void> _toggleVoice(bool forEdit) async {
-    if (_isRecording) {
-      await _speech.stop();
-      setState(() => _isRecording = false);
-      return;
-    }
-    final ok = await _speech.initialize();
-    if (!ok) {
-      if (mounted) AppFeedback.showToast(context, 'Microphone not available');
-      return;
-    }
-    setState(() => _isRecording = true);
-    await _speech.startListening(
-      onResult: (words, isFinal) {
-        if (!mounted) return;
-        if (forEdit) {
-          _editCtrl.text = words;
-        } else {
-          _createCtrl.text = words;
-        }
-        if (isFinal) setState(() => _isRecording = false);
-      },
-    );
-  }
+  Future<void> _toggleVoice(bool forEdit) async => _openVoiceComposer(forEdit);
 
   // ── Image ─────────────────────────────────────────────────────────────────
+
+  Future<void> _openVoiceComposer(bool forEdit) async {
+    if (_isGenerating) return;
+    setState(() => _isRecording = true);
+    final spoken = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (_) => VoiceInputSheet(
+        title: forEdit ? 'Edit with Voice' : 'Create with Voice',
+        initialText: (forEdit ? _editCtrl.text : _createCtrl.text).trim(),
+      ),
+    );
+    if (!mounted) return;
+    setState(() => _isRecording = false);
+    if (spoken == null || spoken.trim().isEmpty) return;
+    final controller = forEdit ? _editCtrl : _createCtrl;
+    controller.text = spoken.trim();
+    controller.selection = TextSelection.fromPosition(
+      TextPosition(offset: controller.text.length),
+    );
+  }
 
   Future<void> _pickImage(ImageSource source, {required bool forEdit}) async {
     final picker = ImagePicker();
@@ -596,30 +620,45 @@ class _ExamScreenState extends State<ExamScreen> {
                   Text(
                     _currentExam!.name,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
+                    style: const TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w700,
+                    ),
                   ),
                   Row(
                     children: [
-                      Icon(_ET.icon(_currentExam!.type), size: 11,
-                          color: _ET.color(_currentExam!.type, theme.colorScheme)),
+                      Icon(
+                        _ET.icon(_currentExam!.type),
+                        size: 11,
+                        color: _ET.color(_currentExam!.type, theme.colorScheme),
+                      ),
                       const SizedBox(width: 4),
                       Text(
                         _ET.label(_currentExam!.type),
                         style: TextStyle(
                           fontSize: 11,
-                          color: theme.colorScheme.onSurface.withValues(alpha: 0.55),
+                          color: theme.colorScheme.onSurface.withValues(
+                            alpha: 0.55,
+                          ),
                         ),
                       ),
                       if (_currentExam!.timeLimit != null) ...[
                         const SizedBox(width: 8),
-                        Icon(Icons.timer_outlined, size: 11,
-                            color: theme.colorScheme.onSurface.withValues(alpha: 0.45)),
+                        Icon(
+                          Icons.timer_outlined,
+                          size: 11,
+                          color: theme.colorScheme.onSurface.withValues(
+                            alpha: 0.45,
+                          ),
+                        ),
                         const SizedBox(width: 3),
                         Text(
                           '${_currentExam!.timeLimit} min',
                           style: TextStyle(
                             fontSize: 11,
-                            color: theme.colorScheme.onSurface.withValues(alpha: 0.45),
+                            color: theme.colorScheme.onSurface.withValues(
+                              alpha: 0.45,
+                            ),
                           ),
                         ),
                       ],
@@ -711,7 +750,11 @@ class _ExamScreenState extends State<ExamScreen> {
               color: theme.colorScheme.primary.withValues(alpha: 0.15),
               shape: BoxShape.circle,
             ),
-            child: Icon(Icons.quiz_rounded, color: theme.colorScheme.primary, size: 24),
+            child: Icon(
+              Icons.quiz_rounded,
+              color: theme.colorScheme.primary,
+              size: 24,
+            ),
           ),
           const SizedBox(width: 14),
           Expanded(
@@ -767,9 +810,14 @@ class _ExamScreenState extends State<ExamScreen> {
               onTap: () => setState(() => _selectedType = t),
               child: AnimatedContainer(
                 duration: const Duration(milliseconds: 150),
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 7,
+                ),
                 decoration: BoxDecoration(
-                  color: selected ? color.withValues(alpha: 0.15) : theme.colorScheme.surfaceContainerLowest,
+                  color: selected
+                      ? color.withValues(alpha: 0.15)
+                      : theme.colorScheme.surfaceContainerLowest,
                   borderRadius: BorderRadius.circular(20),
                   border: Border.all(
                     color: selected ? color : theme.dividerColor,
@@ -779,14 +827,26 @@ class _ExamScreenState extends State<ExamScreen> {
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Icon(_ET.icon(t), size: 14, color: selected ? color : theme.colorScheme.onSurface.withValues(alpha: 0.5)),
+                    Icon(
+                      _ET.icon(t),
+                      size: 14,
+                      color: selected
+                          ? color
+                          : theme.colorScheme.onSurface.withValues(alpha: 0.5),
+                    ),
                     const SizedBox(width: 6),
                     Text(
                       _ET.label(t),
                       style: TextStyle(
                         fontSize: 12,
-                        fontWeight: selected ? FontWeight.w700 : FontWeight.w400,
-                        color: selected ? color : theme.colorScheme.onSurface.withValues(alpha: 0.7),
+                        fontWeight: selected
+                            ? FontWeight.w700
+                            : FontWeight.w400,
+                        color: selected
+                            ? color
+                            : theme.colorScheme.onSurface.withValues(
+                                alpha: 0.7,
+                              ),
                       ),
                     ),
                   ],
@@ -847,7 +907,9 @@ class _ExamScreenState extends State<ExamScreen> {
                     hintText: 'Describe what to examine, or just send…',
                     hintStyle: TextStyle(
                       fontSize: 14,
-                      color: theme.colorScheme.onSurface.withValues(alpha: 0.38),
+                      color: theme.colorScheme.onSurface.withValues(
+                        alpha: 0.38,
+                      ),
                     ),
                     border: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(22),
@@ -855,7 +917,10 @@ class _ExamScreenState extends State<ExamScreen> {
                     ),
                     filled: true,
                     fillColor: theme.colorScheme.surfaceContainerLowest,
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 10,
+                    ),
                     isDense: true,
                   ),
                 ),
@@ -865,7 +930,9 @@ class _ExamScreenState extends State<ExamScreen> {
               IconButton(
                 icon: Icon(
                   _isRecording ? Icons.stop_circle_rounded : Icons.mic_outlined,
-                  color: _isRecording ? Colors.red : theme.colorScheme.onSurface.withValues(alpha: 0.5),
+                  color: _isRecording
+                      ? Colors.red
+                      : theme.colorScheme.onSurface.withValues(alpha: 0.5),
                 ),
                 onPressed: () => _toggleVoice(false),
               ),
@@ -909,15 +976,23 @@ class _ExamScreenState extends State<ExamScreen> {
           color: theme.colorScheme.surfaceContainerLow,
           child: Row(
             children: [
-              _StatChip(icon: Icons.format_list_numbered_rounded, label: '${_questions.length} Qs'),
+              _StatChip(
+                icon: Icons.format_list_numbered_rounded,
+                label: '${_questions.length} Qs',
+              ),
               if (_currentExam!.timeLimit != null) ...[
                 const SizedBox(width: 12),
-                _StatChip(icon: Icons.timer_outlined, label: '${_currentExam!.timeLimit} min'),
+                _StatChip(
+                  icon: Icons.timer_outlined,
+                  label: '${_currentExam!.timeLimit} min',
+                ),
               ],
               const SizedBox(width: 12),
               _StatChip(
                 icon: Icons.signal_cellular_alt_rounded,
-                label: _currentExam!.difficulty[0].toUpperCase() + _currentExam!.difficulty.substring(1),
+                label:
+                    _currentExam!.difficulty[0].toUpperCase() +
+                    _currentExam!.difficulty.substring(1),
               ),
               const Spacer(),
               Text(
@@ -961,10 +1036,14 @@ class _ExamScreenState extends State<ExamScreen> {
               ),
               // Messages
               SliverPadding(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 8,
+                ),
                 sliver: SliverList.builder(
                   itemCount: _editMessages.length,
-                  itemBuilder: (ctx, i) => _EditMessageBubble(msg: _editMessages[i]),
+                  itemBuilder: (ctx, i) =>
+                      _EditMessageBubble(msg: _editMessages[i]),
                 ),
               ),
               if (_isEditing)
@@ -992,7 +1071,11 @@ class _ExamScreenState extends State<ExamScreen> {
           padding: const EdgeInsets.symmetric(horizontal: 12),
           child: Row(
             children: [
-              Icon(Icons.edit_note_rounded, size: 14, color: theme.colorScheme.primary),
+              Icon(
+                Icons.edit_note_rounded,
+                size: 14,
+                color: theme.colorScheme.primary,
+              ),
               const SizedBox(width: 6),
               Text(
                 'Refine with AI',
@@ -1039,8 +1122,10 @@ class _ExamScreenState extends State<ExamScreen> {
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
               IconButton(
-                icon: Icon(Icons.image_outlined,
-                    color: theme.colorScheme.onSurface.withValues(alpha: 0.5)),
+                icon: Icon(
+                  Icons.image_outlined,
+                  color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
+                ),
                 onPressed: () => _showImagePicker(context, forEdit: true),
               ),
               Expanded(
@@ -1054,7 +1139,9 @@ class _ExamScreenState extends State<ExamScreen> {
                     hintText: 'Add, remove, or change questions…',
                     hintStyle: TextStyle(
                       fontSize: 14,
-                      color: theme.colorScheme.onSurface.withValues(alpha: 0.38),
+                      color: theme.colorScheme.onSurface.withValues(
+                        alpha: 0.38,
+                      ),
                     ),
                     border: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(22),
@@ -1062,7 +1149,10 @@ class _ExamScreenState extends State<ExamScreen> {
                     ),
                     filled: true,
                     fillColor: theme.colorScheme.surfaceContainerLowest,
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 10,
+                    ),
                     isDense: true,
                   ),
                 ),
@@ -1071,7 +1161,9 @@ class _ExamScreenState extends State<ExamScreen> {
               IconButton(
                 icon: Icon(
                   _isRecording ? Icons.stop_circle_rounded : Icons.mic_outlined,
-                  color: _isRecording ? Colors.red : theme.colorScheme.onSurface.withValues(alpha: 0.5),
+                  color: _isRecording
+                      ? Colors.red
+                      : theme.colorScheme.onSurface.withValues(alpha: 0.5),
                 ),
                 onPressed: () => _toggleVoice(true),
               ),
@@ -1086,7 +1178,9 @@ class _ExamScreenState extends State<ExamScreen> {
                 )
               else
                 FilledButton(
-                  onPressed: (_editCtrl.text.trim().isNotEmpty || _editImagePath != null)
+                  onPressed:
+                      (_editCtrl.text.trim().isNotEmpty ||
+                          _editImagePath != null)
                       ? _onSendEdit
                       : null,
                   style: FilledButton.styleFrom(
@@ -1182,17 +1276,24 @@ class _ExamDrawer extends StatelessWidget {
                 borderRadius: BorderRadius.circular(10),
                 child: Container(
                   width: double.infinity,
-                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 14,
+                    vertical: 11,
+                  ),
                   decoration: BoxDecoration(
                     color: theme.colorScheme.primary.withValues(alpha: 0.08),
                     borderRadius: BorderRadius.circular(10),
                     border: Border.all(
-                        color: theme.colorScheme.primary.withValues(alpha: 0.2)),
+                      color: theme.colorScheme.primary.withValues(alpha: 0.2),
+                    ),
                   ),
                   child: Row(
                     children: [
-                      Icon(Icons.add_rounded,
-                          size: 16, color: theme.colorScheme.primary),
+                      Icon(
+                        Icons.add_rounded,
+                        size: 16,
+                        color: theme.colorScheme.primary,
+                      ),
                       const SizedBox(width: 10),
                       Text(
                         'New Exam',
@@ -1207,17 +1308,26 @@ class _ExamDrawer extends StatelessWidget {
                 ),
               ),
             ),
-            Divider(height: 24, indent: 12, endIndent: 12, color: theme.dividerColor),
+            Divider(
+              height: 24,
+              indent: 12,
+              endIndent: 12,
+              color: theme.dividerColor,
+            ),
             Expanded(
               child: allExams.isEmpty
                   ? Padding(
-                      padding:
-                          const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 8,
+                      ),
                       child: Text(
                         'No exams yet',
                         style: TextStyle(
                           fontSize: 13,
-                          color: theme.colorScheme.onSurface.withValues(alpha: 0.4),
+                          color: theme.colorScheme.onSurface.withValues(
+                            alpha: 0.4,
+                          ),
                         ),
                       ),
                     )
@@ -1235,8 +1345,9 @@ class _ExamDrawer extends StatelessWidget {
                                   fontSize: 10,
                                   fontWeight: FontWeight.w800,
                                   letterSpacing: 0.8,
-                                  color: theme.colorScheme.onSurface
-                                      .withValues(alpha: 0.4),
+                                  color: theme.colorScheme.onSurface.withValues(
+                                    alpha: 0.4,
+                                  ),
                                 ),
                               ),
                             ),
@@ -1246,13 +1357,18 @@ class _ExamDrawer extends StatelessWidget {
                                 onTap: () => onSelectExam(exam),
                                 child: Container(
                                   margin: const EdgeInsets.symmetric(
-                                      horizontal: 8, vertical: 1),
+                                    horizontal: 8,
+                                    vertical: 1,
+                                  ),
                                   padding: const EdgeInsets.symmetric(
-                                      horizontal: 10, vertical: 9),
+                                    horizontal: 10,
+                                    vertical: 9,
+                                  ),
                                   decoration: BoxDecoration(
                                     color: selected
-                                        ? theme.colorScheme.primary
-                                            .withValues(alpha: 0.1)
+                                        ? theme.colorScheme.primary.withValues(
+                                            alpha: 0.1,
+                                          )
                                         : Colors.transparent,
                                     borderRadius: BorderRadius.circular(8),
                                   ),
@@ -1274,15 +1390,21 @@ class _ExamDrawer extends StatelessWidget {
                                                     : FontWeight.normal,
                                                 color: selected
                                                     ? theme.colorScheme.primary
-                                                    : theme.colorScheme.onSurface
-                                                        .withValues(alpha: 0.85),
+                                                    : theme
+                                                          .colorScheme
+                                                          .onSurface
+                                                          .withValues(
+                                                            alpha: 0.85,
+                                                          ),
                                               ),
                                             ),
                                             Text(
                                               '${exam.questionCount} questions',
                                               style: TextStyle(
                                                 fontSize: 11,
-                                                color: theme.colorScheme.onSurface
+                                                color: theme
+                                                    .colorScheme
+                                                    .onSurface
                                                     .withValues(alpha: 0.45),
                                               ),
                                             ),
@@ -1361,14 +1483,18 @@ class _QuestionCardState extends State<_QuestionCard> {
     _qCtrl.dispose();
     _aCtrl.dispose();
     _eCtrl.dispose();
-    for (final c in _optCtrls) { c.dispose(); }
+    for (final c in _optCtrls) {
+      c.dispose();
+    }
     super.dispose();
   }
 
   void _saveEdit() {
     final updated = widget.question.copyWith(
       question: _qCtrl.text.trim(),
-      options: _optCtrls.isNotEmpty ? _optCtrls.map((c) => c.text.trim()).toList() : null,
+      options: _optCtrls.isNotEmpty
+          ? _optCtrls.map((c) => c.text.trim()).toList()
+          : null,
       correctAnswer: _aCtrl.text.trim(),
       explanation: _eCtrl.text.trim().isEmpty ? null : _eCtrl.text.trim(),
     );
@@ -1416,14 +1542,21 @@ class _QuestionCardState extends State<_QuestionCard> {
                 ),
                 const SizedBox(width: 8),
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 7,
+                    vertical: 2,
+                  ),
                   decoration: BoxDecoration(
                     color: typeColor.withValues(alpha: 0.1),
                     borderRadius: BorderRadius.circular(6),
                   ),
                   child: Text(
                     _ET.label(q.type),
-                    style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: typeColor),
+                    style: TextStyle(
+                      fontSize: 10,
+                      fontWeight: FontWeight.w700,
+                      color: typeColor,
+                    ),
                   ),
                 ),
                 const Spacer(),
@@ -1437,8 +1570,11 @@ class _QuestionCardState extends State<_QuestionCard> {
                   visualDensity: VisualDensity.compact,
                 ),
                 IconButton(
-                  icon: Icon(Icons.delete_outline, size: 16,
-                      color: theme.colorScheme.onSurface.withValues(alpha: 0.35)),
+                  icon: Icon(
+                    Icons.delete_outline,
+                    size: 16,
+                    color: theme.colorScheme.onSurface.withValues(alpha: 0.35),
+                  ),
                   onPressed: () async {
                     final ok = await showDialog<bool>(
                       context: context,
@@ -1446,9 +1582,14 @@ class _QuestionCardState extends State<_QuestionCard> {
                         title: const Text('Delete Question'),
                         content: const Text('Remove this question?'),
                         actions: [
-                          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+                          TextButton(
+                            onPressed: () => Navigator.pop(ctx, false),
+                            child: const Text('Cancel'),
+                          ),
                           FilledButton(
-                            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+                            style: FilledButton.styleFrom(
+                              backgroundColor: Colors.red,
+                            ),
                             onPressed: () => Navigator.pop(ctx, true),
                             child: const Text('Delete'),
                           ),
@@ -1502,7 +1643,10 @@ class _QuestionCardState extends State<_QuestionCard> {
                 onTap: () => setState(() => _selectedOption = opt),
                 child: Container(
                   margin: const EdgeInsets.only(bottom: 6),
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 9,
+                  ),
                   decoration: BoxDecoration(
                     color: bg,
                     borderRadius: BorderRadius.circular(10),
@@ -1515,13 +1659,21 @@ class _QuestionCardState extends State<_QuestionCard> {
                         style: TextStyle(
                           fontSize: 13,
                           fontWeight: FontWeight.w700,
-                          color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
+                          color: theme.colorScheme.onSurface.withValues(
+                            alpha: 0.6,
+                          ),
                         ),
                       ),
                       const SizedBox(width: 8),
-                      Expanded(child: Text(opt, style: const TextStyle(fontSize: 13))),
+                      Expanded(
+                        child: Text(opt, style: const TextStyle(fontSize: 13)),
+                      ),
                       if (_showAnswer && isCorrect)
-                        const Icon(Icons.check_circle_rounded, color: Colors.green, size: 16),
+                        const Icon(
+                          Icons.check_circle_rounded,
+                          color: Colors.green,
+                          size: 16,
+                        ),
                     ],
                   ),
                 ),
@@ -1541,7 +1693,9 @@ class _QuestionCardState extends State<_QuestionCard> {
                   bg = Colors.green.withValues(alpha: 0.12);
                   border = Colors.green;
                 } else if (isSelected && !_showAnswer) {
-                  bg = theme.colorScheme.primaryContainer.withValues(alpha: 0.5);
+                  bg = theme.colorScheme.primaryContainer.withValues(
+                    alpha: 0.5,
+                  );
                   border = theme.colorScheme.primary;
                 }
                 return Expanded(
@@ -1560,12 +1714,24 @@ class _QuestionCardState extends State<_QuestionCard> {
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
                           Icon(
-                            opt == 'True' ? Icons.check_rounded : Icons.close_rounded,
+                            opt == 'True'
+                                ? Icons.check_rounded
+                                : Icons.close_rounded,
                             size: 14,
-                            color: _showAnswer && isCorrect ? Colors.green : theme.colorScheme.onSurface.withValues(alpha: 0.6),
+                            color: _showAnswer && isCorrect
+                                ? Colors.green
+                                : theme.colorScheme.onSurface.withValues(
+                                    alpha: 0.6,
+                                  ),
                           ),
                           const SizedBox(width: 4),
-                          Text(opt, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                          Text(
+                            opt,
+                            style: const TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
                         ],
                       ),
                     ),
@@ -1576,7 +1742,9 @@ class _QuestionCardState extends State<_QuestionCard> {
           ],
 
           // Fill blank / Short / Long — just a hint line
-          if (q.type == 'fill_blank' || q.type == 'short_answer' || q.type == 'long_answer') ...[
+          if (q.type == 'fill_blank' ||
+              q.type == 'short_answer' ||
+              q.type == 'long_answer') ...[
             Container(
               padding: const EdgeInsets.all(10),
               decoration: BoxDecoration(
@@ -1585,7 +1753,9 @@ class _QuestionCardState extends State<_QuestionCard> {
                 border: Border.all(color: theme.dividerColor),
               ),
               child: Text(
-                _showAnswer ? q.correctAnswer : 'Tap "Reveal Answer" to see the answer',
+                _showAnswer
+                    ? q.correctAnswer
+                    : 'Tap "Reveal Answer" to see the answer',
                 style: TextStyle(
                   fontSize: 13,
                   color: _showAnswer
@@ -1605,21 +1775,31 @@ class _QuestionCardState extends State<_QuestionCard> {
               OutlinedButton.icon(
                 onPressed: () => setState(() => _showAnswer = !_showAnswer),
                 icon: Icon(
-                  _showAnswer ? Icons.visibility_off_outlined : Icons.visibility_outlined,
+                  _showAnswer
+                      ? Icons.visibility_off_outlined
+                      : Icons.visibility_outlined,
                   size: 14,
                 ),
                 label: Text(_showAnswer ? 'Hide Answer' : 'Reveal Answer'),
                 style: OutlinedButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 6,
+                  ),
                   minimumSize: Size.zero,
                   textStyle: const TextStyle(fontSize: 12),
                 ),
               ),
-              if (_showAnswer && q.explanation != null && q.explanation!.isNotEmpty) ...[
+              if (_showAnswer &&
+                  q.explanation != null &&
+                  q.explanation!.isNotEmpty) ...[
                 const SizedBox(width: 8),
                 Expanded(
                   child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 6,
+                    ),
                     decoration: BoxDecoration(
                       color: Colors.blue.withValues(alpha: 0.07),
                       borderRadius: BorderRadius.circular(8),
@@ -1628,7 +1808,9 @@ class _QuestionCardState extends State<_QuestionCard> {
                       q.explanation!,
                       style: TextStyle(
                         fontSize: 12,
-                        color: theme.colorScheme.onSurface.withValues(alpha: 0.7),
+                        color: theme.colorScheme.onSurface.withValues(
+                          alpha: 0.7,
+                        ),
                         fontStyle: FontStyle.italic,
                       ),
                     ),
@@ -1655,7 +1837,9 @@ class _QuestionCardState extends State<_QuestionCard> {
             style: const TextStyle(fontSize: 14),
             decoration: InputDecoration(
               labelText: 'Question',
-              border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(10),
+              ),
               contentPadding: const EdgeInsets.all(12),
             ),
           ),
@@ -1663,7 +1847,13 @@ class _QuestionCardState extends State<_QuestionCard> {
 
           // Options for MCQ
           if (_optCtrls.isNotEmpty) ...[
-            Text('Options', style: TextStyle(fontSize: 12, color: theme.colorScheme.onSurface.withValues(alpha: 0.6))),
+            Text(
+              'Options',
+              style: TextStyle(
+                fontSize: 12,
+                color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
+              ),
+            ),
             const SizedBox(height: 6),
             ..._optCtrls.asMap().entries.map((entry) {
               final letter = String.fromCharCode(65 + entry.key);
@@ -1674,8 +1864,13 @@ class _QuestionCardState extends State<_QuestionCard> {
                   style: const TextStyle(fontSize: 13),
                   decoration: InputDecoration(
                     prefixText: '$letter.  ',
-                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 8,
+                    ),
                     isDense: true,
                   ),
                 ),
@@ -1691,7 +1886,9 @@ class _QuestionCardState extends State<_QuestionCard> {
             style: const TextStyle(fontSize: 13),
             decoration: InputDecoration(
               labelText: 'Correct Answer',
-              border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(10),
+              ),
               contentPadding: const EdgeInsets.all(12),
               isDense: true,
             ),
@@ -1705,7 +1902,9 @@ class _QuestionCardState extends State<_QuestionCard> {
             style: const TextStyle(fontSize: 13),
             decoration: InputDecoration(
               labelText: 'Explanation (optional)',
-              border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(10),
+              ),
               contentPadding: const EdgeInsets.all(12),
               isDense: true,
             ),
@@ -1744,7 +1943,9 @@ class _EditMessageBubble extends StatelessWidget {
       alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
       child: Container(
         margin: const EdgeInsets.symmetric(vertical: 3),
-        constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.75),
+        constraints: BoxConstraints(
+          maxWidth: MediaQuery.of(context).size.width * 0.75,
+        ),
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         decoration: BoxDecoration(
           color: isUser
@@ -1768,7 +1969,8 @@ class _EditMessageBubble extends StatelessWidget {
                   height: 120,
                   width: 120,
                   fit: BoxFit.cover,
-                  errorBuilder: (context, error, stack) => const SizedBox.shrink(),
+                  errorBuilder: (context, error, stack) =>
+                      const SizedBox.shrink(),
                 ),
               ),
               const SizedBox(height: 6),
@@ -1811,7 +2013,9 @@ class _ContextBar extends StatelessWidget {
               : theme.colorScheme.surfaceContainerLowest,
           borderRadius: BorderRadius.circular(12),
           border: Border.all(
-            color: hasContext ? theme.colorScheme.primary.withValues(alpha: 0.3) : theme.dividerColor,
+            color: hasContext
+                ? theme.colorScheme.primary.withValues(alpha: 0.3)
+                : theme.dividerColor,
           ),
         ),
         child: Row(
@@ -1819,15 +2023,17 @@ class _ContextBar extends StatelessWidget {
             Icon(
               Icons.book_outlined,
               size: 15,
-              color: hasContext ? theme.colorScheme.primary : theme.colorScheme.onSurface.withValues(alpha: 0.4),
+              color: hasContext
+                  ? theme.colorScheme.primary
+                  : theme.colorScheme.onSurface.withValues(alpha: 0.4),
             ),
             const SizedBox(width: 8),
             Expanded(
               child: Text(
                 hasContext
                     ? (chapterNames.isEmpty
-                        ? subjectName!
-                        : '${chapterNames.length} chapter${chapterNames.length > 1 ? 's' : ''} from $subjectName')
+                          ? subjectName!
+                          : '${chapterNames.length} chapter${chapterNames.length > 1 ? 's' : ''} from $subjectName')
                     : 'Tap to select chapter context (optional)',
                 style: TextStyle(
                   fontSize: 12,
@@ -1840,12 +2046,18 @@ class _ContextBar extends StatelessWidget {
             if (hasContext)
               GestureDetector(
                 onTap: onClear,
-                child: Icon(Icons.close_rounded, size: 16,
-                    color: theme.colorScheme.onSurface.withValues(alpha: 0.5)),
+                child: Icon(
+                  Icons.close_rounded,
+                  size: 16,
+                  color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
+                ),
               )
             else
-              Icon(Icons.chevron_right_rounded, size: 16,
-                  color: theme.colorScheme.onSurface.withValues(alpha: 0.35)),
+              Icon(
+                Icons.chevron_right_rounded,
+                size: 16,
+                color: theme.colorScheme.onSurface.withValues(alpha: 0.35),
+              ),
           ],
         ),
       ),
@@ -1858,7 +2070,13 @@ class _ContextBar extends StatelessWidget {
 class _ContextSelectorSheet extends StatefulWidget {
   final String? selectedSubjectId;
   final List<String> selectedChapterIds;
-  final void Function(String? sId, String? sName, List<String> cIds, List<String> cNames) onConfirm;
+  final void Function(
+    String? sId,
+    String? sName,
+    List<String> cIds,
+    List<String> cNames,
+  )
+  onConfirm;
 
   const _ContextSelectorSheet({
     required this.selectedSubjectId,
@@ -1896,7 +2114,11 @@ class _ContextSelectorSheetState extends State<_ContextSelectorSheet> {
     for (final s in subjects) {
       map[s.id] = await _chapterRepo.getBySubject(s.id);
     }
-    if (mounted) setState(() { _subjects = subjects; _chapterMap = map; });
+    if (mounted)
+      setState(() {
+        _subjects = subjects;
+        _chapterMap = map;
+      });
   }
 
   List<Subject> get _filtered {
@@ -1904,7 +2126,9 @@ class _ContextSelectorSheetState extends State<_ContextSelectorSheet> {
     final q = _search.toLowerCase();
     return _subjects.where((s) {
       if (s.name.toLowerCase().contains(q)) return true;
-      return (_chapterMap[s.id] ?? []).any((c) => c.title.toLowerCase().contains(q));
+      return (_chapterMap[s.id] ?? []).any(
+        (c) => c.title.toLowerCase().contains(q),
+      );
     }).toList();
   }
 
@@ -1916,7 +2140,12 @@ class _ContextSelectorSheetState extends State<_ContextSelectorSheet> {
       }
     }
     Navigator.pop(context);
-    widget.onConfirm(_selectedSubjectId, _selectedSubjectName, _selectedChapterIds.toList(), names);
+    widget.onConfirm(
+      _selectedSubjectId,
+      _selectedSubjectName,
+      _selectedChapterIds.toList(),
+      names,
+    );
   }
 
   @override
@@ -1945,7 +2174,10 @@ class _ContextSelectorSheetState extends State<_ContextSelectorSheet> {
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
             child: Row(
               children: [
-                const Text('Select Chapters', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
+                const Text(
+                  'Select Chapters',
+                  style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16),
+                ),
                 const Spacer(),
                 FilledButton(onPressed: _confirm, child: const Text('Done')),
               ],
@@ -1958,8 +2190,13 @@ class _ContextSelectorSheetState extends State<_ContextSelectorSheet> {
               decoration: InputDecoration(
                 hintText: 'Search subjects or chapters…',
                 prefixIcon: const Icon(Icons.search, size: 18),
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                contentPadding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 8,
+                ),
                 isDense: true,
               ),
             ),
@@ -1969,56 +2206,88 @@ class _ContextSelectorSheetState extends State<_ContextSelectorSheet> {
               controller: scroll,
               children: _filtered.map((s) {
                 final chapters = (_chapterMap[s.id] ?? [])
-                    .where((c) => _search.isEmpty || c.title.toLowerCase().contains(_search.toLowerCase()))
+                    .where(
+                      (c) =>
+                          _search.isEmpty ||
+                          c.title.toLowerCase().contains(_search.toLowerCase()),
+                    )
                     .toList();
-                final allSelected = chapters.every((c) => _selectedChapterIds.contains(c.id));
-                final someSelected = !allSelected && chapters.any((c) => _selectedChapterIds.contains(c.id));
+                final allSelected = chapters.every(
+                  (c) => _selectedChapterIds.contains(c.id),
+                );
+                final someSelected =
+                    !allSelected &&
+                    chapters.any((c) => _selectedChapterIds.contains(c.id));
                 return Column(
                   children: [
                     CheckboxListTile(
                       value: allSelected ? true : (someSelected ? null : false),
                       tristate: true,
-                      title: Text(s.name, style: const TextStyle(fontWeight: FontWeight.w600)),
+                      title: Text(
+                        s.name,
+                        style: const TextStyle(fontWeight: FontWeight.w600),
+                      ),
                       secondary: IconButton(
-                        icon: Icon(_expanded.contains(s.id) ? Icons.expand_less : Icons.expand_more),
+                        icon: Icon(
+                          _expanded.contains(s.id)
+                              ? Icons.expand_less
+                              : Icons.expand_more,
+                        ),
                         onPressed: () => setState(() {
-                          _expanded.contains(s.id) ? _expanded.remove(s.id) : _expanded.add(s.id);
+                          _expanded.contains(s.id)
+                              ? _expanded.remove(s.id)
+                              : _expanded.add(s.id);
                         }),
                       ),
                       onChanged: (_) {
                         setState(() {
                           if (allSelected) {
-                            for (final c in chapters) { _selectedChapterIds.remove(c.id); }
-                            if (_selectedSubjectId == s.id) { _selectedSubjectId = null; _selectedSubjectName = null; }
+                            for (final c in chapters) {
+                              _selectedChapterIds.remove(c.id);
+                            }
+                            if (_selectedSubjectId == s.id) {
+                              _selectedSubjectId = null;
+                              _selectedSubjectName = null;
+                            }
                           } else {
                             _selectedSubjectId = s.id;
                             _selectedSubjectName = s.name;
-                            for (final c in chapters) { _selectedChapterIds.add(c.id); }
+                            for (final c in chapters) {
+                              _selectedChapterIds.add(c.id);
+                            }
                           }
                         });
                       },
                     ),
                     if (_expanded.contains(s.id))
-                      ...chapters.map((c) => Padding(
-                        padding: const EdgeInsets.only(left: 16),
-                        child: CheckboxListTile(
-                          value: _selectedChapterIds.contains(c.id),
-                          title: Text(c.title, style: const TextStyle(fontSize: 13)),
-                          subtitle: Text(c.className, style: const TextStyle(fontSize: 11)),
-                          dense: true,
-                          onChanged: (v) {
-                            setState(() {
-                              if (v == true) {
-                                _selectedChapterIds.add(c.id);
-                                _selectedSubjectId = s.id;
-                                _selectedSubjectName = s.name;
-                              } else {
-                                _selectedChapterIds.remove(c.id);
-                              }
-                            });
-                          },
+                      ...chapters.map(
+                        (c) => Padding(
+                          padding: const EdgeInsets.only(left: 16),
+                          child: CheckboxListTile(
+                            value: _selectedChapterIds.contains(c.id),
+                            title: Text(
+                              c.title,
+                              style: const TextStyle(fontSize: 13),
+                            ),
+                            subtitle: Text(
+                              c.className,
+                              style: const TextStyle(fontSize: 11),
+                            ),
+                            dense: true,
+                            onChanged: (v) {
+                              setState(() {
+                                if (v == true) {
+                                  _selectedChapterIds.add(c.id);
+                                  _selectedSubjectId = s.id;
+                                  _selectedSubjectName = s.name;
+                                } else {
+                                  _selectedChapterIds.remove(c.id);
+                                }
+                              });
+                            },
+                          ),
                         ),
-                      )),
+                      ),
                   ],
                 );
               }).toList(),
@@ -2065,7 +2334,10 @@ class _ExamConfigDialogState extends State<_ExamConfigDialog> {
     final isMcq = widget.type == 'mcq' || widget.type == 'mixed';
 
     return AlertDialog(
-      title: const Text('Exam Settings', style: TextStyle(fontWeight: FontWeight.w700)),
+      title: const Text(
+        'Exam Settings',
+        style: TextStyle(fontWeight: FontWeight.w700),
+      ),
       content: SingleChildScrollView(
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -2094,13 +2366,20 @@ class _ExamConfigDialogState extends State<_ExamConfigDialog> {
               initialValue: _timeLimit,
               decoration: const InputDecoration(
                 border: OutlineInputBorder(),
-                contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                contentPadding: EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 8,
+                ),
                 isDense: true,
               ),
-              items: _timeLimits.map((t) => DropdownMenuItem(
-                value: t,
-                child: Text(t == null ? 'No limit' : '$t minutes'),
-              )).toList(),
+              items: _timeLimits
+                  .map(
+                    (t) => DropdownMenuItem(
+                      value: t,
+                      child: Text(t == null ? 'No limit' : '$t minutes'),
+                    ),
+                  )
+                  .toList(),
               onChanged: (v) => setState(() => _timeLimit = v),
             ),
             const SizedBox(height: 16),
@@ -2117,9 +2396,7 @@ class _ExamConfigDialogState extends State<_ExamConfigDialog> {
               ],
               selected: {_difficulty},
               onSelectionChanged: (s) => setState(() => _difficulty = s.first),
-              style: const ButtonStyle(
-                visualDensity: VisualDensity.compact,
-              ),
+              style: const ButtonStyle(visualDensity: VisualDensity.compact),
             ),
             const SizedBox(height: 16),
 
@@ -2135,7 +2412,8 @@ class _ExamConfigDialogState extends State<_ExamConfigDialog> {
                   ButtonSegment(value: 5, label: Text('5')),
                 ],
                 selected: {_mcqOptionCount},
-                onSelectionChanged: (s) => setState(() => _mcqOptionCount = s.first),
+                onSelectionChanged: (s) =>
+                    setState(() => _mcqOptionCount = s.first),
               ),
             ],
           ],
@@ -2192,7 +2470,11 @@ class _StatChip extends StatelessWidget {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Icon(icon, size: 12, color: theme.colorScheme.onSurface.withValues(alpha: 0.5)),
+        Icon(
+          icon,
+          size: 12,
+          color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
+        ),
         const SizedBox(width: 4),
         Text(
           label,
@@ -2236,7 +2518,10 @@ class _ImagePreview extends StatelessWidget {
             onTap: onRemove,
             child: Container(
               padding: const EdgeInsets.all(2),
-              decoration: const BoxDecoration(color: Colors.black54, shape: BoxShape.circle),
+              decoration: const BoxDecoration(
+                color: Colors.black54,
+                shape: BoxShape.circle,
+              ),
               child: const Icon(Icons.close, size: 12, color: Colors.white),
             ),
           ),
@@ -2257,15 +2542,22 @@ class _TypingIndicator extends StatefulWidget {
 
 class _TypingIndicatorState extends State<_TypingIndicator>
     with SingleTickerProviderStateMixin {
-  late final AnimationController _ctrl =
-      AnimationController(vsync: this, duration: const Duration(milliseconds: 1200))..repeat();
+  late final AnimationController _ctrl = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 1200),
+  )..repeat();
 
   @override
-  void dispose() { _ctrl.dispose(); super.dispose(); }
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
-    final color = Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.45);
+    final color = Theme.of(
+      context,
+    ).colorScheme.onSurface.withValues(alpha: 0.45);
     return AnimatedBuilder(
       animation: _ctrl,
       builder: (context, child) {
@@ -2274,7 +2566,8 @@ class _TypingIndicatorState extends State<_TypingIndicator>
           children: List.generate(3, (i) {
             final delay = i / 3;
             final t = (_ctrl.value - delay).clamp(0.0, 1.0);
-            final opacity = (0.3 + 0.7 * (1 - (t - 0.5).abs() * 2).clamp(0.0, 1.0));
+            final opacity =
+                (0.3 + 0.7 * (1 - (t - 0.5).abs() * 2).clamp(0.0, 1.0));
             return Padding(
               padding: const EdgeInsets.symmetric(horizontal: 2),
               child: Opacity(
@@ -2282,7 +2575,10 @@ class _TypingIndicatorState extends State<_TypingIndicator>
                 child: Container(
                   width: 7,
                   height: 7,
-                  decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+                  decoration: BoxDecoration(
+                    color: color,
+                    shape: BoxShape.circle,
+                  ),
                 ),
               ),
             );

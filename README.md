@@ -2,6 +2,12 @@
 
 Flutter app for chapter-based AI study tools with offline queueing.
 
+## Project Docs
+
+- `docs/APP_OVERVIEW.md`: current product surfaces and runtime behavior
+- `docs/ARCHITECTURE.md`: code structure, service split, and app boot flow
+- `docs/DATA_MODEL.md`: local SQLite schema and persistence notes
+
 ## OpenAI Configuration
 
 The app no longer reads an API key from Settings or local storage.

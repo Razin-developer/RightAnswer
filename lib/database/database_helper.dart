@@ -17,7 +17,7 @@ class DatabaseHelper {
     final path = join(dbPath, 'right_answer.db');
     return openDatabase(
       path,
-      version: 5,
+      version: 6,
       onCreate: _onCreate,
       onUpgrade: _onUpgrade,
     );
@@ -40,6 +40,11 @@ class DatabaseHelper {
       );
     }
     if (oldVersion < 5) await _createExamTables(db);
+    if (oldVersion < 6) {
+      await db.execute(
+        'ALTER TABLE chat_messages ADD COLUMN responseLanguage TEXT',
+      );
+    }
   }
 
   Future<void> _createCoreTablesV1(Database db) async {
@@ -150,6 +155,7 @@ class DatabaseHelper {
         role TEXT NOT NULL,
         content TEXT NOT NULL,
         imagePath TEXT,
+        responseLanguage TEXT,
         responseLength TEXT NOT NULL DEFAULT 'normal',
         reasoningLevel TEXT NOT NULL DEFAULT 'mid',
         tokenCount INTEGER NOT NULL DEFAULT 0,

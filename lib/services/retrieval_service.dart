@@ -9,15 +9,20 @@ class RetrievalService {
   static const int _chunkSize = 400; // approximate words per chunk
   static const int _chunkOverlap = 50; // overlapping words between chunks
   static const int _topK = 8; // number of chunks to return
+  static const int _charChunkSize = 1800;
+  static const int _charChunkOverlap = 240;
 
   RetrievalService(this._chunkRepo);
 
   /// Splits text into overlapping word-window chunks.
   List<String> splitIntoChunks(String text) {
-    final words = text.split(RegExp(r'\s+'))
+    final words = text
+        .split(RegExp(r'\s+', unicode: true))
         .where((w) => w.isNotEmpty)
         .toList();
-    if (words.isEmpty) return [];
+    if (words.length < 50) {
+      return _splitIntoCharacterChunks(text);
+    }
 
     final chunks = <String>[];
     int start = 0;
@@ -31,18 +36,27 @@ class RetrievalService {
   }
 
   /// Creates Chunk models from raw text, deletes old chunks, inserts new ones.
-  Future<List<Chunk>> processAndStoreChunks(String chapterId, String text) async {
+  Future<List<Chunk>> processAndStoreChunks(
+    String chapterId,
+    String text,
+  ) async {
     final rawChunks = splitIntoChunks(text);
     final uuid = Uuid();
     final now = DateTime.now();
 
-    final chunks = rawChunks.asMap().entries.map((e) => Chunk(
-      id: uuid.v4(),
-      chapterId: chapterId,
-      chunkIndex: e.key,
-      text: e.value,
-      createdAt: now,
-    )).toList();
+    final chunks = rawChunks
+        .asMap()
+        .entries
+        .map(
+          (e) => Chunk(
+            id: uuid.v4(),
+            chapterId: chapterId,
+            chunkIndex: e.key,
+            text: e.value,
+            createdAt: now,
+          ),
+        )
+        .toList();
 
     await _chunkRepo.deleteByChapter(chapterId);
     await _chunkRepo.insertAll(chunks);
@@ -89,12 +103,43 @@ class RetrievalService {
   }
 
   Set<String> _tokenize(String text) {
-    return text
+    final normalized = text
         .toLowerCase()
-        .replaceAll(RegExp(r'[^a-z0-9\s]'), ' ')
-        .split(RegExp(r'\s+'))
-        .where((w) => w.length > 2)
+        .replaceAll(RegExp(r'[^\p{L}\p{N}\s]', unicode: true), ' ')
+        .trim();
+    final words = normalized
+        .split(RegExp(r'\s+', unicode: true))
+        .where((word) => word.isNotEmpty)
         .toSet();
+    if (words.length > 1) return words;
+
+    final compact = normalized.replaceAll(RegExp(r'\s+', unicode: true), '');
+    if (compact.runes.length <= 1) return words;
+
+    final runes = compact.runes.toList();
+    final tokens = <String>{};
+    for (int i = 0; i < runes.length; i++) {
+      tokens.add(String.fromCharCode(runes[i]));
+      if (i < runes.length - 1) {
+        tokens.add(String.fromCharCodes([runes[i], runes[i + 1]]));
+      }
+    }
+    return tokens;
+  }
+
+  List<String> _splitIntoCharacterChunks(String text) {
+    final compact = text.trim();
+    if (compact.isEmpty) return [];
+
+    final chunks = <String>[];
+    int start = 0;
+    while (start < compact.length) {
+      final end = min(start + _charChunkSize, compact.length);
+      chunks.add(compact.substring(start, end).trim());
+      if (end == compact.length) break;
+      start += _charChunkSize - _charChunkOverlap;
+    }
+    return chunks.where((chunk) => chunk.isNotEmpty).toList();
   }
 
   /// Cosine similarity between two equal-length vectors.

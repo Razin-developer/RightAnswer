@@ -99,12 +99,6 @@ class _ResultScreenState extends State<ResultScreen> {
                 _statChip(context, Icons.input, '${r.inputTokens} in'),
                 const SizedBox(width: 6),
                 _statChip(context, Icons.output, '${r.outputTokens} out'),
-                const SizedBox(width: 6),
-                _statChip(
-                  context,
-                  Icons.attach_money,
-                  '\$${r.estimatedCost.toStringAsFixed(5)}',
-                ),
                 const Spacer(),
                 Container(
                   padding: const EdgeInsets.symmetric(

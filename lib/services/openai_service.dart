@@ -27,6 +27,18 @@ class GenerationResult {
   });
 }
 
+class ImageTextExtractionResult {
+  final String combinedText;
+  final int processedCount;
+  final List<String> failedFiles;
+
+  const ImageTextExtractionResult({
+    required this.combinedText,
+    required this.processedCount,
+    required this.failedFiles,
+  });
+}
+
 /// Calls OpenAI chat completions and logs usage locally.
 class OpenAIService {
   final SettingsRepository _settings;
@@ -150,6 +162,122 @@ class OpenAIService {
               .toList(),
         )
         .toList();
+  }
+
+  Future<ImageTextExtractionResult> extractChapterTextFromImages({
+    required List<String> imagePaths,
+    required String chapterTitle,
+    String? subjectName,
+  }) async {
+    if (imagePaths.isEmpty) {
+      throw AppException.validation(
+        'Select at least one textbook image first.',
+      );
+    }
+
+    final apiKey = _requireApiKey();
+    final model = await _settings.get(SettingKeys.openAiModel) ?? 'gpt-4o-mini';
+    final extracted = <String>[];
+    final failed = <String>[];
+    var totalInputTokens = 0;
+    var totalOutputTokens = 0;
+
+    for (final imagePath in imagePaths) {
+      try {
+        final bytes = File(imagePath).readAsBytesSync();
+        final b64 = base64Encode(bytes);
+        final ext = imagePath.split('.').last.toLowerCase();
+        final mime = ext == 'png' ? 'image/png' : 'image/jpeg';
+        final body = jsonEncode({
+          'model': model,
+          'messages': [
+            {
+              'role': 'system',
+              'content':
+                  'You transcribe textbook pages into clean study text. Preserve the original language exactly as it appears on the page. Preserve headings, numbered points, formulas, examples, and key terms. Do not summarize or translate. If something is unreadable, mark it as [unclear] instead of inventing text.',
+            },
+            {
+              'role': 'user',
+              'content': [
+                {
+                  'type': 'text',
+                  'text':
+                      'Extract the chapter content from this textbook page for "$chapterTitle"${subjectName == null ? '' : ' in $subjectName'}. Return only the cleaned chapter text for this page and keep the same language used in the image.',
+                },
+                {
+                  'type': 'image_url',
+                  'image_url': {
+                    'url': 'data:$mime;base64,$b64',
+                    'detail': 'high',
+                  },
+                },
+              ],
+            },
+          ],
+          'temperature': 0.1,
+        });
+
+        final response = await _postJson(
+          endpoint: 'https://api.openai.com/v1/chat/completions',
+          apiKey: apiKey,
+          body: body,
+          timeout: const Duration(seconds: 120),
+        );
+        if (response.statusCode != 200) {
+          throw _buildApiException(response);
+        }
+
+        final data = jsonDecode(response.body) as Map<String, dynamic>;
+        final text = (data['choices'][0]['message']['content'] as String)
+            .trim();
+        if (text.isNotEmpty) extracted.add(text);
+
+        final usage = data['usage'] as Map<String, dynamic>?;
+        totalInputTokens += (usage?['prompt_tokens'] as int?) ?? 0;
+        totalOutputTokens += (usage?['completion_tokens'] as int?) ?? 0;
+      } catch (_) {
+        failed.add(imagePath.split(RegExp(r'[\\/]')).last);
+      }
+    }
+
+    if (extracted.isEmpty) {
+      throw AppException.service(
+        'The selected textbook images could not be read. Try clearer photos with better lighting.',
+      );
+    }
+
+    final combinedText = extracted.join('\n\n--- Page Break ---\n\n');
+    if (totalInputTokens > 0 || totalOutputTokens > 0) {
+      final inputPrice =
+          double.tryParse(
+            await _settings.get(SettingKeys.inputTokenPrice) ?? '',
+          ) ??
+          _defaultInputPrice;
+      final outputPrice =
+          double.tryParse(
+            await _settings.get(SettingKeys.outputTokenPrice) ?? '',
+          ) ??
+          _defaultOutputPrice;
+      final cost =
+          (totalInputTokens / 1000) * inputPrice +
+          (totalOutputTokens / 1000) * outputPrice;
+      await _usageLog.insert(
+        UsageLog(
+          id: const Uuid().v4(),
+          toolType: 'chapter_image_extract',
+          inputTokensEstimate: totalInputTokens,
+          outputTokensEstimate: totalOutputTokens,
+          estimatedCost: cost,
+          createdAt: DateTime.now(),
+        ),
+      );
+    }
+
+    return ImageTextExtractionResult(
+      combinedText: combinedText,
+      processedCount: extracted.length,
+      failedFiles: failed,
+    );
   }
 
   String _requireApiKey() {

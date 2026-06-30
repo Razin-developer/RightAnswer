@@ -1,6 +1,7 @@
 import 'dart:convert';
-
+import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:uuid/uuid.dart';
 
 import '../config/app_config.dart';
@@ -52,8 +53,10 @@ class _ChapterScreenState extends State<ChapterScreen> {
   List<Chunk> _chunks = [];
   bool _loading = false;
   bool _processingChunks = false;
+  bool _extractingImages = false;
   bool _editingContent = false;
   String _statusMessage = '';
+  List<String> _sourceImagePaths = [];
 
   @override
   void initState() {
@@ -76,6 +79,121 @@ class _ChapterScreenState extends State<ChapterScreen> {
   Future<void> _loadChunks() async {
     final chunks = await _chunkRepo.getByChapter(_chapter.id);
     if (mounted) setState(() => _chunks = chunks);
+  }
+
+  Future<void> _pickTextbookPhoto() async {
+    try {
+      final picked = await ImagePicker().pickImage(
+        source: ImageSource.camera,
+        imageQuality: 85,
+      );
+      if (picked == null || !mounted) return;
+      setState(() {
+        _sourceImagePaths = [..._sourceImagePaths, picked.path];
+      });
+    } catch (e) {
+      if (mounted) {
+        AppFeedback.showToast(
+          context,
+          'Could not open the camera: ${AppException.from(e).message}',
+        );
+      }
+    }
+  }
+
+  Future<void> _pickTextbookImages() async {
+    try {
+      final picked = await ImagePicker().pickMultiImage(imageQuality: 85);
+      if (picked.isEmpty || !mounted) return;
+      setState(() {
+        _sourceImagePaths = [
+          ..._sourceImagePaths,
+          ...picked.map((file) => file.path),
+        ];
+      });
+    } catch (e) {
+      if (mounted) {
+        AppFeedback.showToast(
+          context,
+          'Could not open photos: ${AppException.from(e).message}',
+        );
+      }
+    }
+  }
+
+  void _removeTextbookImage(String path) {
+    setState(() {
+      _sourceImagePaths = _sourceImagePaths
+          .where((item) => item != path)
+          .toList();
+    });
+  }
+
+  Future<void> _extractTextFromImages({bool processAfter = false}) async {
+    if (_sourceImagePaths.isEmpty) {
+      AppFeedback.showToast(context, 'Add at least one textbook photo first');
+      return;
+    }
+    if (!AppConfig.hasOpenAiApiKey) {
+      await AppFeedback.showErrorDialog(
+        context,
+        AppException.configuration(
+          'Build is missing OPENAI_API_KEY. Run with --dart-define=OPENAI_API_KEY=your_key.',
+        ),
+      );
+      return;
+    }
+    if (!ConnectivityService.instance.isOnline) {
+      AppFeedback.showToast(
+        context,
+        'Connect to the internet to extract text from images',
+      );
+      return;
+    }
+
+    setState(() {
+      _extractingImages = true;
+      _statusMessage = 'Reading textbook images...';
+    });
+
+    try {
+      final extracted = await _openAI.extractChapterTextFromImages(
+        imagePaths: _sourceImagePaths,
+        chapterTitle: _chapter.title,
+        subjectName: widget.subject.name,
+      );
+      final existing = _contentCtrl.text.trim();
+      final merged = existing.isEmpty
+          ? extracted.combinedText
+          : '$existing\n\n${extracted.combinedText}';
+
+      _contentCtrl.text = merged;
+      setState(() {
+        _editingContent = true;
+        _statusMessage = extracted.failedFiles.isEmpty
+            ? 'Imported ${extracted.processedCount} textbook page(s)'
+            : 'Imported ${extracted.processedCount} page(s), skipped ${extracted.failedFiles.length}';
+      });
+
+      if (mounted) {
+        AppFeedback.showToast(
+          context,
+          extracted.failedFiles.isEmpty
+              ? 'Text imported into the chapter editor'
+              : 'Imported with some skipped images',
+        );
+      }
+
+      if (processAfter) {
+        await _saveAndProcess();
+      }
+    } catch (e) {
+      if (mounted) await AppFeedback.showErrorDialog(context, e);
+    } finally {
+      if (mounted) {
+        setState(() => _extractingImages = false);
+      }
+    }
   }
 
   // ── Content CRUD ─────────────────────────────────────────────────────────
@@ -116,8 +234,10 @@ class _ChapterScreenState extends State<ChapterScreen> {
       });
 
       if (!AppConfig.hasOpenAiApiKey) {
-        setState(() => _statusMessage =
-            '${chunks.length} chunks ready — add OPENAI_API_KEY to enable embeddings');
+        setState(
+          () => _statusMessage =
+              '${chunks.length} chunks ready — add OPENAI_API_KEY to enable embeddings',
+        );
         return;
       }
 
@@ -127,12 +247,19 @@ class _ChapterScreenState extends State<ChapterScreen> {
           chunks.map((c) => c.text).toList(),
         );
         for (int i = 0; i < chunks.length; i++) {
-          await _chunkRepo.updateEmbedding(chunks[i].id, jsonEncode(embeddings[i]));
+          await _chunkRepo.updateEmbedding(
+            chunks[i].id,
+            jsonEncode(embeddings[i]),
+          );
         }
-        setState(() => _statusMessage = '${chunks.length} chunks + embeddings ready');
+        setState(
+          () => _statusMessage = '${chunks.length} chunks + embeddings ready',
+        );
       } catch (e) {
-        setState(() => _statusMessage =
-            '${chunks.length} chunks ready (embeddings skipped: ${AppException.from(e).message})');
+        setState(
+          () => _statusMessage =
+              '${chunks.length} chunks ready (embeddings skipped: ${AppException.from(e).message})',
+        );
       }
     } catch (e) {
       setState(() => _statusMessage = AppException.from(e).message);
@@ -151,7 +278,10 @@ class _ChapterScreenState extends State<ChapterScreen> {
           'This removes all processed chunks and clears the content field. The chapter itself is kept.',
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
           FilledButton(
             style: FilledButton.styleFrom(backgroundColor: Colors.red),
             onPressed: () => Navigator.pop(ctx, true),
@@ -201,13 +331,18 @@ class _ChapterScreenState extends State<ChapterScreen> {
 
     final question = _questionCtrl.text.trim();
     // Auto-select tool: if there's a question, explain it; otherwise summarise
-    final toolType = question.isEmpty ? ToolType.chapterSummary : ToolType.explainSimple;
+    final toolType = question.isEmpty
+        ? ToolType.chapterSummary
+        : ToolType.explainSimple;
 
     if (!ConnectivityService.instance.isOnline) {
-      final gradeLevel = await _settingsRepo.get(SettingKeys.defaultGradeLevel) ?? 'Grade 10';
+      final gradeLevel =
+          await _settingsRepo.get(SettingKeys.defaultGradeLevel) ?? 'Grade 10';
       final tone = await _settingsRepo.get(SettingKeys.defaultTone) ?? 'normal';
-      final outputLength = await _settingsRepo.get(SettingKeys.defaultOutputLength) ?? 'medium';
-      final language = await _settingsRepo.get(SettingKeys.defaultLanguage) ?? 'English';
+      final outputLength =
+          await _settingsRepo.get(SettingKeys.defaultOutputLength) ?? 'medium';
+      final language =
+          await _settingsRepo.get(SettingKeys.defaultLanguage) ?? 'English';
 
       await QueueService.instance.enqueue(
         QueuedRequest(
@@ -227,7 +362,10 @@ class _ChapterScreenState extends State<ChapterScreen> {
 
       await NotificationService.instance.showOfflineQueued(toolType);
       if (mounted) {
-        AppFeedback.showToast(context, 'Queued — will generate when you\'re back online');
+        AppFeedback.showToast(
+          context,
+          'Queued — will generate when you\'re back online',
+        );
       }
       return;
     }
@@ -238,13 +376,19 @@ class _ChapterScreenState extends State<ChapterScreen> {
     });
 
     try {
-      final relevantChunks = await _retrieval.searchChapter(_chapter.id, question);
+      final relevantChunks = await _retrieval.searchChapter(
+        _chapter.id,
+        question,
+      );
       setState(() => _statusMessage = 'Generating…');
 
-      final gradeLevel = await _settingsRepo.get(SettingKeys.defaultGradeLevel) ?? 'Grade 10';
+      final gradeLevel =
+          await _settingsRepo.get(SettingKeys.defaultGradeLevel) ?? 'Grade 10';
       final tone = await _settingsRepo.get(SettingKeys.defaultTone) ?? 'normal';
-      final outputLength = await _settingsRepo.get(SettingKeys.defaultOutputLength) ?? 'medium';
-      final language = await _settingsRepo.get(SettingKeys.defaultLanguage) ?? 'English';
+      final outputLength =
+          await _settingsRepo.get(SettingKeys.defaultOutputLength) ?? 'medium';
+      final language =
+          await _settingsRepo.get(SettingKeys.defaultLanguage) ?? 'English';
 
       final result = await _openAI.generateFromContext(
         toolType: toolType,
@@ -256,7 +400,8 @@ class _ChapterScreenState extends State<ChapterScreen> {
         outputLength: outputLength,
       );
 
-      final notifyEnabled = await _settingsRepo.get(SettingKeys.notifyOnComplete) ?? 'true';
+      final notifyEnabled =
+          await _settingsRepo.get(SettingKeys.notifyOnComplete) ?? 'true';
       if (notifyEnabled == 'true') {
         await NotificationService.instance.showGenerationComplete(
           toolType: toolType,
@@ -282,7 +427,11 @@ class _ChapterScreenState extends State<ChapterScreen> {
     } catch (e) {
       if (mounted) await AppFeedback.showErrorDialog(context, e);
     } finally {
-      if (mounted) setState(() { _loading = false; _statusMessage = ''; });
+      if (mounted)
+        setState(() {
+          _loading = false;
+          _statusMessage = '';
+        });
     }
   }
 
@@ -304,10 +453,13 @@ class _ChapterScreenState extends State<ChapterScreen> {
     }
 
     if (!ConnectivityService.instance.isOnline) {
-      final gradeLevel = await _settingsRepo.get(SettingKeys.defaultGradeLevel) ?? 'Grade 10';
+      final gradeLevel =
+          await _settingsRepo.get(SettingKeys.defaultGradeLevel) ?? 'Grade 10';
       final tone = await _settingsRepo.get(SettingKeys.defaultTone) ?? 'normal';
-      final outputLength = await _settingsRepo.get(SettingKeys.defaultOutputLength) ?? 'medium';
-      final language = await _settingsRepo.get(SettingKeys.defaultLanguage) ?? 'English';
+      final outputLength =
+          await _settingsRepo.get(SettingKeys.defaultOutputLength) ?? 'medium';
+      final language =
+          await _settingsRepo.get(SettingKeys.defaultLanguage) ?? 'English';
 
       await QueueService.instance.enqueue(
         QueuedRequest(
@@ -325,7 +477,11 @@ class _ChapterScreenState extends State<ChapterScreen> {
         ),
       );
       await NotificationService.instance.showOfflineQueued(toolType);
-      if (mounted) AppFeedback.showToast(context, 'Queued — will generate when back online');
+      if (mounted)
+        AppFeedback.showToast(
+          context,
+          'Queued — will generate when back online',
+        );
       return;
     }
 
@@ -335,11 +491,17 @@ class _ChapterScreenState extends State<ChapterScreen> {
     });
 
     try {
-      final relevantChunks = await _retrieval.searchChapter(_chapter.id, 'overview');
-      final gradeLevel = await _settingsRepo.get(SettingKeys.defaultGradeLevel) ?? 'Grade 10';
+      final relevantChunks = await _retrieval.searchChapter(
+        _chapter.id,
+        'overview',
+      );
+      final gradeLevel =
+          await _settingsRepo.get(SettingKeys.defaultGradeLevel) ?? 'Grade 10';
       final tone = await _settingsRepo.get(SettingKeys.defaultTone) ?? 'normal';
-      final outputLength = await _settingsRepo.get(SettingKeys.defaultOutputLength) ?? 'long';
-      final language = await _settingsRepo.get(SettingKeys.defaultLanguage) ?? 'English';
+      final outputLength =
+          await _settingsRepo.get(SettingKeys.defaultOutputLength) ?? 'long';
+      final language =
+          await _settingsRepo.get(SettingKeys.defaultLanguage) ?? 'English';
 
       final result = await _openAI.generateFromContext(
         toolType: toolType,
@@ -351,7 +513,8 @@ class _ChapterScreenState extends State<ChapterScreen> {
         outputLength: outputLength,
       );
 
-      final notifyEnabled = await _settingsRepo.get(SettingKeys.notifyOnComplete) ?? 'true';
+      final notifyEnabled =
+          await _settingsRepo.get(SettingKeys.notifyOnComplete) ?? 'true';
       if (notifyEnabled == 'true') {
         await NotificationService.instance.showGenerationComplete(
           toolType: toolType,
@@ -377,7 +540,11 @@ class _ChapterScreenState extends State<ChapterScreen> {
     } catch (e) {
       if (mounted) await AppFeedback.showErrorDialog(context, e);
     } finally {
-      if (mounted) setState(() { _loading = false; _statusMessage = ''; });
+      if (mounted)
+        setState(() {
+          _loading = false;
+          _statusMessage = '';
+        });
     }
   }
 
@@ -400,7 +567,10 @@ class _ChapterScreenState extends State<ChapterScreen> {
               Text(
                 _chapter.title,
                 overflow: TextOverflow.ellipsis,
-                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+                style: const TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w700,
+                ),
               ),
               Text(
                 _chapter.className,
@@ -417,16 +587,27 @@ class _ChapterScreenState extends State<ChapterScreen> {
                   preferredSize: const Size.fromHeight(26),
                   child: Container(
                     width: double.infinity,
-                    color: theme.colorScheme.primaryContainer.withValues(alpha: 0.45),
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 5),
+                    color: theme.colorScheme.primaryContainer.withValues(
+                      alpha: 0.45,
+                    ),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 5,
+                    ),
                     child: Row(
                       children: [
-                        Icon(Icons.check_circle_outline,
-                            size: 13, color: theme.colorScheme.primary),
+                        Icon(
+                          Icons.check_circle_outline,
+                          size: 13,
+                          color: theme.colorScheme.primary,
+                        ),
                         const SizedBox(width: 6),
                         Text(
                           '${_chunks.length} chunks processed — ready to generate',
-                          style: TextStyle(fontSize: 12, color: theme.colorScheme.primary),
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: theme.colorScheme.primary,
+                          ),
                         ),
                       ],
                     ),
@@ -454,17 +635,20 @@ class _ChapterScreenState extends State<ChapterScreen> {
                   trailing: _editingContent
                       ? null
                       : hasContent
-                          ? TextButton.icon(
-                              onPressed: _startEditing,
-                              icon: const Icon(Icons.edit_outlined, size: 14),
-                              label: const Text('Edit'),
-                              style: TextButton.styleFrom(
-                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                                minimumSize: Size.zero,
-                                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                              ),
-                            )
-                          : null,
+                      ? TextButton.icon(
+                          onPressed: _startEditing,
+                          icon: const Icon(Icons.edit_outlined, size: 14),
+                          label: const Text('Edit'),
+                          style: TextButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 10,
+                              vertical: 4,
+                            ),
+                            minimumSize: Size.zero,
+                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                          ),
+                        )
+                      : null,
                 ),
                 const SizedBox(height: 10),
 
@@ -493,7 +677,10 @@ class _ChapterScreenState extends State<ChapterScreen> {
                     ),
                     focusedBorder: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(12),
-                      borderSide: BorderSide(color: theme.colorScheme.primary, width: 1.5),
+                      borderSide: BorderSide(
+                        color: theme.colorScheme.primary,
+                        width: 1.5,
+                      ),
                     ),
                     contentPadding: const EdgeInsets.all(14),
                     suffixIcon: _editingContent && _contentCtrl.text.isNotEmpty
@@ -507,6 +694,163 @@ class _ChapterScreenState extends State<ChapterScreen> {
                         : null,
                   ),
                 ),
+                const SizedBox(height: 14),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: theme.colorScheme.surfaceContainerLowest,
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(color: theme.dividerColor),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Icon(
+                            Icons.photo_library_outlined,
+                            size: 16,
+                            color: theme.colorScheme.primary,
+                          ),
+                          const SizedBox(width: 8),
+                          Text(
+                            'Import Textbook Pages',
+                            style: theme.textTheme.titleSmall?.copyWith(
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        'Take photos or choose textbook images, then pull their chapter text into this editor.',
+                        style: TextStyle(
+                          fontSize: 12,
+                          height: 1.5,
+                          color: theme.colorScheme.onSurface.withValues(
+                            alpha: 0.6,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      Wrap(
+                        spacing: 10,
+                        runSpacing: 10,
+                        children: [
+                          OutlinedButton.icon(
+                            onPressed: _extractingImages
+                                ? null
+                                : _pickTextbookPhoto,
+                            icon: const Icon(
+                              Icons.camera_alt_outlined,
+                              size: 16,
+                            ),
+                            label: const Text('Camera'),
+                          ),
+                          OutlinedButton.icon(
+                            onPressed: _extractingImages
+                                ? null
+                                : _pickTextbookImages,
+                            icon: const Icon(
+                              Icons.photo_library_outlined,
+                              size: 16,
+                            ),
+                            label: const Text('Photos'),
+                          ),
+                          FilledButton.icon(
+                            onPressed: _extractingImages
+                                ? null
+                                : () => _extractTextFromImages(),
+                            icon: _extractingImages
+                                ? const SizedBox(
+                                    width: 14,
+                                    height: 14,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                      color: Colors.white,
+                                    ),
+                                  )
+                                : const Icon(
+                                    Icons.auto_awesome_rounded,
+                                    size: 16,
+                                  ),
+                            label: Text(
+                              _extractingImages
+                                  ? 'Extracting...'
+                                  : 'Extract Text',
+                            ),
+                          ),
+                        ],
+                      ),
+                      if (_sourceImagePaths.isNotEmpty) ...[
+                        const SizedBox(height: 12),
+                        SizedBox(
+                          height: 82,
+                          child: ListView.separated(
+                            scrollDirection: Axis.horizontal,
+                            itemCount: _sourceImagePaths.length,
+                            separatorBuilder: (_, __) =>
+                                const SizedBox(width: 10),
+                            itemBuilder: (context, index) {
+                              final path = _sourceImagePaths[index];
+                              return Stack(
+                                children: [
+                                  ClipRRect(
+                                    borderRadius: BorderRadius.circular(12),
+                                    child: Image.file(
+                                      File(path),
+                                      width: 82,
+                                      height: 82,
+                                      fit: BoxFit.cover,
+                                    ),
+                                  ),
+                                  Positioned(
+                                    top: 6,
+                                    right: 6,
+                                    child: GestureDetector(
+                                      onTap: _extractingImages
+                                          ? null
+                                          : () => _removeTextbookImage(path),
+                                      child: Container(
+                                        padding: const EdgeInsets.all(3),
+                                        decoration: const BoxDecoration(
+                                          color: Colors.black54,
+                                          shape: BoxShape.circle,
+                                        ),
+                                        child: const Icon(
+                                          Icons.close,
+                                          size: 12,
+                                          color: Colors.white,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              );
+                            },
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+                        SizedBox(
+                          width: double.infinity,
+                          child: FilledButton.tonalIcon(
+                            onPressed: _extractingImages
+                                ? null
+                                : () => _extractTextFromImages(
+                                    processAfter: true,
+                                  ),
+                            icon: const Icon(
+                              Icons.library_add_check_rounded,
+                              size: 16,
+                            ),
+                            label: const Text('Extract, Combine, and Process'),
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
 
                 // Character count when editing
                 if (_editingContent && hasContent)
@@ -516,7 +860,9 @@ class _ChapterScreenState extends State<ChapterScreen> {
                       '${_contentCtrl.text.trim().length} characters',
                       style: TextStyle(
                         fontSize: 11,
-                        color: theme.colorScheme.onSurface.withValues(alpha: 0.45),
+                        color: theme.colorScheme.onSurface.withValues(
+                          alpha: 0.45,
+                        ),
                       ),
                     ),
                   ),
@@ -533,10 +879,15 @@ class _ChapterScreenState extends State<ChapterScreen> {
                             ? const SizedBox(
                                 width: 14,
                                 height: 14,
-                                child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: Colors.white,
+                                ),
                               )
                             : const Icon(Icons.play_arrow_rounded, size: 18),
-                        label: Text(_processingChunks ? 'Processing…' : 'Process & Save'),
+                        label: Text(
+                          _processingChunks ? 'Processing…' : 'Process & Save',
+                        ),
                       ),
                       const SizedBox(width: 10),
                       OutlinedButton(
@@ -561,10 +912,17 @@ class _ChapterScreenState extends State<ChapterScreen> {
                               ? const SizedBox(
                                   width: 14,
                                   height: 14,
-                                  child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    color: Colors.white,
+                                  ),
                                 )
                               : const Icon(Icons.play_arrow_rounded, size: 18),
-                          label: Text(_processingChunks ? 'Processing…' : 'Process Content'),
+                          label: Text(
+                            _processingChunks
+                                ? 'Processing…'
+                                : 'Process Content',
+                          ),
                         ),
                       if (hasChunks) ...[
                         OutlinedButton.icon(
@@ -579,7 +937,9 @@ class _ChapterScreenState extends State<ChapterScreen> {
                                   ),
                                 )
                               : const Icon(Icons.refresh_rounded, size: 16),
-                          label: Text(_processingChunks ? 'Reprocessing…' : 'Reprocess'),
+                          label: Text(
+                            _processingChunks ? 'Reprocessing…' : 'Reprocess',
+                          ),
                         ),
                         const SizedBox(width: 10),
                         OutlinedButton.icon(
@@ -588,7 +948,9 @@ class _ChapterScreenState extends State<ChapterScreen> {
                           label: const Text('Clear'),
                           style: OutlinedButton.styleFrom(
                             foregroundColor: Colors.red,
-                            side: BorderSide(color: Colors.red.withValues(alpha: 0.5)),
+                            side: BorderSide(
+                              color: Colors.red.withValues(alpha: 0.5),
+                            ),
                           ),
                         ),
                       ],
@@ -600,15 +962,22 @@ class _ChapterScreenState extends State<ChapterScreen> {
                   const SizedBox(height: 10),
                   Row(
                     children: [
-                      Icon(Icons.info_outline, size: 13,
-                          color: theme.colorScheme.onSurface.withValues(alpha: 0.45)),
+                      Icon(
+                        Icons.info_outline,
+                        size: 13,
+                        color: theme.colorScheme.onSurface.withValues(
+                          alpha: 0.45,
+                        ),
+                      ),
                       const SizedBox(width: 6),
                       Expanded(
                         child: Text(
                           _statusMessage,
                           style: TextStyle(
                             fontSize: 12,
-                            color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
+                            color: theme.colorScheme.onSurface.withValues(
+                              alpha: 0.6,
+                            ),
                           ),
                         ),
                       ),
@@ -638,14 +1007,21 @@ class _ChapterScreenState extends State<ChapterScreen> {
                     ),
                     child: Row(
                       children: [
-                        Icon(Icons.lock_outline, size: 18,
-                            color: theme.colorScheme.onSurface.withValues(alpha: 0.35)),
+                        Icon(
+                          Icons.lock_outline,
+                          size: 18,
+                          color: theme.colorScheme.onSurface.withValues(
+                            alpha: 0.35,
+                          ),
+                        ),
                         const SizedBox(width: 12),
                         Text(
                           'Add and process chapter content first',
                           style: TextStyle(
                             fontSize: 13,
-                            color: theme.colorScheme.onSurface.withValues(alpha: 0.45),
+                            color: theme.colorScheme.onSurface.withValues(
+                              alpha: 0.45,
+                            ),
                           ),
                         ),
                       ],
@@ -658,22 +1034,33 @@ class _ChapterScreenState extends State<ChapterScreen> {
                     maxLines: 4,
                     textCapitalization: TextCapitalization.sentences,
                     decoration: InputDecoration(
-                      hintText: 'Ask a question, or leave blank for a chapter summary…',
+                      hintText:
+                          'Ask a question, or leave blank for a chapter summary…',
                       prefixIcon: Icon(
                         Icons.help_outline_rounded,
                         size: 18,
-                        color: theme.colorScheme.onSurface.withValues(alpha: 0.4),
+                        color: theme.colorScheme.onSurface.withValues(
+                          alpha: 0.4,
+                        ),
                       ),
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
                       enabledBorder: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(12),
                         borderSide: BorderSide(color: theme.dividerColor),
                       ),
                       focusedBorder: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(12),
-                        borderSide: BorderSide(color: theme.colorScheme.primary, width: 1.5),
+                        borderSide: BorderSide(
+                          color: theme.colorScheme.primary,
+                          width: 1.5,
+                        ),
                       ),
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 14,
+                        vertical: 12,
+                      ),
                       suffixIcon: _questionCtrl.text.isNotEmpty
                           ? IconButton(
                               icon: const Icon(Icons.close, size: 16),
@@ -693,7 +1080,9 @@ class _ChapterScreenState extends State<ChapterScreen> {
                         : 'Question → generates an explanation',
                     style: TextStyle(
                       fontSize: 11,
-                      color: theme.colorScheme.onSurface.withValues(alpha: 0.45),
+                      color: theme.colorScheme.onSurface.withValues(
+                        alpha: 0.45,
+                      ),
                     ),
                   ),
                   const SizedBox(height: 14),
@@ -703,7 +1092,9 @@ class _ChapterScreenState extends State<ChapterScreen> {
                       onPressed: _generate,
                       icon: const Icon(Icons.auto_awesome_rounded, size: 18),
                       label: Text(
-                        _questionCtrl.text.trim().isEmpty ? 'Generate Summary' : 'Generate Answer',
+                        _questionCtrl.text.trim().isEmpty
+                            ? 'Generate Summary'
+                            : 'Generate Answer',
                       ),
                       style: FilledButton.styleFrom(
                         padding: const EdgeInsets.symmetric(vertical: 14),
@@ -726,7 +1117,9 @@ class _ChapterScreenState extends State<ChapterScreen> {
                           'Process content first',
                           style: TextStyle(
                             fontSize: 11,
-                            color: theme.colorScheme.onSurface.withValues(alpha: 0.38),
+                            color: theme.colorScheme.onSurface.withValues(
+                              alpha: 0.38,
+                            ),
                           ),
                         ),
                 ),
@@ -759,14 +1152,16 @@ class _ChapterScreenState extends State<ChapterScreen> {
                       label: 'Key Formulas',
                       color: Colors.indigo,
                       enabled: hasChunks,
-                      onTap: () => _generateStudyAid(ToolType.importantFormulas),
+                      onTap: () =>
+                          _generateStudyAid(ToolType.importantFormulas),
                     ),
                     _StudyAidButton(
                       icon: Icons.abc_rounded,
                       label: 'Definitions',
                       color: Colors.purple,
                       enabled: hasChunks,
-                      onTap: () => _generateStudyAid(ToolType.importantDefinitions),
+                      onTap: () =>
+                          _generateStudyAid(ToolType.importantDefinitions),
                     ),
                   ],
                 ),
@@ -788,7 +1183,11 @@ class _SectionHeader extends StatelessWidget {
   final String label;
   final Widget? trailing;
 
-  const _SectionHeader({required this.icon, required this.label, this.trailing});
+  const _SectionHeader({
+    required this.icon,
+    required this.label,
+    this.trailing,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -806,10 +1205,7 @@ class _SectionHeader extends StatelessWidget {
             letterSpacing: 0.5,
           ),
         ),
-        if (trailing != null) ...[
-          const Spacer(),
-          trailing!,
-        ],
+        if (trailing != null) ...[const Spacer(), trailing!],
       ],
     );
   }
@@ -835,7 +1231,9 @@ class _StudyAidButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final effectiveColor = enabled ? color : theme.colorScheme.onSurface.withValues(alpha: 0.25);
+    final effectiveColor = enabled
+        ? color
+        : theme.colorScheme.onSurface.withValues(alpha: 0.25);
 
     return InkWell(
       onTap: enabled ? onTap : null,

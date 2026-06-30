@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../constants/app_languages.dart';
 import '../config/app_config.dart';
 import '../database/database_helper.dart';
 import '../repositories/settings_repository.dart';
@@ -7,6 +8,7 @@ import '../repositories/usage_log_repository.dart';
 import '../services/notification_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/app_feedback.dart';
+import '../widgets/language_picker_sheet.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -38,69 +40,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
   int _reminderHour = 8;
   int _reminderMinute = 0;
 
-  static const _languages = [
-    'English',
-    'Albanian',
-    'Amharic',
-    'Arabic',
-    'Armenian',
-    'Bengali',
-    'Bosnian',
-    'Bulgarian',
-    'Burmese',
-    'Catalan',
-    'Chinese',
-    'Croatian',
-    'Czech',
-    'Danish',
-    'Dutch',
-    'Estonian',
-    'Finnish',
-    'French',
-    'Georgian',
-    'German',
-    'Greek',
-    'Gujarati',
-    'Hindi',
-    'Hungarian',
-    'Icelandic',
-    'Indonesian',
-    'Italian',
-    'Japanese',
-    'Kannada',
-    'Kazakh',
-    'Korean',
-    'Latvian',
-    'Lithuanian',
-    'Macedonian',
-    'Malay',
-    'Malayalam',
-    'Marathi',
-    'Mongolian',
-    'Norwegian',
-    'Persian',
-    'Polish',
-    'Portuguese',
-    'Punjabi',
-    'Romanian',
-    'Russian',
-    'Serbian',
-    'Slovak',
-    'Slovenian',
-    'Somali',
-    'Spanish',
-    'Swahili',
-    'Swedish',
-    'Tagalog',
-    'Tamil',
-    'Telugu',
-    'Thai',
-    'Turkish',
-    'Ukrainian',
-    'Urdu',
-    'Vietnamese',
-  ];
-
   static const _grades = [
     'Grade 1',
     'Grade 2',
@@ -116,7 +55,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     'Grade 12',
     'University',
   ];
-
 
   @override
   void initState() {
@@ -302,10 +240,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           _card(
             theme,
             children: [
-              _dropdownRow('Language', _language, _languages, (value) {
-                setState(() => _language = value!);
-                _save(SettingKeys.defaultLanguage, value!);
-              }, theme),
+              _languagePickerRow(theme),
               const SizedBox(height: 14),
               _dropdownRow('Grade / Class', _gradeLevel, _grades, (value) {
                 setState(() => _gradeLevel = value!);
@@ -441,13 +376,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text('Daily Output Token Limit', style: _labelStyle(theme)),
+                        Text(
+                          'Daily Output Token Limit',
+                          style: _labelStyle(theme),
+                        ),
                         const SizedBox(height: 4),
                         Text(
                           'Set 0 for unlimited. Chat stops when the limit is reached.',
                           style: TextStyle(
                             fontSize: 11,
-                            color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
+                            color: theme.colorScheme.onSurface.withValues(
+                              alpha: 0.5,
+                            ),
                           ),
                         ),
                       ],
@@ -463,7 +403,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         labelText: 'tokens',
                         isDense: true,
                         border: OutlineInputBorder(),
-                        contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                        contentPadding: EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 8,
+                        ),
                       ),
                       onSubmitted: (v) {
                         final n = int.tryParse(v.trim()) ?? 0;
@@ -752,6 +695,58 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 )
                 .toList(),
             onChanged: onChanged,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _languagePickerRow(ThemeData theme) {
+    return Row(
+      children: [
+        SizedBox(
+          width: 120,
+          child: Text('Language', style: _labelStyle(theme)),
+        ),
+        Expanded(
+          child: InkWell(
+            onTap: () async {
+              final selected = await showModalBottomSheet<String>(
+                context: context,
+                backgroundColor: Colors.transparent,
+                isScrollControlled: true,
+                builder: (_) => LanguagePickerSheet(
+                  title: 'Select Language',
+                  languages: appLanguageLabels,
+                  selectedLanguage: _language,
+                ),
+              );
+              if (selected == null || !mounted) return;
+              setState(() => _language = selected);
+              await _save(SettingKeys.defaultLanguage, selected);
+            },
+            borderRadius: BorderRadius.circular(12),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+              decoration: BoxDecoration(
+                border: Border.all(color: theme.dividerColor),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      _language,
+                      style: const TextStyle(fontSize: 13),
+                    ),
+                  ),
+                  Icon(
+                    Icons.expand_more_rounded,
+                    color: theme.colorScheme.onSurface.withValues(alpha: 0.55),
+                  ),
+                ],
+              ),
+            ),
           ),
         ),
       ],

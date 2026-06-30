@@ -6,6 +6,7 @@ import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:uuid/uuid.dart';
 
+import '../constants/app_languages.dart';
 import '../models/chat.dart';
 import '../models/chat_message.dart';
 import '../models/subject.dart';
@@ -16,11 +17,12 @@ import '../repositories/chapter_repository.dart';
 import '../repositories/subject_repository.dart';
 import '../services/chat_ai_service.dart';
 import '../services/connectivity_service.dart';
-import '../services/speech_service.dart';
 import '../services/tts_service.dart';
 import '../models/app_exception.dart';
 import '../widgets/app_feedback.dart';
 import '../widgets/app_logo.dart';
+import '../widgets/language_picker_sheet.dart';
+import '../widgets/voice_input_sheet.dart';
 import 'settings_screen.dart';
 
 class ChatScreen extends StatefulWidget {
@@ -34,7 +36,6 @@ class _ChatScreenState extends State<ChatScreen> {
   final _chatRepo = ChatRepository();
   final _messageRepo = ChatMessageRepository();
   final _tts = TtsService.instance;
-  final _speech = SpeechService.instance;
 
   Chat? _currentChat;
   List<ChatMessage> _messages = [];
@@ -49,6 +50,8 @@ class _ChatScreenState extends State<ChatScreen> {
   bool _isTemporary = false;
 
   String? _selectedImagePath;
+  String? _selectedResponseLanguage;
+  String? _streamingMessageId;
   String _responseLength = 'normal';
   String _reasoningLevel = 'mid';
   String? _contextSubjectId;
@@ -108,14 +111,28 @@ class _ChatScreenState extends State<ChatScreen> {
     });
   }
 
-  Future<void> _sendMessage() async {
+  Future<void> _sendMessage() async => _sendMessageStreaming();
+
+  Future<void> _sendMessageStreaming() async {
+    if (_isGenerating) return;
     final text = _inputCtrl.text.trim();
     if (text.isEmpty && _selectedImagePath == null) {
       AppFeedback.showToast(context, 'Enter a message or attach an image');
       return;
     }
+    if (_selectedImagePath != null && !File(_selectedImagePath!).existsSync()) {
+      setState(() => _selectedImagePath = null);
+      AppFeedback.showToast(
+        context,
+        'The selected image is no longer available',
+      );
+      return;
+    }
     if (!ConnectivityService.instance.isOnline) {
-      AppFeedback.showToast(context, 'You\'re offline — connect to send a message');
+      AppFeedback.showToast(
+        context,
+        'You are offline. Connect to send a message.',
+      );
       return;
     }
 
@@ -139,6 +156,8 @@ class _ChatScreenState extends State<ChatScreen> {
 
     final chatId = _currentChat!.id;
     final imagePathCopy = _selectedImagePath;
+    final historyBeforeSend = List<ChatMessage>.from(_messages);
+    final chosenLanguage = effectiveResponseLanguage(_selectedResponseLanguage);
 
     final userMsg = ChatMessage(
       id: const Uuid().v4(),
@@ -146,6 +165,20 @@ class _ChatScreenState extends State<ChatScreen> {
       role: 'user',
       content: text,
       imagePath: imagePathCopy,
+      responseLanguage: chosenLanguage,
+      responseLength: _responseLength,
+      reasoningLevel: _reasoningLevel,
+      tokenCount: 0,
+      cost: 0,
+      createdAt: DateTime.now(),
+    );
+
+    final assistantMsg = ChatMessage(
+      id: const Uuid().v4(),
+      chatId: chatId,
+      role: 'assistant',
+      content: '',
+      responseLanguage: chosenLanguage,
       responseLength: _responseLength,
       reasoningLevel: _reasoningLevel,
       tokenCount: 0,
@@ -154,46 +187,59 @@ class _ChatScreenState extends State<ChatScreen> {
     );
 
     setState(() {
-      _messages = [..._messages, userMsg];
+      _messages = [..._messages, userMsg, assistantMsg];
       _isGenerating = true;
+      _streamingMessageId = assistantMsg.id;
+      _selectedImagePath = null;
     });
     _inputCtrl.clear();
-    setState(() => _selectedImagePath = null);
     _scrollToBottom();
 
     if (!_isTemporary) await _messageRepo.insert(userMsg);
 
     try {
-      final result = await ChatAIService.instance.sendMessage(
+      await for (final event in ChatAIService.instance.streamMessage(
         userContent: text,
         imagePath: imagePathCopy,
         responseLength: _responseLength,
         reasoningLevel: _reasoningLevel,
+        responseLanguage: chosenLanguage,
         subjectName: _contextSubjectName,
         chapterIds: _contextChapterIds,
-        history: _messages.where((m) => m.id != userMsg.id).toList(),
-      );
+        history: historyBeforeSend,
+      )) {
+        if (!mounted) return;
+        setState(() {
+          _messages = _messages
+              .map(
+                (message) => message.id == assistantMsg.id
+                    ? message.copyWith(
+                        content: event.content,
+                        tokenCount: event.inputTokens + event.outputTokens,
+                        cost: event.cost,
+                      )
+                    : message,
+              )
+              .toList();
+          if (event.isDone) {
+            _isGenerating = false;
+            _streamingMessageId = null;
+          }
+        });
+        _scrollToBottom();
+      }
 
-      final assistantMsg = ChatMessage(
-        id: const Uuid().v4(),
-        chatId: chatId,
-        role: 'assistant',
-        content: result.content,
-        responseLength: _responseLength,
-        reasoningLevel: _reasoningLevel,
-        tokenCount: result.inputTokens + result.outputTokens,
-        cost: result.cost,
-        createdAt: DateTime.now(),
+      final finalAssistant = _messages.firstWhere(
+        (message) => message.id == assistantMsg.id,
       );
-
-      if (!mounted) return;
-      setState(() {
-        _messages = [..._messages, assistantMsg];
-        _isGenerating = false;
-      });
+      if (finalAssistant.content.trim().isEmpty) {
+        throw AppException.service(
+          'The AI returned an empty response. Please try again.',
+        );
+      }
 
       if (!_isTemporary) {
-        await _messageRepo.insert(assistantMsg);
+        await _messageRepo.insert(finalAssistant);
         await _chatRepo.touchUpdatedAt(chatId);
         await _loadAllChats();
 
@@ -206,73 +252,150 @@ class _ChatScreenState extends State<ChatScreen> {
       _scrollToBottom();
     } catch (e) {
       if (!mounted) return;
-      setState(() => _isGenerating = false);
-      AppFeedback.showToast(context, AppException.from(e).message);
+      setState(() {
+        _messages = _messages
+            .where((message) => message.id != assistantMsg.id)
+            .toList();
+        _isGenerating = false;
+        _streamingMessageId = null;
+      });
+      await _showAiError(e);
     }
+  }
+
+  Future<void> _regenerateStreaming(ChatMessage assistantMsg) async {
+    if (!ConnectivityService.instance.isOnline) {
+      AppFeedback.showToast(context, 'You are offline. Connect to regenerate.');
+      return;
+    }
+
+    final idx = _messages.indexOf(assistantMsg);
+    if (idx <= 0 || _currentChat == null) return;
+    final userMsg = _messages[idx - 1];
+    if (!userMsg.isUser) return;
+
+    if (!_isTemporary) await _messageRepo.delete(assistantMsg.id);
+    final withoutOld = List<ChatMessage>.from(_messages)..removeAt(idx);
+    final replacement = ChatMessage(
+      id: const Uuid().v4(),
+      chatId: _currentChat!.id,
+      role: 'assistant',
+      content: '',
+      responseLanguage: userMsg.responseLanguage,
+      responseLength: userMsg.responseLength,
+      reasoningLevel: userMsg.reasoningLevel,
+      tokenCount: 0,
+      cost: 0,
+      createdAt: DateTime.now(),
+    );
+
+    setState(() {
+      _messages = [...withoutOld, replacement];
+      _isGenerating = true;
+      _streamingMessageId = replacement.id;
+    });
+    _scrollToBottom();
+
+    try {
+      await for (final event in ChatAIService.instance.streamMessage(
+        userContent: userMsg.content,
+        imagePath: userMsg.imagePath,
+        responseLength: userMsg.responseLength,
+        reasoningLevel: userMsg.reasoningLevel,
+        responseLanguage: userMsg.responseLanguage,
+        subjectName: _contextSubjectName,
+        chapterIds: _contextChapterIds,
+        history: withoutOld.take(idx - 1).toList(),
+      )) {
+        if (!mounted) return;
+        setState(() {
+          _messages = _messages
+              .map(
+                (message) => message.id == replacement.id
+                    ? message.copyWith(
+                        content: event.content,
+                        tokenCount: event.inputTokens + event.outputTokens,
+                        cost: event.cost,
+                      )
+                    : message,
+              )
+              .toList();
+          if (event.isDone) {
+            _isGenerating = false;
+            _streamingMessageId = null;
+          }
+        });
+        _scrollToBottom();
+      }
+
+      final finalAssistant = _messages.firstWhere(
+        (message) => message.id == replacement.id,
+      );
+      if (finalAssistant.content.trim().isEmpty) {
+        throw AppException.service(
+          'The AI returned an empty response. Please try again.',
+        );
+      }
+      if (!_isTemporary) await _messageRepo.insert(finalAssistant);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _messages = withoutOld;
+        _isGenerating = false;
+        _streamingMessageId = null;
+      });
+      await _showAiError(e);
+    }
+  }
+
+  Future<void> _openVoiceComposer() async {
+    if (_isGenerating) return;
+    setState(() => _isRecording = true);
+    final spoken = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (_) => VoiceInputSheet(
+        title: 'Voice Input',
+        initialText: _inputCtrl.text.trim(),
+        localeId: speechLocaleForLanguage(_selectedResponseLanguage),
+        localeLabel: effectiveResponseLanguage(_selectedResponseLanguage),
+      ),
+    );
+    if (!mounted) return;
+    setState(() => _isRecording = false);
+    if (spoken == null || spoken.trim().isEmpty) return;
+    _inputCtrl.text = spoken.trim();
+    _inputCtrl.selection = TextSelection.fromPosition(
+      TextPosition(offset: _inputCtrl.text.length),
+    );
+  }
+
+  Future<void> _showAiError(Object error) async {
+    final appError = AppException.from(error);
+    if (!mounted) return;
+    if (appError.type == AppErrorType.validation) {
+      AppFeedback.showToast(context, appError.message);
+      return;
+    }
+    await AppFeedback.showErrorDialog(context, appError);
   }
 
   void _autoNameChat(String chatId, String firstMessage) async {
     final name = await ChatAIService.instance.generateChatName(firstMessage);
     if (!mounted) return;
     await _chatRepo.updateName(chatId, name);
-    setState(() => _currentChat = _currentChat?.copyWith(name: name, updatedAt: DateTime.now()));
+    setState(
+      () => _currentChat = _currentChat?.copyWith(
+        name: name,
+        updatedAt: DateTime.now(),
+      ),
+    );
     await _loadAllChats();
   }
 
-  Future<void> _regenerate(ChatMessage assistantMsg) async {
-    if (!ConnectivityService.instance.isOnline) {
-      AppFeedback.showToast(context, 'You\'re offline — connect to regenerate');
-      return;
-    }
-
-    final idx = _messages.indexOf(assistantMsg);
-    if (idx <= 0) return;
-    final userMsg = _messages[idx - 1];
-    if (!userMsg.isUser) return;
-
-    if (!_isTemporary) await _messageRepo.delete(assistantMsg.id);
-    final withoutOld = List<ChatMessage>.from(_messages)..removeAt(idx);
-    setState(() {
-      _messages = withoutOld;
-      _isGenerating = true;
-    });
-
-    try {
-      final result = await ChatAIService.instance.sendMessage(
-        userContent: userMsg.content,
-        imagePath: userMsg.imagePath,
-        responseLength: userMsg.responseLength,
-        reasoningLevel: userMsg.reasoningLevel,
-        subjectName: _contextSubjectName,
-        chapterIds: _contextChapterIds,
-        history: withoutOld.take(idx - 1).toList(),
-      );
-
-      final newMsg = ChatMessage(
-        id: const Uuid().v4(),
-        chatId: _currentChat!.id,
-        role: 'assistant',
-        content: result.content,
-        responseLength: userMsg.responseLength,
-        reasoningLevel: userMsg.reasoningLevel,
-        tokenCount: result.inputTokens + result.outputTokens,
-        cost: result.cost,
-        createdAt: DateTime.now(),
-      );
-
-      if (!mounted) return;
-      setState(() {
-        _messages = [...withoutOld, newMsg];
-        _isGenerating = false;
-      });
-      if (!_isTemporary) await _messageRepo.insert(newMsg);
-      _scrollToBottom();
-    } catch (e) {
-      if (!mounted) return;
-      setState(() => _isGenerating = false);
-      AppFeedback.showToast(context, AppException.from(e).message);
-    }
-  }
+  Future<void> _regenerate(ChatMessage assistantMsg) async =>
+      _regenerateStreaming(assistantMsg);
 
   Future<void> _deleteChat(String id) async {
     await _chatRepo.delete(id);
@@ -296,11 +419,17 @@ class _ChatScreenState extends State<ChatScreen> {
           controller: ctrl,
           autofocus: true,
           maxLength: 60,
-          decoration: const InputDecoration(labelText: 'Chat name', counterText: ''),
+          decoration: const InputDecoration(
+            labelText: 'Chat name',
+            counterText: '',
+          ),
           onSubmitted: (v) => Navigator.pop(ctx, v.trim()),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
           FilledButton(
             onPressed: () => Navigator.pop(ctx, ctrl.text.trim()),
             child: const Text('Rename'),
@@ -317,38 +446,22 @@ class _ChatScreenState extends State<ChatScreen> {
 
   Future<void> _pickImage(ImageSource source) async {
     try {
-      final picked = await ImagePicker().pickImage(source: source, imageQuality: 85);
-      if (picked != null && mounted) setState(() => _selectedImagePath = picked.path);
+      final picked = await ImagePicker().pickImage(
+        source: source,
+        imageQuality: 85,
+      );
+      if (picked != null && mounted)
+        setState(() => _selectedImagePath = picked.path);
     } catch (e) {
-      if (mounted) AppFeedback.showToast(context, 'Could not access image: ${e.toString()}');
+      if (mounted)
+        AppFeedback.showToast(
+          context,
+          'Could not access image: ${e.toString()}',
+        );
     }
   }
 
-  Future<void> _toggleVoice() async {
-    if (_isRecording) {
-      await _speech.stop();
-      setState(() => _isRecording = false);
-      return;
-    }
-    final started = await _speech.startListening(
-      onResult: (words, isFinal) {
-        if (mounted) {
-          setState(() => _inputCtrl.text = words);
-          _inputCtrl.selection = TextSelection.fromPosition(
-            TextPosition(offset: words.length),
-          );
-          if (isFinal) setState(() => _isRecording = false);
-        }
-      },
-    );
-    if (mounted) {
-      if (started) {
-        setState(() => _isRecording = true);
-      } else {
-        AppFeedback.showToast(context, 'Speech recognition not available on this device');
-      }
-    }
-  }
+  Future<void> _toggleVoice() async => _openVoiceComposer();
 
   Future<void> _openContextSelector() async {
     await showModalBottomSheet(
@@ -386,7 +499,9 @@ class _ChatScreenState extends State<ChatScreen> {
     final current = _inputCtrl.text;
     final newText = current.isEmpty ? '$prefix: ' : '$prefix: $current';
     _inputCtrl.text = newText;
-    _inputCtrl.selection = TextSelection.fromPosition(TextPosition(offset: newText.length));
+    _inputCtrl.selection = TextSelection.fromPosition(
+      TextPosition(offset: newText.length),
+    );
   }
 
   void _copyText(String text) {
@@ -402,8 +517,18 @@ class _ChatScreenState extends State<ChatScreen> {
       builder: (_) => _PlusMenuSheet(
         responseLength: _responseLength,
         reasoningLevel: _reasoningLevel,
+        selectedResponseLanguage:
+            effectiveResponseLanguage(_selectedResponseLanguage) ??
+            autoResponseLanguageLabel,
         onLengthChanged: (v) => setState(() => _responseLength = v),
         onReasoningChanged: (v) => setState(() => _reasoningLevel = v),
+        onLanguageChanged: (value) {
+          setState(() {
+            _selectedResponseLanguage = value == autoResponseLanguageLabel
+                ? null
+                : value;
+          });
+        },
         onCamera: () {
           Navigator.pop(context);
           _pickImage(ImageSource.camera);
@@ -476,7 +601,10 @@ class _ChatScreenState extends State<ChatScreen> {
         onDeleteChat: _deleteChat,
         onSettings: () {
           Navigator.pop(context);
-          Navigator.push(context, MaterialPageRoute(builder: (_) => const SettingsScreen()));
+          Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => const SettingsScreen()),
+          );
         },
       ),
       appBar: AppBar(
@@ -492,14 +620,20 @@ class _ChatScreenState extends State<ChatScreen> {
               Flexible(
                 child: Text(
                   _currentChat?.name ?? 'RightAnswer',
-                  style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+                  style: const TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w600,
+                  ),
                   overflow: TextOverflow.ellipsis,
                 ),
               ),
               if (_currentChat != null) ...[
                 const SizedBox(width: 4),
-                Icon(Icons.edit_outlined, size: 14,
-                    color: theme.colorScheme.onSurface.withValues(alpha: 0.4)),
+                Icon(
+                  Icons.edit_outlined,
+                  size: 14,
+                  color: theme.colorScheme.onSurface.withValues(alpha: 0.4),
+                ),
               ],
             ],
           ),
@@ -520,15 +654,24 @@ class _ChatScreenState extends State<ChatScreen> {
             Container(
               width: double.infinity,
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              color: theme.colorScheme.secondaryContainer.withValues(alpha: 0.5),
+              color: theme.colorScheme.secondaryContainer.withValues(
+                alpha: 0.5,
+              ),
               child: Row(
                 children: [
-                  Icon(Icons.flash_on_rounded, size: 14, color: theme.colorScheme.secondary),
+                  Icon(
+                    Icons.flash_on_rounded,
+                    size: 14,
+                    color: theme.colorScheme.secondary,
+                  ),
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
                       'Temporary — not saved to history',
-                      style: TextStyle(fontSize: 12, color: theme.colorScheme.secondary),
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: theme.colorScheme.secondary,
+                      ),
                     ),
                   ),
                   GestureDetector(
@@ -536,9 +679,10 @@ class _ChatScreenState extends State<ChatScreen> {
                     child: Text(
                       'Save',
                       style: TextStyle(
-                          fontSize: 12,
-                          color: theme.colorScheme.secondary,
-                          fontWeight: FontWeight.w700),
+                        fontSize: 12,
+                        color: theme.colorScheme.secondary,
+                        fontWeight: FontWeight.w700,
+                      ),
                     ),
                   ),
                 ],
@@ -564,15 +708,20 @@ class _ChatScreenState extends State<ChatScreen> {
                 : ListView.builder(
                     controller: _scrollCtrl,
                     padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
-                    itemCount: _messages.length + (_isGenerating ? 1 : 0),
+                    itemCount: _messages.length,
                     itemBuilder: (ctx, i) {
-                      if (i == _messages.length) return const _TypingIndicator();
                       final msg = _messages[i];
                       return _MessageBubble(
                         message: msg,
+                        isStreaming: msg.id == _streamingMessageId,
                         onCopy: () => _copyText(msg.content),
-                        onRead: () => _tts.toggle(msg.content),
-                        onRegenerate: msg.isUser ? null : () => _regenerate(msg),
+                        onRead: () => _tts.toggle(
+                          msg.content,
+                          language: msg.responseLanguage,
+                        ),
+                        onRegenerate: msg.isUser
+                            ? null
+                            : () => _regenerate(msg),
                       );
                     },
                   ),
@@ -582,9 +731,14 @@ class _ChatScreenState extends State<ChatScreen> {
             isGenerating: _isGenerating,
             isRecording: _isRecording,
             selectedImagePath: _selectedImagePath,
+            selectedResponseLanguage: effectiveResponseLanguage(
+              _selectedResponseLanguage,
+            ),
             onSend: _sendMessage,
             onVoice: _toggleVoice,
             onRemoveImage: () => setState(() => _selectedImagePath = null),
+            onClearLanguage: () =>
+                setState(() => _selectedResponseLanguage = null),
             onOpenPlus: _openPlusMenu,
             onFullscreen: _openFullscreen,
           ),
@@ -625,7 +779,13 @@ class _ChatDrawer extends StatelessWidget {
       grouped.putIfAbsent(key, () => []).add(c);
     }
     final groups = grouped.entries.toList()
-      ..sort((a, b) => a.key == 'Other' ? 1 : b.key == 'Other' ? -1 : a.key.compareTo(b.key));
+      ..sort(
+        (a, b) => a.key == 'Other'
+            ? 1
+            : b.key == 'Other'
+            ? -1
+            : a.key.compareTo(b.key),
+      );
 
     return Drawer(
       child: SafeArea(
@@ -668,16 +828,26 @@ class _ChatDrawer extends StatelessWidget {
                 ],
               ),
             ),
-            Divider(height: 24, indent: 12, endIndent: 12, color: theme.dividerColor),
+            Divider(
+              height: 24,
+              indent: 12,
+              endIndent: 12,
+              color: theme.dividerColor,
+            ),
             Expanded(
               child: chats.isEmpty
                   ? Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 8,
+                      ),
                       child: Text(
                         'No chats yet',
                         style: TextStyle(
                           fontSize: 13,
-                          color: theme.colorScheme.onSurface.withValues(alpha: 0.4),
+                          color: theme.colorScheme.onSurface.withValues(
+                            alpha: 0.4,
+                          ),
                         ),
                       ),
                     )
@@ -699,8 +869,11 @@ class _ChatDrawer extends StatelessWidget {
             Divider(height: 1, color: theme.dividerColor),
             ListTile(
               dense: true,
-              leading: Icon(Icons.settings_outlined,
-                  size: 20, color: theme.colorScheme.onSurface.withValues(alpha: 0.6)),
+              leading: Icon(
+                Icons.settings_outlined,
+                size: 20,
+                color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
+              ),
               title: const Text('Settings', style: TextStyle(fontSize: 13)),
               onTap: onSettings,
             ),
@@ -753,7 +926,11 @@ class _DrawerBtn extends StatelessWidget {
             const SizedBox(width: 10),
             Text(
               label,
-              style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: color),
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: color,
+              ),
             ),
           ],
         ),
@@ -795,12 +972,14 @@ class _ChatGroup extends StatelessWidget {
             ),
           ),
         ),
-        ...chats.map((chat) => _ChatTile(
-              chat: chat,
-              isSelected: chat.id == currentChatId,
-              onSelect: () => onSelect(chat),
-              onDelete: () => onDelete(chat.id),
-            )),
+        ...chats.map(
+          (chat) => _ChatTile(
+            chat: chat,
+            isSelected: chat.id == currentChatId,
+            onSelect: () => onSelect(chat),
+            onDelete: () => onDelete(chat.id),
+          ),
+        ),
       ],
     );
   }
@@ -856,14 +1035,18 @@ class _ChatTile extends StatelessWidget {
                   context: context,
                   builder: (ctx) => AlertDialog(
                     title: const Text('Delete Chat'),
-                    content: Text('Delete "${chat.name}"? This cannot be undone.'),
+                    content: Text(
+                      'Delete "${chat.name}"? This cannot be undone.',
+                    ),
                     actions: [
                       TextButton(
                         onPressed: () => Navigator.pop(ctx, false),
                         child: const Text('Cancel'),
                       ),
                       FilledButton(
-                        style: FilledButton.styleFrom(backgroundColor: Colors.red),
+                        style: FilledButton.styleFrom(
+                          backgroundColor: Colors.red,
+                        ),
                         onPressed: () => Navigator.pop(ctx, true),
                         child: const Text('Delete'),
                       ),
@@ -914,9 +1097,7 @@ class _ContextBar extends StatelessWidget {
           color: hasContext
               ? theme.colorScheme.primary.withValues(alpha: 0.07)
               : theme.colorScheme.surfaceContainerLowest,
-          border: Border(
-            bottom: BorderSide(color: theme.dividerColor),
-          ),
+          border: Border(bottom: BorderSide(color: theme.dividerColor)),
         ),
         child: Row(
           children: [
@@ -946,7 +1127,9 @@ class _ContextBar extends StatelessWidget {
                             chapterNames.join(', '),
                             style: TextStyle(
                               fontSize: 11,
-                              color: theme.colorScheme.primary.withValues(alpha: 0.7),
+                              color: theme.colorScheme.primary.withValues(
+                                alpha: 0.7,
+                              ),
                             ),
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
@@ -957,19 +1140,27 @@ class _ContextBar extends StatelessWidget {
                       'Select subject & chapters for context',
                       style: TextStyle(
                         fontSize: 13,
-                        color: theme.colorScheme.onSurface.withValues(alpha: 0.45),
+                        color: theme.colorScheme.onSurface.withValues(
+                          alpha: 0.45,
+                        ),
                       ),
                     ),
             ),
             if (hasContext)
               GestureDetector(
                 onTap: onClear,
-                child: Icon(Icons.close_rounded,
-                    size: 16, color: theme.colorScheme.primary.withValues(alpha: 0.5)),
+                child: Icon(
+                  Icons.close_rounded,
+                  size: 16,
+                  color: theme.colorScheme.primary.withValues(alpha: 0.5),
+                ),
               )
             else
-              Icon(Icons.expand_more_rounded,
-                  size: 18, color: theme.colorScheme.onSurface.withValues(alpha: 0.35)),
+              Icon(
+                Icons.expand_more_rounded,
+                size: 18,
+                color: theme.colorScheme.onSurface.withValues(alpha: 0.35),
+              ),
           ],
         ),
       ),
@@ -981,12 +1172,14 @@ class _ContextBar extends StatelessWidget {
 
 class _MessageBubble extends StatelessWidget {
   final ChatMessage message;
+  final bool isStreaming;
   final VoidCallback onCopy;
   final VoidCallback onRead;
   final VoidCallback? onRegenerate;
 
   const _MessageBubble({
     required this.message,
+    this.isStreaming = false,
     required this.onCopy,
     required this.onRead,
     this.onRegenerate,
@@ -1008,7 +1201,9 @@ class _MessageBubble extends StatelessWidget {
           right: isUser ? 0 : 48,
         ),
         child: Column(
-          crossAxisAlignment: isUser ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+          crossAxisAlignment: isUser
+              ? CrossAxisAlignment.end
+              : CrossAxisAlignment.start,
           children: [
             if (msg.imagePath != null)
               Container(
@@ -1016,7 +1211,9 @@ class _MessageBubble extends StatelessWidget {
                 width: 200,
                 height: 140,
                 clipBehavior: Clip.antiAlias,
-                decoration: BoxDecoration(borderRadius: BorderRadius.circular(12)),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(12),
+                ),
                 child: Image.file(File(msg.imagePath!), fit: BoxFit.cover),
               ),
             Container(
@@ -1036,13 +1233,17 @@ class _MessageBubble extends StatelessWidget {
                   ? SelectableText(
                       msg.content,
                       style: const TextStyle(
-                          fontSize: 14, color: Colors.white, height: 1.45),
+                        fontSize: 14,
+                        color: Colors.white,
+                        height: 1.45,
+                      ),
                     )
+                  : isStreaming && msg.content.trim().isEmpty
+                  ? const _TypingIndicator(inline: true)
                   : MarkdownBody(
                       data: msg.content,
                       selectable: true,
-                      styleSheet:
-                          MarkdownStyleSheet.fromTheme(theme).copyWith(
+                      styleSheet: MarkdownStyleSheet.fromTheme(theme).copyWith(
                         p: const TextStyle(fontSize: 14, height: 1.55),
                         code: TextStyle(
                           fontSize: 12,
@@ -1053,18 +1254,22 @@ class _MessageBubble extends StatelessWidget {
                       ),
                     ),
             ),
-            if (!isUser) ...[
+            if (!isUser && msg.content.trim().isNotEmpty) ...[
               const SizedBox(height: 4),
               Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   _ActionBtn(
-                      icon: Icons.copy_outlined, label: 'Copy', onTap: onCopy),
+                    icon: Icons.copy_outlined,
+                    label: 'Copy',
+                    onTap: onCopy,
+                  ),
                   const SizedBox(width: 4),
                   _ActionBtn(
-                      icon: Icons.volume_up_outlined,
-                      label: 'Read',
-                      onTap: onRead),
+                    icon: Icons.volume_up_outlined,
+                    label: 'Read',
+                    onTap: onRead,
+                  ),
                   if (onRegenerate != null) ...[
                     const SizedBox(width: 4),
                     _ActionBtn(
@@ -1088,7 +1293,11 @@ class _ActionBtn extends StatelessWidget {
   final String label;
   final VoidCallback onTap;
 
-  const _ActionBtn({required this.icon, required this.label, required this.onTap});
+  const _ActionBtn({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -1105,7 +1314,11 @@ class _ActionBtn extends StatelessWidget {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(icon, size: 13, color: theme.colorScheme.onSurface.withValues(alpha: 0.6)),
+            Icon(
+              icon,
+              size: 13,
+              color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
+            ),
             const SizedBox(width: 4),
             Text(
               label,
@@ -1124,7 +1337,9 @@ class _ActionBtn extends StatelessWidget {
 // ── Typing indicator ──────────────────────────────────────────────────────────
 
 class _TypingIndicator extends StatefulWidget {
-  const _TypingIndicator();
+  final bool inline;
+
+  const _TypingIndicator({this.inline = false});
 
   @override
   State<_TypingIndicator> createState() => _TypingIndicatorState();
@@ -1137,9 +1352,10 @@ class _TypingIndicatorState extends State<_TypingIndicator>
   @override
   void initState() {
     super.initState();
-    _ctrl =
-        AnimationController(vsync: this, duration: const Duration(milliseconds: 1200))
-          ..repeat();
+    _ctrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1200),
+    )..repeat();
   }
 
   @override
@@ -1151,6 +1367,31 @@ class _TypingIndicatorState extends State<_TypingIndicator>
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final dots = AnimatedBuilder(
+      animation: _ctrl,
+      builder: (context, child) => Row(
+        mainAxisSize: MainAxisSize.min,
+        children: List.generate(3, (i) {
+          final delay = i * 0.33;
+          final opacity = ((_ctrl.value - delay).abs() < 0.33) ? 1.0 : 0.3;
+          return Container(
+            margin: EdgeInsets.only(left: i > 0 ? 4 : 0),
+            width: 7,
+            height: 7,
+            decoration: BoxDecoration(
+              color: theme.colorScheme.primary.withValues(alpha: opacity),
+              shape: BoxShape.circle,
+            ),
+          );
+        }),
+      ),
+    );
+    if (widget.inline) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 4),
+        child: dots,
+      );
+    }
     return Align(
       alignment: Alignment.centerLeft,
       child: Container(
@@ -1165,28 +1406,7 @@ class _TypingIndicatorState extends State<_TypingIndicator>
             bottomLeft: Radius.circular(4),
           ),
         ),
-        child: AnimatedBuilder(
-          animation: _ctrl,
-          builder: (context, child) => Row(
-            mainAxisSize: MainAxisSize.min,
-            children: List.generate(
-              3,
-              (i) {
-                final delay = i * 0.33;
-                final opacity = ((_ctrl.value - delay).abs() < 0.33) ? 1.0 : 0.3;
-                return Container(
-                  margin: EdgeInsets.only(left: i > 0 ? 4 : 0),
-                  width: 7,
-                  height: 7,
-                  decoration: BoxDecoration(
-                    color: theme.colorScheme.primary.withValues(alpha: opacity),
-                    shape: BoxShape.circle,
-                  ),
-                );
-              },
-            ),
-          ),
-        ),
+        child: dots,
       ),
     );
   }
@@ -1203,48 +1423,58 @@ class _EmptyState extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return Center(
-      child: Padding(
+    return LayoutBuilder(
+      builder: (context, constraints) => SingleChildScrollView(
         padding: const EdgeInsets.all(32),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              width: 72,
-              height: 72,
-              decoration: BoxDecoration(
-                color: theme.colorScheme.primaryContainer,
-                borderRadius: BorderRadius.circular(20),
-              ),
-              child: Icon(Icons.chat_bubble_outline_rounded,
-                  size: 36, color: theme.colorScheme.primary),
+        child: ConstrainedBox(
+          constraints: BoxConstraints(minHeight: constraints.maxHeight - 64),
+          child: Center(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 72,
+                  height: 72,
+                  decoration: BoxDecoration(
+                    color: theme.colorScheme.primaryContainer,
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Icon(
+                    Icons.chat_bubble_outline_rounded,
+                    size: 36,
+                    color: theme.colorScheme.primary,
+                  ),
+                ),
+                const SizedBox(height: 20),
+                Text(
+                  'Start a Conversation',
+                  style: theme.textTheme.titleLarge?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  hasContext
+                      ? 'Type a question below to get started'
+                      : 'Select a subject and chapters for context-aware answers, or just ask anything',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 13,
+                    color: theme.colorScheme.onSurface.withValues(alpha: 0.55),
+                    height: 1.5,
+                  ),
+                ),
+                if (!hasContext) ...[
+                  const SizedBox(height: 20),
+                  OutlinedButton.icon(
+                    onPressed: onSelectContext,
+                    icon: const Icon(Icons.menu_book_outlined, size: 16),
+                    label: const Text('Select Study Context'),
+                  ),
+                ],
+              ],
             ),
-            const SizedBox(height: 20),
-            Text(
-              'Start a Conversation',
-              style: theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              hasContext
-                  ? 'Type a question below to get started'
-                  : 'Select a subject and chapters for context-aware answers, or just ask anything',
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: 13,
-                color: theme.colorScheme.onSurface.withValues(alpha: 0.55),
-                height: 1.5,
-              ),
-            ),
-            if (!hasContext) ...[
-              const SizedBox(height: 20),
-              OutlinedButton.icon(
-                onPressed: onSelectContext,
-                icon: const Icon(Icons.menu_book_outlined, size: 16),
-                label: const Text('Select Study Context'),
-              ),
-            ],
-          ],
+          ),
         ),
       ),
     );
@@ -1258,9 +1488,11 @@ class _InputArea extends StatelessWidget {
   final bool isGenerating;
   final bool isRecording;
   final String? selectedImagePath;
+  final String? selectedResponseLanguage;
   final VoidCallback onSend;
   final VoidCallback onVoice;
   final VoidCallback onRemoveImage;
+  final VoidCallback onClearLanguage;
   final VoidCallback onOpenPlus;
   final VoidCallback onFullscreen;
 
@@ -1269,9 +1501,11 @@ class _InputArea extends StatelessWidget {
     required this.isGenerating,
     required this.isRecording,
     required this.selectedImagePath,
+    required this.selectedResponseLanguage,
     required this.onSend,
     required this.onVoice,
     required this.onRemoveImage,
+    required this.onClearLanguage,
     required this.onOpenPlus,
     required this.onFullscreen,
   });
@@ -1316,11 +1550,60 @@ class _InputArea extends StatelessWidget {
                               color: Colors.black54,
                               shape: BoxShape.circle,
                             ),
-                            child: const Icon(Icons.close, size: 12, color: Colors.white),
+                            child: const Icon(
+                              Icons.close,
+                              size: 12,
+                              color: Colors.white,
+                            ),
                           ),
                         ),
                       ),
                     ],
+                  ),
+                ),
+              ),
+            if (selectedResponseLanguage != null)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(14, 10, 14, 0),
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 6,
+                    ),
+                    decoration: BoxDecoration(
+                      color: theme.colorScheme.primaryContainer,
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          Icons.translate_rounded,
+                          size: 14,
+                          color: theme.colorScheme.primary,
+                        ),
+                        const SizedBox(width: 6),
+                        Text(
+                          'Reply in $selectedResponseLanguage',
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: theme.colorScheme.primary,
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                        GestureDetector(
+                          onTap: onClearLanguage,
+                          child: Icon(
+                            Icons.close_rounded,
+                            size: 14,
+                            color: theme.colorScheme.primary,
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
               ),
@@ -1342,7 +1625,9 @@ class _InputArea extends StatelessWidget {
                         IconButton(
                           icon: const Icon(Icons.add_rounded),
                           iconSize: 22,
-                          color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
+                          color: theme.colorScheme.onSurface.withValues(
+                            alpha: 0.6,
+                          ),
                           onPressed: isGenerating ? null : onOpenPlus,
                           tooltip: 'More options',
                         ),
@@ -1354,15 +1639,25 @@ class _InputArea extends StatelessWidget {
                             enabled: !isGenerating,
                             textCapitalization: TextCapitalization.sentences,
                             decoration: InputDecoration(
-                              hintText: isRecording ? 'Listening...' : 'Ask RightAnswer...',
+                              hintText: isRecording
+                                  ? 'Listening...'
+                                  : 'Ask RightAnswer...',
+                              filled: false,
+                              fillColor: Colors.transparent,
                               hintStyle: TextStyle(
                                 color: isRecording
                                     ? Colors.red
-                                    : theme.colorScheme.onSurface.withValues(alpha: 0.4),
+                                    : theme.colorScheme.onSurface.withValues(
+                                        alpha: 0.4,
+                                      ),
                               ),
                               border: InputBorder.none,
-                              contentPadding:
-                                  const EdgeInsets.symmetric(vertical: 12),
+                              enabledBorder: InputBorder.none,
+                              focusedBorder: InputBorder.none,
+                              disabledBorder: InputBorder.none,
+                              contentPadding: const EdgeInsets.symmetric(
+                                vertical: 12,
+                              ),
                               isDense: true,
                             ),
                             onSubmitted: isGenerating ? null : (_) => onSend(),
@@ -1372,7 +1667,9 @@ class _InputArea extends StatelessWidget {
                           IconButton(
                             icon: const Icon(Icons.open_in_full_rounded),
                             iconSize: 18,
-                            color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
+                            color: theme.colorScheme.onSurface.withValues(
+                              alpha: 0.5,
+                            ),
                             onPressed: onFullscreen,
                             tooltip: 'Fullscreen',
                           ),
@@ -1397,22 +1694,31 @@ class _InputArea extends StatelessWidget {
                                   color: theme.colorScheme.primary,
                                   shape: BoxShape.circle,
                                 ),
-                                child: const Icon(Icons.arrow_upward_rounded,
-                                    color: Colors.white, size: 20),
+                                child: const Icon(
+                                  Icons.arrow_upward_rounded,
+                                  color: Colors.white,
+                                  size: 20,
+                                ),
                               ),
                             ),
                           )
                         else
                           IconButton(
                             icon: Icon(
-                              isRecording ? Icons.stop_rounded : Icons.mic_outlined,
+                              isRecording
+                                  ? Icons.stop_rounded
+                                  : Icons.mic_outlined,
                               color: isRecording
                                   ? Colors.red
-                                  : theme.colorScheme.onSurface.withValues(alpha: 0.5),
+                                  : theme.colorScheme.onSurface.withValues(
+                                      alpha: 0.5,
+                                    ),
                             ),
                             onPressed: onVoice,
                             iconSize: 22,
-                            tooltip: isRecording ? 'Stop recording' : 'Voice input',
+                            tooltip: isRecording
+                                ? 'Stop recording'
+                                : 'Voice input',
                           ),
                       ],
                     ),
@@ -1432,8 +1738,10 @@ class _InputArea extends StatelessWidget {
 class _PlusMenuSheet extends StatefulWidget {
   final String responseLength;
   final String reasoningLevel;
+  final String selectedResponseLanguage;
   final void Function(String) onLengthChanged;
   final void Function(String) onReasoningChanged;
+  final void Function(String) onLanguageChanged;
   final VoidCallback onCamera;
   final VoidCallback onPhotos;
   final VoidCallback onFiles;
@@ -1446,8 +1754,10 @@ class _PlusMenuSheet extends StatefulWidget {
   const _PlusMenuSheet({
     required this.responseLength,
     required this.reasoningLevel,
+    required this.selectedResponseLanguage,
     required this.onLengthChanged,
     required this.onReasoningChanged,
+    required this.onLanguageChanged,
     required this.onCamera,
     required this.onPhotos,
     required this.onFiles,
@@ -1466,24 +1776,39 @@ class _PlusMenuSheetState extends State<_PlusMenuSheet> {
   String? _expandedPanel;
   late String _reasoningLevel;
   late String _responseLength;
+  late String _selectedResponseLanguage;
 
   @override
   void initState() {
     super.initState();
     _reasoningLevel = widget.reasoningLevel;
     _responseLength = widget.responseLength;
+    _selectedResponseLanguage = widget.selectedResponseLanguage;
   }
 
-  double _reasoningToSlider(String v) => v == 'low' ? 0 : v == 'mid' ? 1 : 2;
+  double _reasoningToSlider(String v) => v == 'low'
+      ? 0
+      : v == 'mid'
+      ? 1
+      : 2;
 
-  String _sliderToReasoning(double v) =>
-      v <= 0.5 ? 'low' : v <= 1.5 ? 'mid' : 'high';
+  String _sliderToReasoning(double v) => v <= 0.5
+      ? 'low'
+      : v <= 1.5
+      ? 'mid'
+      : 'high';
 
-  double _lengthToSlider(String v) =>
-      v == 'small' ? 0 : v == 'normal' ? 1 : 2;
+  double _lengthToSlider(String v) => v == 'small'
+      ? 0
+      : v == 'normal'
+      ? 1
+      : 2;
 
-  String _sliderToLength(double v) =>
-      v <= 0.5 ? 'small' : v <= 1.5 ? 'normal' : 'large';
+  String _sliderToLength(double v) => v <= 0.5
+      ? 'small'
+      : v <= 1.5
+      ? 'normal'
+      : 'large';
 
   @override
   Widget build(BuildContext context) {
@@ -1514,8 +1839,9 @@ class _PlusMenuSheetState extends State<_PlusMenuSheet> {
                 alignment: Alignment.centerLeft,
                 child: Text(
                   'Options',
-                  style: theme.textTheme.titleSmall
-                      ?.copyWith(fontWeight: FontWeight.w700),
+                  style: theme.textTheme.titleSmall?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
                 ),
               ),
             ),
@@ -1526,37 +1852,88 @@ class _PlusMenuSheetState extends State<_PlusMenuSheet> {
                 mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                 children: [
                   _MediaBtn(
-                      icon: Icons.camera_alt_outlined,
-                      label: 'Camera',
-                      onTap: widget.onCamera),
+                    icon: Icons.camera_alt_outlined,
+                    label: 'Camera',
+                    onTap: widget.onCamera,
+                  ),
                   _MediaBtn(
-                      icon: Icons.photo_library_outlined,
-                      label: 'Photos',
-                      onTap: widget.onPhotos),
+                    icon: Icons.photo_library_outlined,
+                    label: 'Photos',
+                    onTap: widget.onPhotos,
+                  ),
                   _MediaBtn(
-                      icon: Icons.attach_file_rounded,
-                      label: 'Files',
-                      onTap: widget.onFiles),
+                    icon: Icons.attach_file_rounded,
+                    label: 'Files',
+                    onTap: widget.onFiles,
+                  ),
                 ],
               ),
             ),
             Divider(
-                height: 1,
-                color: theme.dividerColor,
-                indent: 16,
-                endIndent: 16),
+              height: 1,
+              color: theme.dividerColor,
+              indent: 16,
+              endIndent: 16,
+            ),
+            ListTile(
+              dense: true,
+              leading: Icon(
+                Icons.translate_rounded,
+                size: 20,
+                color: theme.colorScheme.primary,
+              ),
+              title: const Text(
+                'Response Language',
+                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+              ),
+              subtitle: Text(
+                _selectedResponseLanguage,
+                style: TextStyle(
+                  fontSize: 12,
+                  color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
+                ),
+              ),
+              trailing: const Icon(Icons.expand_more, size: 20),
+              onTap: () async {
+                final selected = await showModalBottomSheet<String>(
+                  context: context,
+                  backgroundColor: Colors.transparent,
+                  isScrollControlled: true,
+                  builder: (_) => LanguagePickerSheet(
+                    title: 'Response Language',
+                    languages: appResponseLanguageLabels,
+                    selectedLanguage: _selectedResponseLanguage,
+                  ),
+                );
+                if (selected == null) return;
+                setState(() => _selectedResponseLanguage = selected);
+                widget.onLanguageChanged(selected);
+              },
+            ),
+            Divider(
+              height: 1,
+              color: theme.dividerColor,
+              indent: 16,
+              endIndent: 16,
+            ),
             // Reasoning row
             ListTile(
               dense: true,
-              leading: Icon(Icons.psychology_outlined,
-                  size: 20, color: theme.colorScheme.primary),
-              title: const Text('Reasoning',
-                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+              leading: Icon(
+                Icons.psychology_outlined,
+                size: 20,
+                color: theme.colorScheme.primary,
+              ),
+              title: const Text(
+                'Reasoning',
+                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+              ),
               subtitle: Text(
                 _reasoningLevel[0].toUpperCase() + _reasoningLevel.substring(1),
                 style: TextStyle(
-                    fontSize: 12,
-                    color: theme.colorScheme.onSurface.withValues(alpha: 0.5)),
+                  fontSize: 12,
+                  color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
+                ),
               ),
               trailing: Icon(
                 _expandedPanel == 'reasoning'
@@ -1564,8 +1941,11 @@ class _PlusMenuSheetState extends State<_PlusMenuSheet> {
                     : Icons.expand_more,
                 size: 20,
               ),
-              onTap: () => setState(() => _expandedPanel =
-                  _expandedPanel == 'reasoning' ? null : 'reasoning'),
+              onTap: () => setState(
+                () => _expandedPanel = _expandedPanel == 'reasoning'
+                    ? null
+                    : 'reasoning',
+              ),
             ),
             if (_expandedPanel == 'reasoning')
               Padding(
@@ -1591,12 +1971,14 @@ class _PlusMenuSheetState extends State<_PlusMenuSheet> {
                           label,
                           style: TextStyle(
                             fontSize: 11,
-                            fontWeight:
-                                active ? FontWeight.w700 : FontWeight.normal,
+                            fontWeight: active
+                                ? FontWeight.w700
+                                : FontWeight.normal,
                             color: active
                                 ? theme.colorScheme.primary
-                                : theme.colorScheme.onSurface
-                                    .withValues(alpha: 0.5),
+                                : theme.colorScheme.onSurface.withValues(
+                                    alpha: 0.5,
+                                  ),
                           ),
                         );
                       }).toList(),
@@ -1605,22 +1987,29 @@ class _PlusMenuSheetState extends State<_PlusMenuSheet> {
                 ),
               ),
             Divider(
-                height: 1,
-                color: theme.dividerColor,
-                indent: 16,
-                endIndent: 16),
+              height: 1,
+              color: theme.dividerColor,
+              indent: 16,
+              endIndent: 16,
+            ),
             // Length row
             ListTile(
               dense: true,
-              leading: Icon(Icons.straighten_outlined,
-                  size: 20, color: theme.colorScheme.primary),
-              title: const Text('Length',
-                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+              leading: Icon(
+                Icons.straighten_outlined,
+                size: 20,
+                color: theme.colorScheme.primary,
+              ),
+              title: const Text(
+                'Length',
+                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+              ),
               subtitle: Text(
                 _responseLength[0].toUpperCase() + _responseLength.substring(1),
                 style: TextStyle(
-                    fontSize: 12,
-                    color: theme.colorScheme.onSurface.withValues(alpha: 0.5)),
+                  fontSize: 12,
+                  color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
+                ),
               ),
               trailing: Icon(
                 _expandedPanel == 'length'
@@ -1628,8 +2017,11 @@ class _PlusMenuSheetState extends State<_PlusMenuSheet> {
                     : Icons.expand_more,
                 size: 20,
               ),
-              onTap: () => setState(() =>
-                  _expandedPanel = _expandedPanel == 'length' ? null : 'length'),
+              onTap: () => setState(
+                () => _expandedPanel = _expandedPanel == 'length'
+                    ? null
+                    : 'length',
+              ),
             ),
             if (_expandedPanel == 'length')
               Padding(
@@ -1650,31 +2042,37 @@ class _PlusMenuSheetState extends State<_PlusMenuSheet> {
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children:
-                          [('Small', 'small'), ('Normal', 'normal'), ('Large', 'large')]
-                              .map((pair) {
-                        final active = _responseLength == pair.$2;
-                        return Text(
-                          pair.$1,
-                          style: TextStyle(
-                            fontSize: 11,
-                            fontWeight:
-                                active ? FontWeight.w700 : FontWeight.normal,
-                            color: active
-                                ? theme.colorScheme.primary
-                                : theme.colorScheme.onSurface
-                                    .withValues(alpha: 0.5),
-                          ),
-                        );
-                      }).toList(),
+                          [
+                            ('Small', 'small'),
+                            ('Normal', 'normal'),
+                            ('Large', 'large'),
+                          ].map((pair) {
+                            final active = _responseLength == pair.$2;
+                            return Text(
+                              pair.$1,
+                              style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: active
+                                    ? FontWeight.w700
+                                    : FontWeight.normal,
+                                color: active
+                                    ? theme.colorScheme.primary
+                                    : theme.colorScheme.onSurface.withValues(
+                                        alpha: 0.5,
+                                      ),
+                              ),
+                            );
+                          }).toList(),
                     ),
                   ],
                 ),
               ),
             Divider(
-                height: 1,
-                color: theme.dividerColor,
-                indent: 16,
-                endIndent: 16),
+              height: 1,
+              color: theme.dividerColor,
+              indent: 16,
+              endIndent: 16,
+            ),
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 10, 16, 4),
               child: Align(
@@ -1697,29 +2095,34 @@ class _PlusMenuSheetState extends State<_PlusMenuSheet> {
                 child: Row(
                   children: [
                     _QuickChip(
-                        icon: Icons.calculate_outlined,
-                        label: 'Solve',
-                        onTap: widget.onSolve),
+                      icon: Icons.calculate_outlined,
+                      label: 'Solve',
+                      onTap: widget.onSolve,
+                    ),
                     const SizedBox(width: 8),
                     _QuickChip(
-                        icon: Icons.lightbulb_outline,
-                        label: 'Explain',
-                        onTap: widget.onExplain),
+                      icon: Icons.lightbulb_outline,
+                      label: 'Explain',
+                      onTap: widget.onExplain,
+                    ),
                     const SizedBox(width: 8),
                     _QuickChip(
-                        icon: Icons.summarize_outlined,
-                        label: 'Chapter Summary',
-                        onTap: widget.onChapterSummary),
+                      icon: Icons.summarize_outlined,
+                      label: 'Chapter Summary',
+                      onTap: widget.onChapterSummary,
+                    ),
                     const SizedBox(width: 8),
                     _QuickChip(
-                        icon: Icons.format_list_bulleted_rounded,
-                        label: 'Key Points',
-                        onTap: widget.onKeyPoints),
+                      icon: Icons.format_list_bulleted_rounded,
+                      label: 'Key Points',
+                      onTap: widget.onKeyPoints,
+                    ),
                     const SizedBox(width: 8),
                     _QuickChip(
-                        icon: Icons.track_changes_rounded,
-                        label: 'Learning Objectives',
-                        onTap: widget.onLearningObjectives),
+                      icon: Icons.track_changes_rounded,
+                      label: 'Learning Objectives',
+                      onTap: widget.onLearningObjectives,
+                    ),
                   ],
                 ),
               ),
@@ -1736,8 +2139,11 @@ class _MediaBtn extends StatelessWidget {
   final String label;
   final VoidCallback onTap;
 
-  const _MediaBtn(
-      {required this.icon, required this.label, required this.onTap});
+  const _MediaBtn({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -1757,16 +2163,19 @@ class _MediaBtn extends StatelessWidget {
                 color: theme.colorScheme.surfaceContainerHighest,
                 borderRadius: BorderRadius.circular(14),
               ),
-              child: Icon(icon,
-                  size: 24,
-                  color: theme.colorScheme.onSurface.withValues(alpha: 0.7)),
+              child: Icon(
+                icon,
+                size: 24,
+                color: theme.colorScheme.onSurface.withValues(alpha: 0.7),
+              ),
             ),
             const SizedBox(height: 6),
             Text(
               label,
               style: TextStyle(
-                  fontSize: 11,
-                  color: theme.colorScheme.onSurface.withValues(alpha: 0.6)),
+                fontSize: 11,
+                color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
+              ),
             ),
           ],
         ),
@@ -1780,8 +2189,11 @@ class _QuickChip extends StatelessWidget {
   final String label;
   final VoidCallback onTap;
 
-  const _QuickChip(
-      {required this.icon, required this.label, required this.onTap});
+  const _QuickChip({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -1798,9 +2210,11 @@ class _QuickChip extends StatelessWidget {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(icon,
-                size: 13,
-                color: theme.colorScheme.onSurface.withValues(alpha: 0.6)),
+            Icon(
+              icon,
+              size: 13,
+              color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
+            ),
             const SizedBox(width: 5),
             Text(
               label,
@@ -1865,7 +2279,8 @@ class _FullscreenInputScreen extends StatelessWidget {
             decoration: InputDecoration(
               hintText: 'Ask RightAnswer...',
               hintStyle: TextStyle(
-                  color: theme.colorScheme.onSurface.withValues(alpha: 0.4)),
+                color: theme.colorScheme.onSurface.withValues(alpha: 0.4),
+              ),
               border: InputBorder.none,
             ),
             style: const TextStyle(fontSize: 16, height: 1.5),
@@ -1874,15 +2289,17 @@ class _FullscreenInputScreen extends StatelessWidget {
       ),
       floatingActionButton: FloatingActionButton(
         onPressed: isGenerating ? null : onSend,
-        backgroundColor:
-            isGenerating ? theme.colorScheme.surfaceContainerHighest : theme.colorScheme.primary,
+        backgroundColor: isGenerating
+            ? theme.colorScheme.surfaceContainerHighest
+            : theme.colorScheme.primary,
         child: isGenerating
             ? SizedBox(
                 width: 24,
                 height: 24,
                 child: CircularProgressIndicator(
-                    strokeWidth: 2,
-                    color: theme.colorScheme.onSurface.withValues(alpha: 0.4)),
+                  strokeWidth: 2,
+                  color: theme.colorScheme.onSurface.withValues(alpha: 0.4),
+                ),
               )
             : const Icon(Icons.arrow_upward_rounded, color: Colors.white),
       ),
@@ -1900,7 +2317,8 @@ class _ContextSelectorSheet extends StatefulWidget {
     String? subjectName,
     List<String> chapterIds,
     List<String> chapterNames,
-  ) onSelected;
+  )
+  onSelected;
 
   const _ContextSelectorSheet({
     required this.initialSubjectId,
@@ -1934,10 +2352,12 @@ class _ContextSelectorSheetState extends State<_ContextSelectorSheet> {
     super.initState();
     _selectedSubjectId = widget.initialSubjectId;
     _selectedChapterIds = widget.initialChapterIds.toSet();
-    if (widget.initialSubjectId != null) _expanded.add(widget.initialSubjectId!);
+    if (widget.initialSubjectId != null)
+      _expanded.add(widget.initialSubjectId!);
     _load();
     _searchCtrl.addListener(
-        () => setState(() => _query = _searchCtrl.text.toLowerCase()));
+      () => setState(() => _query = _searchCtrl.text.toLowerCase()),
+    );
   }
 
   @override
@@ -1974,9 +2394,11 @@ class _ContextSelectorSheetState extends State<_ContextSelectorSheet> {
     return _subjects.where((s) {
       if (s.name.toLowerCase().contains(_query)) return true;
       final chs = _chapters[s.id] ?? [];
-      return chs.any((c) =>
-          c.title.toLowerCase().contains(_query) ||
-          c.className.toLowerCase().contains(_query));
+      return chs.any(
+        (c) =>
+            c.title.toLowerCase().contains(_query) ||
+            c.className.toLowerCase().contains(_query),
+      );
     }).toList();
   }
 
@@ -1984,9 +2406,11 @@ class _ContextSelectorSheetState extends State<_ContextSelectorSheet> {
     final chs = _chapters[subjectId] ?? [];
     if (_query.isEmpty) return chs;
     return chs
-        .where((c) =>
-            c.title.toLowerCase().contains(_query) ||
-            c.className.toLowerCase().contains(_query))
+        .where(
+          (c) =>
+              c.title.toLowerCase().contains(_query) ||
+              c.className.toLowerCase().contains(_query),
+        )
         .toList();
   }
 
@@ -2030,8 +2454,9 @@ class _ContextSelectorSheetState extends State<_ContextSelectorSheet> {
   }
 
   void _confirm() {
-    final names =
-        _selectedChapterIds.map((id) => _chapterNames[id] ?? id).toList();
+    final names = _selectedChapterIds
+        .map((id) => _chapterNames[id] ?? id)
+        .toList();
     widget.onSelected(
       _selectedSubjectId,
       _selectedSubjectName,
@@ -2080,8 +2505,9 @@ class _ContextSelectorSheetState extends State<_ContextSelectorSheet> {
                 children: [
                   Text(
                     'Select Context',
-                    style: theme.textTheme.titleMedium
-                        ?.copyWith(fontWeight: FontWeight.w700),
+                    style: theme.textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
                   ),
                   const Spacer(),
                   if (_selectedSubjectId != null)
@@ -2101,9 +2527,12 @@ class _ContextSelectorSheetState extends State<_ContextSelectorSheet> {
                   hintText: 'Search subjects, chapters...',
                   prefixIcon: const Icon(Icons.search, size: 18),
                   border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12)),
-                  contentPadding:
-                      const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  contentPadding: const EdgeInsets.symmetric(
+                    vertical: 8,
+                    horizontal: 12,
+                  ),
                   isDense: true,
                   suffixIcon: _query.isNotEmpty
                       ? IconButton(
@@ -2118,90 +2547,97 @@ class _ContextSelectorSheetState extends State<_ContextSelectorSheet> {
               child: _loading
                   ? const Center(child: CircularProgressIndicator())
                   : filtered.isEmpty
-                      ? Center(
-                          child: Text(
-                            _subjects.isEmpty
-                                ? 'No subjects yet. Add one in the Subjects tab.'
-                                : 'No results for "$_query"',
-                            style: TextStyle(
-                              color: theme.colorScheme.onSurface
-                                  .withValues(alpha: 0.5),
-                              fontSize: 13,
-                            ),
-                            textAlign: TextAlign.center,
+                  ? Center(
+                      child: Text(
+                        _subjects.isEmpty
+                            ? 'No subjects yet. Add one in the Subjects tab.'
+                            : 'No results for "$_query"',
+                        style: TextStyle(
+                          color: theme.colorScheme.onSurface.withValues(
+                            alpha: 0.5,
                           ),
-                        )
-                      : ListView.builder(
-                          controller: scrollCtrl,
-                          itemCount: filtered.length,
-                          itemBuilder: (ctx, i) {
-                            final s = filtered[i];
-                            final chs = _filteredChapters(s.id);
-                            final allSelected = chs.isNotEmpty &&
-                                chs.every((c) =>
-                                    _selectedChapterIds.contains(c.id));
-                            final someSelected =
-                                chs.any((c) => _selectedChapterIds.contains(c.id));
-                            final isExpanded = _expanded.contains(s.id);
+                          fontSize: 13,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                    )
+                  : ListView.builder(
+                      controller: scrollCtrl,
+                      itemCount: filtered.length,
+                      itemBuilder: (ctx, i) {
+                        final s = filtered[i];
+                        final chs = _filteredChapters(s.id);
+                        final allSelected =
+                            chs.isNotEmpty &&
+                            chs.every(
+                              (c) => _selectedChapterIds.contains(c.id),
+                            );
+                        final someSelected = chs.any(
+                          (c) => _selectedChapterIds.contains(c.id),
+                        );
+                        final isExpanded = _expanded.contains(s.id);
 
-                            return Column(
-                              children: [
-                                ListTile(
+                        return Column(
+                          children: [
+                            ListTile(
+                              dense: true,
+                              leading: Checkbox(
+                                value: allSelected
+                                    ? true
+                                    : someSelected
+                                    ? null
+                                    : false,
+                                tristate: true,
+                                onChanged: (v) =>
+                                    _selectAllInSubject(s, v != false),
+                              ),
+                              title: Text(
+                                s.name,
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w600,
+                                  fontSize: 14,
+                                ),
+                              ),
+                              subtitle: Text(
+                                '${chs.length} chapter${chs.length != 1 ? 's' : ''}',
+                                style: const TextStyle(fontSize: 12),
+                              ),
+                              trailing: IconButton(
+                                icon: Icon(
+                                  isExpanded
+                                      ? Icons.expand_less
+                                      : Icons.expand_more,
+                                  size: 20,
+                                ),
+                                onPressed: () => _toggleSubject(s),
+                              ),
+                              onTap: () => _toggleSubject(s),
+                            ),
+                            if (isExpanded)
+                              ...chs.map(
+                                (ch) => CheckboxListTile(
                                   dense: true,
-                                  leading: Checkbox(
-                                    value: allSelected
-                                        ? true
-                                        : someSelected
-                                            ? null
-                                            : false,
-                                    tristate: true,
-                                    onChanged: (v) =>
-                                        _selectAllInSubject(s, v != false),
+                                  contentPadding: const EdgeInsets.only(
+                                    left: 40,
+                                    right: 16,
                                   ),
+                                  value: _selectedChapterIds.contains(ch.id),
+                                  onChanged: (_) => _toggleChapter(s, ch),
                                   title: Text(
-                                    s.name,
-                                    style: const TextStyle(
-                                        fontWeight: FontWeight.w600,
-                                        fontSize: 14),
+                                    ch.title,
+                                    style: const TextStyle(fontSize: 13),
                                   ),
                                   subtitle: Text(
-                                    '${chs.length} chapter${chs.length != 1 ? 's' : ''}',
-                                    style: const TextStyle(fontSize: 12),
+                                    ch.className,
+                                    style: const TextStyle(fontSize: 11),
                                   ),
-                                  trailing: IconButton(
-                                    icon: Icon(
-                                      isExpanded
-                                          ? Icons.expand_less
-                                          : Icons.expand_more,
-                                      size: 20,
-                                    ),
-                                    onPressed: () => _toggleSubject(s),
-                                  ),
-                                  onTap: () => _toggleSubject(s),
                                 ),
-                                if (isExpanded)
-                                  ...chs.map((ch) => CheckboxListTile(
-                                        dense: true,
-                                        contentPadding: const EdgeInsets.only(
-                                            left: 40, right: 16),
-                                        value:
-                                            _selectedChapterIds.contains(ch.id),
-                                        onChanged: (_) =>
-                                            _toggleChapter(s, ch),
-                                        title: Text(ch.title,
-                                            style:
-                                                const TextStyle(fontSize: 13)),
-                                        subtitle: Text(
-                                          ch.className,
-                                          style:
-                                              const TextStyle(fontSize: 11),
-                                        ),
-                                      )),
-                                Divider(height: 1, color: theme.dividerColor),
-                              ],
-                            );
-                          },
-                        ),
+                              ),
+                            Divider(height: 1, color: theme.dividerColor),
+                          ],
+                        );
+                      },
+                    ),
             ),
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
