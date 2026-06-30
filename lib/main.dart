@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'repositories/settings_repository.dart';
-import 'screens/home_screen.dart';
+import 'screens/main_screen.dart';
 import 'screens/saved_outputs_screen.dart';
 import 'screens/queue_screen.dart';
 import 'services/background_service.dart';
@@ -106,7 +106,7 @@ class _RightAnswerAppState extends State<RightAnswerApp> {
       theme: lightTheme(),
       darkTheme: darkTheme(),
       themeMode: themeNotifier.mode,
-      home: const HomeScreen(),
+      home: const MainScreen(),
     );
   }
 }

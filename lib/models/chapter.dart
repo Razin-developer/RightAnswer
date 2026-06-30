@@ -3,6 +3,7 @@ class Chapter {
   final String subjectId;
   final String title;
   final String className;
+  final String rawContent;
   final DateTime createdAt;
 
   Chapter({
@@ -10,6 +11,7 @@ class Chapter {
     required this.subjectId,
     required this.title,
     required this.className,
+    this.rawContent = '',
     required this.createdAt,
   });
 
@@ -18,6 +20,7 @@ class Chapter {
     'subjectId': subjectId,
     'title': title,
     'className': className,
+    'rawContent': rawContent,
     'createdAt': createdAt.toIso8601String(),
   };
 
@@ -26,6 +29,16 @@ class Chapter {
     subjectId: map['subjectId'] as String,
     title: map['title'] as String,
     className: map['className'] as String,
+    rawContent: (map['rawContent'] as String?) ?? '',
     createdAt: DateTime.parse(map['createdAt'] as String),
+  );
+
+  Chapter copyWith({String? title, String? className, String? rawContent}) => Chapter(
+    id: id,
+    subjectId: subjectId,
+    title: title ?? this.title,
+    className: className ?? this.className,
+    rawContent: rawContent ?? this.rawContent,
+    createdAt: createdAt,
   );
 }

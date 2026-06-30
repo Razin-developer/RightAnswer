@@ -17,7 +17,7 @@ class DatabaseHelper {
     final path = join(dbPath, 'right_answer.db');
     return openDatabase(
       path,
-      version: 2,
+      version: 5,
       onCreate: _onCreate,
       onUpgrade: _onUpgrade,
     );
@@ -26,10 +26,20 @@ class DatabaseHelper {
   Future<void> _onCreate(Database db, int version) async {
     await _createCoreTablesV1(db);
     await _createQueueTable(db);
+    await _createChatTables(db);
+    await _createExamTables(db);
+    // rawContent column is included in _createCoreTablesV1 for fresh installs
   }
 
   Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
     if (oldVersion < 2) await _createQueueTable(db);
+    if (oldVersion < 3) await _createChatTables(db);
+    if (oldVersion < 4) {
+      await db.execute(
+        'ALTER TABLE chapters ADD COLUMN rawContent TEXT NOT NULL DEFAULT ""',
+      );
+    }
+    if (oldVersion < 5) await _createExamTables(db);
   }
 
   Future<void> _createCoreTablesV1(Database db) async {
@@ -47,6 +57,7 @@ class DatabaseHelper {
         subjectId TEXT NOT NULL,
         title TEXT NOT NULL,
         className TEXT NOT NULL,
+        rawContent TEXT NOT NULL DEFAULT '',
         createdAt TEXT NOT NULL,
         FOREIGN KEY (subjectId) REFERENCES subjects(id) ON DELETE CASCADE
       )
@@ -117,8 +128,92 @@ class DatabaseHelper {
     ''');
   }
 
+  Future<void> _createChatTables(Database db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS chats (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        subjectId TEXT,
+        subjectName TEXT,
+        chapterIds TEXT NOT NULL DEFAULT '',
+        chapterNames TEXT NOT NULL DEFAULT '',
+        isTemporary INTEGER NOT NULL DEFAULT 0,
+        createdAt TEXT NOT NULL,
+        updatedAt TEXT NOT NULL
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS chat_messages (
+        id TEXT PRIMARY KEY,
+        chatId TEXT NOT NULL,
+        role TEXT NOT NULL,
+        content TEXT NOT NULL,
+        imagePath TEXT,
+        responseLength TEXT NOT NULL DEFAULT 'normal',
+        reasoningLevel TEXT NOT NULL DEFAULT 'mid',
+        tokenCount INTEGER NOT NULL DEFAULT 0,
+        cost REAL NOT NULL DEFAULT 0,
+        createdAt TEXT NOT NULL,
+        FOREIGN KEY (chatId) REFERENCES chats(id) ON DELETE CASCADE
+      )
+    ''');
+  }
+
+  Future<void> _createExamTables(Database db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS exams (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        type TEXT NOT NULL,
+        subjectId TEXT,
+        subjectName TEXT,
+        chapterIds TEXT NOT NULL DEFAULT '',
+        chapterNames TEXT NOT NULL DEFAULT '',
+        questionCount INTEGER NOT NULL DEFAULT 0,
+        timeLimit INTEGER,
+        difficulty TEXT NOT NULL DEFAULT 'medium',
+        mcqOptionCount INTEGER NOT NULL DEFAULT 4,
+        createdAt TEXT NOT NULL,
+        updatedAt TEXT NOT NULL
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS exam_questions (
+        id TEXT PRIMARY KEY,
+        examId TEXT NOT NULL,
+        questionIndex INTEGER NOT NULL,
+        type TEXT NOT NULL,
+        question TEXT NOT NULL,
+        options TEXT,
+        correctAnswer TEXT NOT NULL,
+        explanation TEXT,
+        userAnswer TEXT,
+        FOREIGN KEY (examId) REFERENCES exams(id) ON DELETE CASCADE
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS exam_messages (
+        id TEXT PRIMARY KEY,
+        examId TEXT NOT NULL,
+        role TEXT NOT NULL,
+        content TEXT NOT NULL,
+        imagePath TEXT,
+        createdAt TEXT NOT NULL,
+        FOREIGN KEY (examId) REFERENCES exams(id) ON DELETE CASCADE
+      )
+    ''');
+  }
+
   Future<void> clearAllData() async {
     final db = await database;
+    await db.delete('exam_messages');
+    await db.delete('exam_questions');
+    await db.delete('exams');
+    await db.delete('chat_messages');
+    await db.delete('chats');
     await db.delete('request_queue');
     await db.delete('chunks');
     await db.delete('saved_outputs');

@@ -28,6 +28,16 @@ class ChapterRepository {
     await db.update('chapters', chapter.toMap(), where: 'id = ?', whereArgs: [chapter.id]);
   }
 
+  Future<void> updateRawContent(String id, String rawContent) async {
+    final db = await _db.database;
+    await db.update(
+      'chapters',
+      {'rawContent': rawContent},
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
+
   Future<void> delete(String id) async {
     final db = await _db.database;
     await db.delete('chapters', where: 'id = ?', whereArgs: [id]);

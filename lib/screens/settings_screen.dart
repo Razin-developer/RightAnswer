@@ -21,6 +21,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   final _inputPriceCtrl = TextEditingController();
   final _outputPriceCtrl = TextEditingController();
+  final _tokenLimitCtrl = TextEditingController();
 
   String _language = 'English';
   String _gradeLevel = 'Grade 10';
@@ -96,6 +97,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _model = all[SettingKeys.openAiModel] ?? 'gpt-4o-mini';
       _inputPriceCtrl.text = all[SettingKeys.inputTokenPrice] ?? '0.0005';
       _outputPriceCtrl.text = all[SettingKeys.outputTokenPrice] ?? '0.0015';
+      _tokenLimitCtrl.text = all[SettingKeys.chatDailyTokenLimit] ?? '0';
       _notifyOnComplete =
           (all[SettingKeys.notifyOnComplete] ?? 'true') == 'true';
       _notifyOnQueueProcessed =
@@ -389,6 +391,52 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ),
                 ),
               ],
+            ],
+          ),
+          const SizedBox(height: 20),
+          _sectionTitle('Chat Limits', Icons.speed_outlined, theme),
+          _card(
+            theme,
+            children: [
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('Daily Output Token Limit', style: _labelStyle(theme)),
+                        const SizedBox(height: 4),
+                        Text(
+                          'Set 0 for unlimited. Chat stops when the limit is reached.',
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  SizedBox(
+                    width: 100,
+                    child: TextField(
+                      controller: _tokenLimitCtrl,
+                      keyboardType: TextInputType.number,
+                      decoration: const InputDecoration(
+                        labelText: 'tokens',
+                        isDense: true,
+                        border: OutlineInputBorder(),
+                        contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                      ),
+                      onSubmitted: (v) {
+                        final n = int.tryParse(v.trim()) ?? 0;
+                        _save(SettingKeys.chatDailyTokenLimit, n.toString());
+                      },
+                    ),
+                  ),
+                ],
+              ),
             ],
           ),
           const SizedBox(height: 20),
@@ -733,6 +781,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   void dispose() {
     _inputPriceCtrl.dispose();
     _outputPriceCtrl.dispose();
+    _tokenLimitCtrl.dispose();
     super.dispose();
   }
 }

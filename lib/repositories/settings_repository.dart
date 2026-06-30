@@ -49,4 +49,6 @@ class SettingKeys {
   static const String dailyReminderEnabled = 'daily_reminder_enabled';
   static const String dailyReminderHour = 'daily_reminder_hour';
   static const String dailyReminderMinute = 'daily_reminder_minute';
+  // Chat
+  static const String chatDailyTokenLimit = 'chat_daily_token_limit';
 }
