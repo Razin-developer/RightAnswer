@@ -53,4 +53,14 @@ class ChatRepository {
       whereArgs: [id],
     );
   }
+
+  Future<void> togglePin(String id, bool pinned) async {
+    final db = await _db.database;
+    await db.update(
+      'chats',
+      {'isPinned': pinned ? 1 : 0},
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
 }

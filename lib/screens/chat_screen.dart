@@ -410,6 +410,14 @@ class _ChatScreenState extends State<ChatScreen> {
     await _loadAllChats();
   }
 
+  Future<void> _togglePin(String id, bool pinned) async {
+    await _chatRepo.togglePin(id, pinned);
+    if (_currentChat?.id == id) {
+      setState(() => _currentChat = _currentChat!.copyWith(isPinned: pinned));
+    }
+    await _loadAllChats();
+  }
+
   Future<void> _renameChat() async {
     if (_currentChat == null) return;
     final ctrl = TextEditingController(text: _currentChat!.name);
@@ -601,6 +609,7 @@ class _ChatScreenState extends State<ChatScreen> {
         onNewChat: _startNewChat,
         onTempChat: () => _startNewChat(temporary: true),
         onDeleteChat: _deleteChat,
+        onTogglePin: _togglePin,
         onSettings: () {
           Navigator.pop(context);
           Navigator.push(
@@ -781,6 +790,7 @@ class _ChatDrawer extends StatefulWidget {
   final VoidCallback onNewChat;
   final VoidCallback onTempChat;
   final void Function(String) onDeleteChat;
+  final void Function(String, bool) onTogglePin;
   final VoidCallback onSettings;
 
   const _ChatDrawer({
@@ -790,6 +800,7 @@ class _ChatDrawer extends StatefulWidget {
     required this.onNewChat,
     required this.onTempChat,
     required this.onDeleteChat,
+    required this.onTogglePin,
     required this.onSettings,
   });
 
@@ -798,6 +809,7 @@ class _ChatDrawer extends StatefulWidget {
 }
 
 class _ChatDrawerState extends State<_ChatDrawer> {
+  bool _isSearching = false;
   final _searchCtrl = TextEditingController();
   String _query = '';
 
@@ -810,10 +822,11 @@ class _ChatDrawerState extends State<_ChatDrawer> {
   List<Chat> get _filtered {
     if (_query.isEmpty) return widget.chats;
     final q = _query.toLowerCase();
-    return widget.chats.where((c) =>
-      c.name.toLowerCase().contains(q) ||
-      (c.subjectName?.toLowerCase().contains(q) ?? false),
-    ).toList();
+    return widget.chats
+        .where((c) =>
+            c.name.toLowerCase().contains(q) ||
+            (c.subjectName?.toLowerCase().contains(q) ?? false))
+        .toList();
   }
 
   Map<String, List<Chat>> _groupByTime(List<Chat> chats) {
@@ -847,160 +860,351 @@ class _ChatDrawerState extends State<_ChatDrawer> {
     };
   }
 
+  void _showChatOptions(Chat chat) {
+    showModalBottomSheet(
+      context: context,
+      useRootNavigator: true,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 36,
+              height: 4,
+              margin: const EdgeInsets.symmetric(vertical: 12),
+              decoration: BoxDecoration(
+                color: Colors.grey.withValues(alpha: 0.35),
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            ListTile(
+              leading: Icon(
+                chat.isPinned
+                    ? Icons.push_pin_outlined
+                    : Icons.push_pin_rounded,
+              ),
+              title: Text(chat.isPinned ? 'Unpin' : 'Pin'),
+              onTap: () {
+                Navigator.pop(ctx);
+                widget.onTogglePin(chat.id, !chat.isPinned);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.delete_outline, color: Colors.red),
+              title: const Text(
+                'Delete',
+                style: TextStyle(color: Colors.red),
+              ),
+              onTap: () async {
+                Navigator.pop(ctx);
+                final ok = await showDialog<bool>(
+                  context: context,
+                  builder: (dlgCtx) => AlertDialog(
+                    title: const Text('Delete Chat'),
+                    content: Text(
+                      'Delete "${chat.name}"? This cannot be undone.',
+                    ),
+                    actions: [
+                      TextButton(
+                        onPressed: () => Navigator.pop(dlgCtx, false),
+                        child: const Text('Cancel'),
+                      ),
+                      FilledButton(
+                        style: FilledButton.styleFrom(
+                          backgroundColor: Colors.red,
+                        ),
+                        onPressed: () => Navigator.pop(dlgCtx, true),
+                        child: const Text('Delete'),
+                      ),
+                    ],
+                  ),
+                );
+                if (ok == true) widget.onDeleteChat(chat.id);
+              },
+            ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _actionRow(
+    ThemeData theme,
+    IconData icon,
+    String label,
+    VoidCallback onTap,
+  ) {
+    return InkWell(
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 11),
+        child: Row(
+          children: [
+            Icon(
+              icon,
+              size: 18,
+              color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
+            ),
+            const SizedBox(width: 12),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 14,
+                color: theme.colorScheme.onSurface.withValues(alpha: 0.85),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _sectionLabel(ThemeData theme, String label) => Padding(
+        padding: const EdgeInsets.fromLTRB(16, 14, 16, 4),
+        child: Text(
+          label,
+          style: TextStyle(
+            fontSize: 10,
+            fontWeight: FontWeight.w700,
+            letterSpacing: 0.7,
+            color: theme.colorScheme.onSurface.withValues(alpha: 0.35),
+          ),
+        ),
+      );
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final pinned = widget.chats.where((c) => c.isPinned).toList();
+    final unpinned = widget.chats.where((c) => !c.isPinned).toList();
+    final groups = _groupByTime(unpinned);
     final filtered = _filtered;
-    final groups = _groupByTime(filtered);
 
     return Drawer(
       child: SafeArea(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Header
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 16, 8, 8),
-              child: Row(
-                children: [
-                  const AppLogo(size: 28),
-                  const SizedBox(width: 8),
-                  Text(
-                    'RightAnswer',
-                    style: TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w700,
-                      color: theme.colorScheme.onSurface,
+            // ── Header ──────────────────────────────────────────────────────
+            if (_isSearching)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(8, 10, 8, 10),
+                child: Row(
+                  children: [
+                    IconButton(
+                      icon: const Icon(Icons.arrow_back_rounded, size: 20),
+                      onPressed: () {
+                        _searchCtrl.clear();
+                        setState(() {
+                          _isSearching = false;
+                          _query = '';
+                        });
+                      },
                     ),
-                  ),
-                  const Spacer(),
-                  IconButton(
-                    icon: const Icon(Icons.add_comment_outlined, size: 20),
-                    tooltip: 'New Chat',
-                    color: theme.colorScheme.primary,
-                    onPressed: widget.onNewChat,
-                  ),
-                ],
-              ),
-            ),
-            // Search
-            Padding(
-              padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
-              child: TextField(
-                controller: _searchCtrl,
-                onChanged: (v) => setState(() => _query = v),
-                decoration: InputDecoration(
-                  hintText: 'Search chats',
-                  hintStyle: TextStyle(
-                    fontSize: 13,
-                    color: theme.colorScheme.onSurface.withValues(alpha: 0.4),
-                  ),
-                  prefixIcon: Icon(
-                    Icons.search_rounded,
-                    size: 18,
-                    color: theme.colorScheme.onSurface.withValues(alpha: 0.4),
-                  ),
-                  suffixIcon: _query.isNotEmpty
-                      ? IconButton(
-                          icon: const Icon(Icons.close_rounded, size: 16),
-                          onPressed: () {
-                            _searchCtrl.clear();
-                            setState(() => _query = '');
-                          },
-                        )
-                      : null,
-                  filled: true,
-                  fillColor: theme.colorScheme.surfaceContainerHighest,
-                  contentPadding: const EdgeInsets.symmetric(vertical: 8),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide.none,
-                  ),
-                  isDense: true,
-                ),
-              ),
-            ),
-            // Temp chat row
-            Padding(
-              padding: const EdgeInsets.fromLTRB(12, 0, 12, 6),
-              child: InkWell(
-                onTap: widget.onTempChat,
-                borderRadius: BorderRadius.circular(8),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
-                  child: Row(
-                    children: [
-                      Icon(
-                        Icons.bolt_rounded,
-                        size: 16,
-                        color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
-                      ),
-                      const SizedBox(width: 8),
-                      Text(
-                        'Temporary Chat',
-                        style: TextStyle(
-                          fontSize: 13,
-                          color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-            Divider(height: 1, indent: 12, endIndent: 12, color: theme.dividerColor),
-            // Chat list
-            Expanded(
-              child: filtered.isEmpty
-                  ? Padding(
-                      padding: const EdgeInsets.all(16),
-                      child: Text(
-                        _query.isNotEmpty
-                            ? 'No chats matching "$_query"'
-                            : 'No chats yet',
-                        style: TextStyle(
-                          fontSize: 13,
-                          color: theme.colorScheme.onSurface.withValues(alpha: 0.4),
-                        ),
-                      ),
-                    )
-                  : ListView(
-                      padding: const EdgeInsets.only(top: 4, bottom: 8),
-                      children: [
-                        for (final entry in groups.entries) ...[
-                          Padding(
-                            padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-                            child: Text(
-                              entry.key.toUpperCase(),
-                              style: TextStyle(
-                                fontSize: 10,
-                                fontWeight: FontWeight.w800,
-                                letterSpacing: 0.8,
-                                color: theme.colorScheme.onSurface.withValues(alpha: 0.35),
-                              ),
-                            ),
+                    Expanded(
+                      child: TextField(
+                        controller: _searchCtrl,
+                        autofocus: true,
+                        onChanged: (v) => setState(() => _query = v),
+                        decoration: InputDecoration(
+                          hintText: 'Search chats',
+                          hintStyle: TextStyle(
+                            fontSize: 14,
+                            color: theme.colorScheme.onSurface
+                                .withValues(alpha: 0.4),
                           ),
-                          for (final chat in entry.value)
+                          filled: true,
+                          fillColor:
+                              theme.colorScheme.surfaceContainerHighest,
+                          contentPadding:
+                              const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(10),
+                            borderSide: BorderSide.none,
+                          ),
+                          isDense: true,
+                          suffixIcon: _query.isNotEmpty
+                              ? IconButton(
+                                  icon: const Icon(Icons.close_rounded, size: 16),
+                                  onPressed: () {
+                                    _searchCtrl.clear();
+                                    setState(() => _query = '');
+                                  },
+                                )
+                              : null,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                  ],
+                ),
+              )
+            else
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 14, 8, 10),
+                child: Row(
+                  children: [
+                    const AppLogo(size: 26),
+                    const SizedBox(width: 10),
+                    Text(
+                      'RightAnswer',
+                      style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700,
+                        color: theme.colorScheme.onSurface,
+                      ),
+                    ),
+                    const Spacer(),
+                    IconButton(
+                      icon: const Icon(Icons.menu_open_rounded, size: 20),
+                      color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
+                      onPressed: () => Navigator.of(context).pop(),
+                    ),
+                  ],
+                ),
+              ),
+
+            // ── Search mode: results ─────────────────────────────────────────
+            if (_isSearching) ...[
+              Expanded(
+                child: filtered.isEmpty
+                    ? Padding(
+                        padding: const EdgeInsets.all(20),
+                        child: Text(
+                          _query.isEmpty
+                              ? 'Start typing to search…'
+                              : 'No chats matching "$_query"',
+                          style: TextStyle(
+                            fontSize: 13,
+                            color: theme.colorScheme.onSurface
+                                .withValues(alpha: 0.4),
+                          ),
+                        ),
+                      )
+                    : ListView(
+                        padding: const EdgeInsets.only(top: 4, bottom: 8),
+                        children: [
+                          for (final chat in filtered)
                             _ChatTile(
                               chat: chat,
                               isSelected: chat.id == widget.currentChatId,
                               onSelect: () => widget.onSelectChat(chat),
-                              onDelete: () => widget.onDeleteChat(chat.id),
+                              onLongPress: () => _showChatOptions(chat),
                             ),
                         ],
-                      ],
-                    ),
-            ),
-            Divider(height: 1, color: theme.dividerColor),
-            ListTile(
-              dense: true,
-              leading: Icon(
-                Icons.settings_outlined,
-                size: 20,
-                color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
+                      ),
               ),
-              title: const Text('Settings', style: TextStyle(fontSize: 13)),
+            ] else ...[
+              // ── Action rows ────────────────────────────────────────────────
+              _actionRow(
+                theme,
+                Icons.edit_outlined,
+                'New chat',
+                widget.onNewChat,
+              ),
+              _actionRow(
+                theme,
+                Icons.bolt_rounded,
+                'Temporary chat',
+                widget.onTempChat,
+              ),
+              _actionRow(
+                theme,
+                Icons.search_rounded,
+                'Search chats',
+                () => setState(() => _isSearching = true),
+              ),
+              Divider(
+                height: 1,
+                indent: 16,
+                endIndent: 16,
+                color: theme.dividerColor,
+              ),
+              const SizedBox(height: 4),
+
+              // ── Chat list ──────────────────────────────────────────────────
+              Expanded(
+                child: widget.chats.isEmpty
+                    ? Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+                        child: Text(
+                          'No chats yet',
+                          style: TextStyle(
+                            fontSize: 13,
+                            color: theme.colorScheme.onSurface
+                                .withValues(alpha: 0.4),
+                          ),
+                        ),
+                      )
+                    : ListView(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        children: [
+                          // Pinned section
+                          if (pinned.isNotEmpty) ...[
+                            _sectionLabel(theme, 'PINNED'),
+                            for (final chat in pinned)
+                              _ChatTile(
+                                chat: chat,
+                                isSelected: chat.id == widget.currentChatId,
+                                onSelect: () => widget.onSelectChat(chat),
+                                onLongPress: () => _showChatOptions(chat),
+                              ),
+                          ],
+                          // Recents section
+                          if (unpinned.isNotEmpty) ...[
+                            _sectionLabel(theme, 'RECENTS'),
+                            for (final entry in groups.entries) ...[
+                              Padding(
+                                padding: const EdgeInsets.fromLTRB(16, 8, 16, 2),
+                                child: Text(
+                                  entry.key,
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w500,
+                                    color: theme.colorScheme.onSurface
+                                        .withValues(alpha: 0.4),
+                                  ),
+                                ),
+                              ),
+                              for (final chat in entry.value)
+                                _ChatTile(
+                                  chat: chat,
+                                  isSelected: chat.id == widget.currentChatId,
+                                  onSelect: () => widget.onSelectChat(chat),
+                                  onLongPress: () => _showChatOptions(chat),
+                                ),
+                            ],
+                          ],
+                        ],
+                      ),
+              ),
+            ],
+
+            // ── Settings ───────────────────────────────────────────────────
+            Divider(height: 1, color: theme.dividerColor),
+            InkWell(
               onTap: widget.onSettings,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
+                child: Row(
+                  children: [
+                    Icon(
+                      Icons.settings_outlined,
+                      size: 18,
+                      color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
+                    ),
+                    const SizedBox(width: 12),
+                    Text(
+                      'Settings',
+                      style: TextStyle(
+                        fontSize: 14,
+                        color: theme.colorScheme.onSurface.withValues(alpha: 0.85),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
             ),
           ],
         ),
@@ -1013,13 +1217,13 @@ class _ChatTile extends StatelessWidget {
   final Chat chat;
   final bool isSelected;
   final VoidCallback onSelect;
-  final VoidCallback onDelete;
+  final VoidCallback onLongPress;
 
   const _ChatTile({
     required this.chat,
     required this.isSelected,
     required this.onSelect,
-    required this.onDelete,
+    required this.onLongPress,
   });
 
   @override
@@ -1027,6 +1231,7 @@ class _ChatTile extends StatelessWidget {
     final theme = Theme.of(context);
     return InkWell(
       onTap: onSelect,
+      onLongPress: onLongPress,
       child: Container(
         margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 1),
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
@@ -1038,9 +1243,18 @@ class _ChatTile extends StatelessWidget {
         ),
         child: Row(
           children: [
-            if (chat.isTemporary)
+            if (chat.isPinned)
               Padding(
-                padding: const EdgeInsets.only(right: 4),
+                padding: const EdgeInsets.only(right: 6),
+                child: Icon(
+                  Icons.push_pin_rounded,
+                  size: 11,
+                  color: theme.colorScheme.onSurface.withValues(alpha: 0.4),
+                ),
+              )
+            else if (chat.isTemporary)
+              Padding(
+                padding: const EdgeInsets.only(right: 6),
                 child: Icon(
                   Icons.bolt_rounded,
                   size: 12,
@@ -1055,7 +1269,8 @@ class _ChatTile extends StatelessWidget {
                     chat.name,
                     style: TextStyle(
                       fontSize: 13,
-                      fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
+                      fontWeight:
+                          isSelected ? FontWeight.w600 : FontWeight.w400,
                       color: isSelected
                           ? theme.colorScheme.primary
                           : theme.colorScheme.onSurface.withValues(alpha: 0.85),
@@ -1074,39 +1289,6 @@ class _ChatTile extends StatelessWidget {
                       overflow: TextOverflow.ellipsis,
                     ),
                 ],
-              ),
-            ),
-            const SizedBox(width: 4),
-            GestureDetector(
-              onTap: () async {
-                final ok = await showDialog<bool>(
-                  context: context,
-                  builder: (ctx) => AlertDialog(
-                    title: const Text('Delete Chat'),
-                    content: Text(
-                      'Delete "${chat.name}"? This cannot be undone.',
-                    ),
-                    actions: [
-                      TextButton(
-                        onPressed: () => Navigator.pop(ctx, false),
-                        child: const Text('Cancel'),
-                      ),
-                      FilledButton(
-                        style: FilledButton.styleFrom(
-                          backgroundColor: Colors.red,
-                        ),
-                        onPressed: () => Navigator.pop(ctx, true),
-                        child: const Text('Delete'),
-                      ),
-                    ],
-                  ),
-                );
-                if (ok == true) onDelete();
-              },
-              child: Icon(
-                Icons.close_rounded,
-                size: 14,
-                color: theme.colorScheme.onSurface.withValues(alpha: 0.3),
               ),
             ),
           ],

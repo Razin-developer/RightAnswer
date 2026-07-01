@@ -6,6 +6,7 @@ class Chat {
   final List<String> chapterIds;
   final List<String> chapterNames;
   final bool isTemporary;
+  final bool isPinned;
   final DateTime createdAt;
   final DateTime updatedAt;
 
@@ -17,6 +18,7 @@ class Chat {
     required this.chapterIds,
     required this.chapterNames,
     required this.isTemporary,
+    this.isPinned = false,
     required this.createdAt,
     required this.updatedAt,
   });
@@ -29,6 +31,7 @@ class Chat {
     'chapterIds': chapterIds.join('||'),
     'chapterNames': chapterNames.join('||'),
     'isTemporary': isTemporary ? 1 : 0,
+    'isPinned': isPinned ? 1 : 0,
     'createdAt': createdAt.toIso8601String(),
     'updatedAt': updatedAt.toIso8601String(),
   };
@@ -41,6 +44,7 @@ class Chat {
     chapterIds: _split(m['chapterIds'] as String?),
     chapterNames: _split(m['chapterNames'] as String?),
     isTemporary: (m['isTemporary'] as int? ?? 0) == 1,
+    isPinned: (m['isPinned'] as int? ?? 0) == 1,
     createdAt: DateTime.parse(m['createdAt'] as String),
     updatedAt: DateTime.parse(m['updatedAt'] as String),
   );
@@ -54,6 +58,7 @@ class Chat {
     String? subjectName,
     List<String>? chapterIds,
     List<String>? chapterNames,
+    bool? isPinned,
     DateTime? updatedAt,
   }) =>
       Chat(
@@ -64,6 +69,7 @@ class Chat {
         chapterIds: chapterIds ?? this.chapterIds,
         chapterNames: chapterNames ?? this.chapterNames,
         isTemporary: isTemporary,
+        isPinned: isPinned ?? this.isPinned,
         createdAt: createdAt,
         updatedAt: updatedAt ?? this.updatedAt,
       );

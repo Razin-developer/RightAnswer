@@ -17,7 +17,7 @@ class DatabaseHelper {
     final path = join(dbPath, 'right_answer.db');
     return openDatabase(
       path,
-      version: 7,
+      version: 8,
       onCreate: _onCreate,
       onUpgrade: _onUpgrade,
     );
@@ -48,6 +48,11 @@ class DatabaseHelper {
     if (oldVersion < 7) {
       await db.execute(
         'ALTER TABLE chat_messages ADD COLUMN sourceChunks TEXT',
+      );
+    }
+    if (oldVersion < 8) {
+      await db.execute(
+        'ALTER TABLE chats ADD COLUMN isPinned INTEGER NOT NULL DEFAULT 0',
       );
     }
   }
@@ -148,6 +153,7 @@ class DatabaseHelper {
         chapterIds TEXT NOT NULL DEFAULT '',
         chapterNames TEXT NOT NULL DEFAULT '',
         isTemporary INTEGER NOT NULL DEFAULT 0,
+        isPinned INTEGER NOT NULL DEFAULT 0,
         createdAt TEXT NOT NULL,
         updatedAt TEXT NOT NULL
       )

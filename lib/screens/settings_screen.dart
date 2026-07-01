@@ -187,55 +187,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
       body: ListView(
         padding: const EdgeInsets.fromLTRB(16, 20, 16, 60),
         children: [
-          _sectionTitle('OpenAI', Icons.key_outlined, theme),
-          _card(
-            theme,
-            children: [
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Icon(
-                    AppConfig.hasOpenAiApiKey
-                        ? Icons.check_circle_outline
-                        : Icons.error_outline,
-                    size: 18,
-                    color: AppConfig.hasOpenAiApiKey
-                        ? Colors.green
-                        : Colors.orange,
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          AppConfig.hasOpenAiApiKey
-                              ? 'OpenAI API key is configured for this build.'
-                              : 'OpenAI API key is not configured for this build.',
-                          style: const TextStyle(
-                            fontSize: 13,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                        const SizedBox(height: 6),
-                        Text(
-                          'Pass it with --dart-define=OPENAI_API_KEY=your_key when running or building the app.',
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: theme.colorScheme.onSurface.withValues(
-                              alpha: 0.65,
-                            ),
-                            height: 1.4,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          ),
-          const SizedBox(height: 20),
           _sectionTitle('Defaults', Icons.tune_outlined, theme),
           _card(
             theme,
