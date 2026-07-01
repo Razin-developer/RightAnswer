@@ -71,11 +71,9 @@ class ImportExportService {
     final zipPath = '${tempDir.path}/rightanswer_$stamp.zip';
     await File(zipPath).writeAsBytes(zipBytes);
 
-    await SharePlus.instance.share(
-      ShareParams(
-        files: [XFile(zipPath, mimeType: 'application/zip')],
-        subject: 'RightAnswer Backup',
-      ),
+    await Share.shareXFiles(
+      [XFile(zipPath, mimeType: 'application/zip')],
+      subject: 'RightAnswer Backup',
     );
   }
 

@@ -277,7 +277,7 @@ class ChatAIService {
     List<String> chapterIds,
     String userContent,
   ) async {
-    if (chapterIds.isEmpty) return ('', []);
+    if (chapterIds.isEmpty) return ('', <String>[]);
     final retrieval = RetrievalService(_chunkRepo);
     final chunks = <String>[];
     for (final chapterId in chapterIds) {
@@ -287,7 +287,7 @@ class ChatAIService {
       );
       chunks.addAll(found.map((chunk) => chunk.text));
     }
-    if (chunks.isEmpty) return ('', []);
+    if (chunks.isEmpty) return ('', <String>[]);
     final taken = chunks.take(6).toList();
     final joined = taken.join('\n\n');
     return ('\n\nSTUDY MATERIAL:\n$joined', taken);

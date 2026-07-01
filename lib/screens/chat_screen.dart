@@ -460,14 +460,16 @@ class _ChatScreenState extends State<ChatScreen> {
         source: source,
         imageQuality: 85,
       );
-      if (picked != null && mounted)
+      if (picked != null && mounted) {
         setState(() => _selectedImagePath = picked.path);
+      }
     } catch (e) {
-      if (mounted)
+      if (mounted) {
         AppFeedback.showToast(
           context,
           'Could not access image: ${e.toString()}',
         );
+      }
     }
   }
 
@@ -1486,7 +1488,7 @@ class _MessageBubble extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
-              if (imageWidget != null) imageWidget,
+              ?imageWidget,
               _bubble(theme, true, msg),
             ],
           ),
@@ -1505,7 +1507,7 @@ class _MessageBubble extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              if (imageWidget != null) imageWidget,
+              ?imageWidget,
               _bubble(theme, false, msg),
               if (showActions) ...[
                 const SizedBox(height: 6),
@@ -2725,7 +2727,7 @@ class _ResourcesSheet extends StatelessWidget {
                 controller: scrollCtrl,
                 padding: const EdgeInsets.fromLTRB(12, 12, 12, 24),
                 itemCount: chunks.length,
-                separatorBuilder: (_, __) => const SizedBox(height: 10),
+                separatorBuilder: (_, _) => const SizedBox(height: 10),
                 itemBuilder: (ctx, i) {
                   return Container(
                     padding: const EdgeInsets.all(14),
@@ -2826,8 +2828,9 @@ class _ContextSelectorSheetState extends State<_ContextSelectorSheet> {
     super.initState();
     _selectedSubjectId = widget.initialSubjectId;
     _selectedChapterIds = widget.initialChapterIds.toSet();
-    if (widget.initialSubjectId != null)
+    if (widget.initialSubjectId != null) {
       _expanded.add(widget.initialSubjectId!);
+    }
     _load();
     _searchCtrl.addListener(
       () => setState(() => _query = _searchCtrl.text.toLowerCase()),

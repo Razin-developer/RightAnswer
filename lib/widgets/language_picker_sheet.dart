@@ -94,7 +94,7 @@ class _LanguagePickerSheetState extends State<LanguagePickerSheet> {
                       : ListView.separated(
                           shrinkWrap: true,
                           itemCount: filtered.length,
-                          separatorBuilder: (_, __) =>
+                          separatorBuilder: (_, _) =>
                               Divider(height: 1, color: theme.dividerColor),
                           itemBuilder: (context, index) {
                             final language = filtered[index];

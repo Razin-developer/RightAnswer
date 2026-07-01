@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 
 import '../constants/app_languages.dart';
-import '../config/app_config.dart';
 import '../database/database_helper.dart';
 import '../repositories/settings_repository.dart';
 import '../repositories/usage_log_repository.dart';

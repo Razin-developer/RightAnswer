@@ -447,8 +447,9 @@ class _ExamScreenState extends State<ExamScreen> {
     if (result == null || result.isEmpty) return;
     await _examRepo.updateName(_currentExam!.id, result);
     await _loadAllExams();
-    if (mounted)
+    if (mounted) {
       setState(() => _currentExam = _currentExam!.copyWith(name: result));
+    }
   }
 
   Future<void> _deleteExam({Exam? exam}) async {
@@ -2114,11 +2115,12 @@ class _ContextSelectorSheetState extends State<_ContextSelectorSheet> {
     for (final s in subjects) {
       map[s.id] = await _chapterRepo.getBySubject(s.id);
     }
-    if (mounted)
+    if (mounted) {
       setState(() {
         _subjects = subjects;
         _chapterMap = map;
       });
+    }
   }
 
   List<Subject> get _filtered {

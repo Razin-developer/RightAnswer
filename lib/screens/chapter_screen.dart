@@ -427,11 +427,12 @@ class _ChapterScreenState extends State<ChapterScreen> {
     } catch (e) {
       if (mounted) await AppFeedback.showErrorDialog(context, e);
     } finally {
-      if (mounted)
+      if (mounted) {
         setState(() {
           _loading = false;
           _statusMessage = '';
         });
+      }
     }
   }
 
@@ -477,11 +478,12 @@ class _ChapterScreenState extends State<ChapterScreen> {
         ),
       );
       await NotificationService.instance.showOfflineQueued(toolType);
-      if (mounted)
+      if (mounted) {
         AppFeedback.showToast(
           context,
           'Queued — will generate when back online',
         );
+      }
       return;
     }
 
@@ -540,11 +542,12 @@ class _ChapterScreenState extends State<ChapterScreen> {
     } catch (e) {
       if (mounted) await AppFeedback.showErrorDialog(context, e);
     } finally {
-      if (mounted)
+      if (mounted) {
         setState(() {
           _loading = false;
           _statusMessage = '';
         });
+      }
     }
   }
 
@@ -790,7 +793,7 @@ class _ChapterScreenState extends State<ChapterScreen> {
                           child: ListView.separated(
                             scrollDirection: Axis.horizontal,
                             itemCount: _sourceImagePaths.length,
-                            separatorBuilder: (_, __) =>
+                            separatorBuilder: (_, _) =>
                                 const SizedBox(width: 10),
                             itemBuilder: (context, index) {
                               final path = _sourceImagePaths[index];
