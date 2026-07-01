@@ -18,6 +18,17 @@ class ChunkRepository {
     return (result.first['c'] as int?) ?? 0;
   }
 
+  Future<Map<String, int>> countsByChapters(List<String> chapterIds) async {
+    if (chapterIds.isEmpty) return {};
+    final db = await _db.database;
+    final placeholders = List.filled(chapterIds.length, '?').join(',');
+    final rows = await db.rawQuery(
+      'SELECT chapterId, COUNT(*) as c FROM chunks WHERE chapterId IN ($placeholders) GROUP BY chapterId',
+      chapterIds,
+    );
+    return {for (final r in rows) r['chapterId'] as String: (r['c'] as int?) ?? 0};
+  }
+
   Future<void> insertAll(List<Chunk> chunks) async {
     final db = await _db.database;
     final batch = db.batch();

@@ -3,6 +3,7 @@ import 'package:uuid/uuid.dart';
 import '../models/subject.dart';
 import '../models/chapter.dart';
 import '../repositories/chapter_repository.dart';
+import '../repositories/chunk_repository.dart';
 import 'chapter_screen.dart';
 
 class SubjectScreen extends StatefulWidget {
@@ -15,7 +16,10 @@ class SubjectScreen extends StatefulWidget {
 
 class _SubjectScreenState extends State<SubjectScreen> {
   final _repo = ChapterRepository();
+  final _chunkRepo = ChunkRepository();
+
   List<Chapter> _chapters = [];
+  Map<String, int> _chunkCounts = {};
   bool _loading = true;
 
   @override
@@ -27,7 +31,16 @@ class _SubjectScreenState extends State<SubjectScreen> {
   Future<void> _load() async {
     setState(() => _loading = true);
     final chapters = await _repo.getBySubject(widget.subject.id);
-    if (mounted) setState(() { _chapters = chapters; _loading = false; });
+    final chunkCounts = await _chunkRepo.countsByChapters(
+      chapters.map((c) => c.id).toList(),
+    );
+    if (mounted) {
+      setState(() {
+        _chapters = chapters;
+        _chunkCounts = chunkCounts;
+        _loading = false;
+      });
+    }
   }
 
   Future<void> _addChapter() async {
@@ -93,9 +106,26 @@ class _SubjectScreenState extends State<SubjectScreen> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final readyCount = _chunkCounts.values.where((v) => v > 0).length;
+
     return Scaffold(
       appBar: AppBar(
-        title: Text(widget.subject.name),
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(widget.subject.name, style: const TextStyle(fontSize: 16)),
+            if (!_loading && _chapters.isNotEmpty)
+              Text(
+                '$readyCount of ${_chapters.length} chapter${_chapters.length != 1 ? 's' : ''} AI-ready',
+                style: TextStyle(
+                  fontSize: 11,
+                  color: readyCount > 0
+                      ? const Color(0xFF059669)
+                      : theme.colorScheme.onSurface.withValues(alpha: 0.45),
+                ),
+              ),
+          ],
+        ),
         centerTitle: false,
         bottom: PreferredSize(
           preferredSize: const Size.fromHeight(1),
@@ -111,7 +141,8 @@ class _SubjectScreenState extends State<SubjectScreen> {
                   child: ListView.builder(
                     padding: const EdgeInsets.fromLTRB(16, 12, 16, 100),
                     itemCount: _chapters.length,
-                    itemBuilder: (ctx, i) => _chapterCard(_chapters[i], i, theme),
+                    itemBuilder: (ctx, i) =>
+                        _chapterCard(_chapters[i], i, theme),
                   ),
                 ),
       floatingActionButton: FloatingActionButton.extended(
@@ -139,7 +170,8 @@ class _SubjectScreenState extends State<SubjectScreen> {
             Text('No chapters yet',
                 style: theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700)),
             const SizedBox(height: 8),
-            Text('Add your first chapter to start studying',
+            Text('Add a chapter and upload content to start getting AI answers',
+                textAlign: TextAlign.center,
                 style: theme.textTheme.bodyMedium?.copyWith(
                     color: theme.colorScheme.onSurface.withValues(alpha: 0.55))),
             const SizedBox(height: 28),
@@ -151,65 +183,111 @@ class _SubjectScreenState extends State<SubjectScreen> {
         ),
       );
 
-  Widget _chapterCard(Chapter c, int i, ThemeData theme) => Padding(
-        padding: const EdgeInsets.only(bottom: 10),
-        child: Card(
-          child: InkWell(
-            borderRadius: BorderRadius.circular(14),
-            onTap: () => Navigator.push(
-              context,
-              MaterialPageRoute(
-                  builder: (_) => ChapterScreen(chapter: c, subject: widget.subject)),
-            ).then((_) => _load()),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-              child: Row(
-                children: [
-                  Container(
-                    width: 40,
-                    height: 40,
-                    decoration: BoxDecoration(
-                      color: theme.colorScheme.primaryContainer,
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    child: Center(
-                      child: Text('${i + 1}',
-                          style: TextStyle(
-                              fontWeight: FontWeight.w700,
-                              color: theme.colorScheme.primary,
-                              fontSize: 15)),
-                    ),
+  Widget _chapterCard(Chapter c, int i, ThemeData theme) {
+    final chunkCount = _chunkCounts[c.id] ?? 0;
+    final isReady = chunkCount > 0;
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Card(
+        child: InkWell(
+          borderRadius: BorderRadius.circular(14),
+          onTap: () => Navigator.push(
+            context,
+            MaterialPageRoute(
+                builder: (_) => ChapterScreen(chapter: c, subject: widget.subject)),
+          ).then((_) => _load()),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+            child: Row(
+              children: [
+                Container(
+                  width: 40,
+                  height: 40,
+                  decoration: BoxDecoration(
+                    color: isReady
+                        ? const Color(0xFF059669).withValues(alpha: 0.1)
+                        : theme.colorScheme.primaryContainer,
+                    borderRadius: BorderRadius.circular(10),
                   ),
-                  const SizedBox(width: 14),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(c.title,
-                            style: const TextStyle(
-                                fontSize: 14, fontWeight: FontWeight.w600)),
-                        const SizedBox(height: 3),
-                        Text(c.className,
+                  child: Center(
+                    child: isReady
+                        ? const Icon(Icons.check_rounded,
+                            size: 20, color: Color(0xFF059669))
+                        : Text(
+                            '${i + 1}',
+                            style: TextStyle(
+                                fontWeight: FontWeight.w700,
+                                color: theme.colorScheme.primary,
+                                fontSize: 15),
+                          ),
+                  ),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(c.title,
+                          style: const TextStyle(
+                              fontSize: 14, fontWeight: FontWeight.w600)),
+                      const SizedBox(height: 3),
+                      Row(
+                        children: [
+                          Text(
+                            c.className,
                             style: TextStyle(
                                 fontSize: 12,
-                                color: theme.colorScheme.onSurface.withValues(alpha: 0.5))),
-                      ],
-                    ),
-                  ),
-                  PopupMenuButton<String>(
-                    icon: Icon(Icons.more_vert,
-                        color: theme.colorScheme.onSurface.withValues(alpha: 0.4)),
-                    onSelected: (v) { if (v == 'delete') _deleteChapter(c); },
-                    itemBuilder: (_) => [
-                      const PopupMenuItem(value: 'delete', child: Text('Delete')),
+                                color: theme.colorScheme.onSurface.withValues(alpha: 0.5)),
+                          ),
+                          if (isReady) ...[
+                            const SizedBox(width: 8),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 5, vertical: 1),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF059669).withValues(alpha: 0.1),
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                              child: Text(
+                                '$chunkCount chunks',
+                                style: const TextStyle(
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.w600,
+                                  color: Color(0xFF059669),
+                                ),
+                              ),
+                            ),
+                          ] else ...[
+                            const SizedBox(width: 8),
+                            Text(
+                              'No content',
+                              style: TextStyle(
+                                fontSize: 10,
+                                color: theme.colorScheme.onSurface.withValues(alpha: 0.35),
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
                     ],
                   ),
-                ],
-              ),
+                ),
+                PopupMenuButton<String>(
+                  icon: Icon(Icons.more_vert,
+                      color: theme.colorScheme.onSurface.withValues(alpha: 0.4)),
+                  onSelected: (v) { if (v == 'delete') _deleteChapter(c); },
+                  itemBuilder: (_) => [
+                    const PopupMenuItem(value: 'delete', child: Text('Delete')),
+                  ],
+                ),
+              ],
             ),
           ),
         ),
-      );
+      ),
+    );
+  }
 }
 
 Future<bool> _confirmDelete(BuildContext ctx, String name) async {
