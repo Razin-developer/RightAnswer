@@ -121,6 +121,7 @@ class ChatAIService {
       contextBlock,
       reasoningLevel,
       responseLanguage,
+      responseLength,
     );
 
     final recent = history.length > 18
@@ -136,7 +137,7 @@ class ChatAIService {
       'model': model,
       'messages': messages,
       'temperature': _temperature(reasoningLevel),
-      'max_tokens': _maxTokens(responseLength),
+      'max_tokens': 4096,
       'stream': true,
       'stream_options': {'include_usage': true},
     });
@@ -298,6 +299,7 @@ class ChatAIService {
     String contextBlock,
     String reasoningLevel,
     String? responseLanguage,
+    String responseLength,
   ) {
     final reasoning = switch (reasoningLevel) {
       'high' =>
@@ -309,16 +311,23 @@ class ChatAIService {
         responseLanguage == null || responseLanguage.trim().isEmpty
         ? '\n\nReply in the same language the user is using unless they explicitly ask you to translate or switch languages.'
         : '\n\nReply entirely in $responseLanguage unless the user explicitly asks you to switch languages.';
+    final lengthInstruction = switch (responseLength) {
+      'small' =>
+        '\n\nKeep your response brief and concise — a few sentences at most. Get to the point quickly.',
+      'large' =>
+        '\n\nProvide a comprehensive, detailed response. Elaborate with examples, explanations, and depth.',
+      _ => '',
+    };
 
     if (contextBlock.isEmpty) {
       return 'You are RightAnswer, a helpful AI tutor for students. '
           'Answer questions clearly, accurately, and in an educational way.'
-          '$reasoning$languageInstruction';
+          '$reasoning$languageInstruction$lengthInstruction';
     }
     return 'You are RightAnswer, an AI tutor for ${subjectName ?? 'this subject'}. '
         'Use the provided study material to answer questions accurately. '
         'If a question is clearly outside this material, answer helpfully but note it may be beyond the current scope.'
-        '$reasoning$languageInstruction$contextBlock';
+        '$reasoning$languageInstruction$lengthInstruction$contextBlock';
   }
 
   Map<String, dynamic> _buildUserMsg(String content, String? imagePath) {
@@ -351,12 +360,6 @@ class ChatAIService {
     'content': message.imagePath != null
         ? '${message.content}\n[Image was attached]'
         : message.content,
-  };
-
-  int _maxTokens(String length) => switch (length) {
-    'small' => 200,
-    'large' => 1500,
-    _ => 600,
   };
 
   double _temperature(String level) => switch (level) {

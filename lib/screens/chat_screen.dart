@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
+import 'package:google_fonts/google_fonts.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:uuid/uuid.dart';
 
@@ -1526,7 +1527,9 @@ class _ContextBar extends StatelessWidget {
   }
 }
 
-// ── Message Bubble ────────────────────────────────────────────────────────────
+// ── Message Bubble ─────────────────────────────────────────────────────────────
+// User: coral pill right-aligned.
+// AI: no box — editorial text flowing directly on the canvas, with ✦ mark header.
 
 class _MessageBubble extends StatelessWidget {
   final ChatMessage message;
@@ -1547,183 +1550,68 @@ class _MessageBubble extends StatelessWidget {
     this.onSources,
   });
 
-  Widget _bubble(ThemeData theme, bool isUser, ChatMessage msg) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-      decoration: BoxDecoration(
-        color: isUser
-            ? theme.colorScheme.primary
-            : theme.colorScheme.surfaceContainerHighest,
-        borderRadius: BorderRadius.only(
-          topLeft: const Radius.circular(16),
-          topRight: const Radius.circular(16),
-          bottomLeft: Radius.circular(isUser ? 16 : 4),
-          bottomRight: Radius.circular(isUser ? 4 : 16),
-        ),
-      ),
-      child: isUser
-          ? SelectableText(
-              msg.content,
-              style: const TextStyle(
-                fontSize: 14,
-                color: Colors.white,
-                height: 1.45,
-              ),
-            )
-          : isStreaming && msg.content.trim().isEmpty
-          ? const _TypingIndicator(inline: true)
-          : MarkdownBody(
-              data: msg.content,
-              selectable: true,
-              styleSheet: MarkdownStyleSheet.fromTheme(theme).copyWith(
-                p: const TextStyle(fontSize: 14, height: 1.55),
-                code: TextStyle(
-                  fontSize: 12,
-                  fontFamily: 'monospace',
-                  backgroundColor: theme.colorScheme.surfaceContainerLowest,
-                ),
-              ),
-            ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final msg = message;
-    final isUser = msg.isUser;
+    final isDark = theme.brightness == Brightness.dark;
 
-    final imageWidget = msg.imagePath != null
-        ? Container(
-            margin: const EdgeInsets.only(bottom: 6),
-            width: 200,
-            height: 140,
-            clipBehavior: Clip.antiAlias,
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Image.file(File(msg.imagePath!), fit: BoxFit.cover),
-          )
-        : null;
-
-    if (isUser) {
-      return Align(
-        alignment: Alignment.centerRight,
-        child: Container(
-          margin: const EdgeInsets.only(top: 6, bottom: 2, left: 48),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              ?imageWidget,
-              _bubble(theme, true, msg),
-            ],
-          ),
-        ),
-      );
+    if (msg.isUser) {
+      return _UserMessage(message: msg, isDark: isDark);
     }
-
-    // AI message — use IntrinsicWidth so the Expanded action row can fill
-    // the same width as the bubble content.
-    final showActions = msg.content.trim().isNotEmpty;
-    return Align(
-      alignment: Alignment.centerLeft,
-      child: Container(
-        margin: const EdgeInsets.only(top: 6, bottom: 2, right: 48),
-        child: IntrinsicWidth(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              ?imageWidget,
-              _bubble(theme, false, msg),
-              if (showActions) ...[
-                const SizedBox(height: 6),
-                Row(
-                  children: [
-                    Expanded(
-                      child: _ActionBtn(
-                        icon: Icons.copy_outlined,
-                        label: 'Copy',
-                        onTap: onCopy,
-                      ),
-                    ),
-                    const SizedBox(width: 4),
-                    Expanded(
-                      child: _ActionBtn(
-                        icon: Icons.volume_up_outlined,
-                        label: 'Read',
-                        onTap: onRead,
-                      ),
-                    ),
-                    const SizedBox(width: 4),
-                    Expanded(
-                      child: _ActionBtn(
-                        icon: Icons.open_in_full_rounded,
-                        label: 'Full',
-                        onTap: onFullscreen ?? () {},
-                      ),
-                    ),
-                    const SizedBox(width: 4),
-                    Expanded(
-                      child: _ActionBtn(
-                        icon: Icons.menu_book_outlined,
-                        label: 'Sources',
-                        onTap: onSources ?? () {},
-                        isActive: onSources != null,
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ],
-          ),
-        ),
-      ),
+    return _AiMessage(
+      message: msg,
+      isStreaming: isStreaming,
+      isDark: isDark,
+      onCopy: onCopy,
+      onRead: onRead,
+      onFullscreen: onFullscreen,
+      onSources: onSources,
     );
   }
 }
 
-class _ActionBtn extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final VoidCallback onTap;
-  final bool isActive;
-
-  const _ActionBtn({
-    required this.icon,
-    required this.label,
-    required this.onTap,
-    this.isActive = false,
-  });
+class _UserMessage extends StatelessWidget {
+  final ChatMessage message;
+  final bool isDark;
+  const _UserMessage({required this.message, required this.isDark});
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final color = isActive
-        ? theme.colorScheme.primary
-        : theme.colorScheme.onSurface.withValues(alpha: 0.55);
-    return GestureDetector(
-      onTap: onTap,
+    const coral = Color(0xFFCC785C);
+    return Align(
+      alignment: Alignment.centerRight,
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
-        decoration: BoxDecoration(
-          color: isActive
-              ? theme.colorScheme.primary.withValues(alpha: 0.08)
-              : theme.colorScheme.surfaceContainerHighest,
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(
-            color: isActive
-                ? theme.colorScheme.primary.withValues(alpha: 0.3)
-                : theme.dividerColor,
-          ),
-        ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
+        margin: const EdgeInsets.only(top: 12, bottom: 4, left: 56),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.end,
           children: [
-            Icon(icon, size: 13, color: color),
-            const SizedBox(width: 4),
-            Text(
-              label,
-              style: TextStyle(fontSize: 11, color: color),
+            if (message.imagePath != null)
+              Container(
+                margin: const EdgeInsets.only(bottom: 6),
+                width: 200,
+                height: 140,
+                clipBehavior: Clip.antiAlias,
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Image.file(File(message.imagePath!), fit: BoxFit.cover),
+              ),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+              decoration: BoxDecoration(
+                color: coral,
+                borderRadius: BorderRadius.circular(9999),
+              ),
+              child: SelectableText(
+                message.content,
+                style: GoogleFonts.inter(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w400,
+                  height: 1.5,
+                  color: Colors.white,
+                ),
+              ),
             ),
           ],
         ),
@@ -1732,18 +1620,251 @@ class _ActionBtn extends StatelessWidget {
   }
 }
 
-// ── Typing indicator ──────────────────────────────────────────────────────────
+class _AiMessage extends StatelessWidget {
+  final ChatMessage message;
+  final bool isStreaming;
+  final bool isDark;
+  final VoidCallback onCopy;
+  final VoidCallback onRead;
+  final VoidCallback? onFullscreen;
+  final VoidCallback? onSources;
 
-class _TypingIndicator extends StatefulWidget {
-  final bool inline;
-
-  const _TypingIndicator({this.inline = false});
+  const _AiMessage({
+    required this.message,
+    required this.isStreaming,
+    required this.isDark,
+    required this.onCopy,
+    required this.onRead,
+    this.onFullscreen,
+    this.onSources,
+  });
 
   @override
-  State<_TypingIndicator> createState() => _TypingIndicatorState();
+  Widget build(BuildContext context) {
+    final bodyColor = isDark ? const Color(0xFFA09D96) : const Color(0xFF6C6A64);
+    final textColor = isDark ? const Color(0xFFFAF9F5) : const Color(0xFF141413);
+    final codeBackground = isDark ? const Color(0xFF1F1E1B) : const Color(0xFFEFE9DE);
+    const coral = Color(0xFFCC785C);
+
+    final showContent = message.content.trim().isNotEmpty;
+    final showActions = showContent && !isStreaming;
+
+    return Container(
+      margin: const EdgeInsets.only(top: 16, bottom: 4),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // ✦ RightAnswer label
+          Row(
+            children: [
+              Text(
+                '✦',
+                style: GoogleFonts.inter(
+                  fontSize: 13,
+                  color: coral,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(width: 6),
+              Text(
+                'RightAnswer',
+                style: GoogleFonts.inter(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: coral,
+                  letterSpacing: 0.5,
+                ),
+              ),
+              if (isStreaming && !showContent) ...[
+                const SizedBox(width: 10),
+                _DotsIndicator(color: coral),
+              ],
+            ],
+          ),
+          const SizedBox(height: 8),
+          if (message.imagePath != null)
+            Container(
+              margin: const EdgeInsets.only(bottom: 8),
+              width: 200,
+              height: 140,
+              clipBehavior: Clip.antiAlias,
+              decoration: BoxDecoration(borderRadius: BorderRadius.circular(12)),
+              child: Image.file(File(message.imagePath!), fit: BoxFit.cover),
+            ),
+          // Editorial AI content — no box, flows on canvas
+          if (showContent)
+            MarkdownBody(
+              data: message.content,
+              selectable: true,
+              styleSheet: MarkdownStyleSheet(
+                p: GoogleFonts.inter(fontSize: 15, height: 1.65, color: textColor),
+                pPadding: const EdgeInsets.only(bottom: 8),
+                h1: GoogleFonts.playfairDisplay(
+                  fontSize: 22, fontWeight: FontWeight.w400, height: 1.25,
+                  letterSpacing: -0.3, color: textColor,
+                ),
+                h1Padding: const EdgeInsets.only(top: 4, bottom: 4),
+                h2: GoogleFonts.playfairDisplay(
+                  fontSize: 18, fontWeight: FontWeight.w400, height: 1.3,
+                  letterSpacing: -0.2, color: textColor,
+                ),
+                h2Padding: const EdgeInsets.only(top: 4, bottom: 4),
+                h3: GoogleFonts.inter(
+                  fontSize: 15, fontWeight: FontWeight.w600, height: 1.4, color: textColor,
+                ),
+                h3Padding: const EdgeInsets.only(top: 2, bottom: 2),
+                strong: GoogleFonts.inter(
+                  fontSize: 15, fontWeight: FontWeight.w600, color: textColor,
+                ),
+                em: GoogleFonts.inter(
+                  fontSize: 15, fontStyle: FontStyle.italic, color: textColor,
+                ),
+                code: GoogleFonts.jetBrainsMono(
+                  fontSize: 13, height: 1.5,
+                  color: isDark ? const Color(0xFFE8A55A) : const Color(0xFFA9583E),
+                  backgroundColor: codeBackground,
+                ),
+                codeblockDecoration: BoxDecoration(
+                  color: codeBackground,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(
+                    color: isDark ? const Color(0xFF2E2C28) : const Color(0xFFE6DFD8),
+                  ),
+                ),
+                codeblockPadding: const EdgeInsets.all(14),
+                blockquoteDecoration: BoxDecoration(
+                  border: Border(
+                    left: BorderSide(color: coral, width: 3),
+                  ),
+                ),
+                blockquotePadding: const EdgeInsets.only(left: 14, top: 4, bottom: 4),
+                blockquote: GoogleFonts.inter(
+                  fontSize: 14, fontStyle: FontStyle.italic,
+                  color: bodyColor, height: 1.6,
+                ),
+                listBullet: GoogleFonts.inter(fontSize: 15, color: coral),
+                tableHead: GoogleFonts.inter(
+                  fontSize: 13, fontWeight: FontWeight.w600, color: textColor,
+                ),
+                tableBody: GoogleFonts.inter(fontSize: 13, color: textColor, height: 1.5),
+                tableBorder: TableBorder.all(
+                  color: isDark ? const Color(0xFF2E2C28) : const Color(0xFFE6DFD8),
+                  width: 1,
+                ),
+                horizontalRuleDecoration: BoxDecoration(
+                  border: Border(
+                    top: BorderSide(
+                      color: isDark ? const Color(0xFF2E2C28) : const Color(0xFFE6DFD8),
+                    ),
+                  ),
+                ),
+              ),
+            )
+          else if (isStreaming)
+            _DotsIndicator(color: coral),
+          // Action bar
+          if (showActions) ...[
+            const SizedBox(height: 10),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _AiActionBtn(
+                  icon: Icons.copy_outlined,
+                  label: 'Copy',
+                  onTap: onCopy,
+                  isDark: isDark,
+                ),
+                const SizedBox(width: 6),
+                _AiActionBtn(
+                  icon: Icons.volume_up_outlined,
+                  label: 'Read',
+                  onTap: onRead,
+                  isDark: isDark,
+                ),
+                const SizedBox(width: 6),
+                _AiActionBtn(
+                  icon: Icons.open_in_full_rounded,
+                  label: 'Full',
+                  onTap: onFullscreen ?? () {},
+                  isDark: isDark,
+                ),
+                if (onSources != null) ...[
+                  const SizedBox(width: 6),
+                  _AiActionBtn(
+                    icon: Icons.menu_book_outlined,
+                    label: 'Sources',
+                    onTap: onSources!,
+                    isDark: isDark,
+                    isActive: true,
+                  ),
+                ],
+              ],
+            ),
+          ],
+          const SizedBox(height: 4),
+          Divider(
+            height: 1,
+            color: isDark ? const Color(0xFF2E2C28) : const Color(0xFFEBE6DF),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
-class _TypingIndicatorState extends State<_TypingIndicator>
+class _AiActionBtn extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+  final bool isDark;
+  final bool isActive;
+
+  const _AiActionBtn({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+    required this.isDark,
+    this.isActive = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    const coral = Color(0xFFCC785C);
+    final fgColor = isActive
+        ? coral
+        : isDark ? const Color(0xFF8E8B82) : const Color(0xFF6C6A64);
+    return GestureDetector(
+      onTap: onTap,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 14, color: fgColor),
+          const SizedBox(width: 4),
+          Text(
+            label,
+            style: GoogleFonts.inter(
+              fontSize: 12,
+              fontWeight: FontWeight.w500,
+              color: fgColor,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ── Animated dots ─────────────────────────────────────────────────────────────
+
+class _DotsIndicator extends StatefulWidget {
+  final Color color;
+  const _DotsIndicator({required this.color});
+
+  @override
+  State<_DotsIndicator> createState() => _DotsIndicatorState();
+}
+
+class _DotsIndicatorState extends State<_DotsIndicator>
     with SingleTickerProviderStateMixin {
   late final AnimationController _ctrl;
 
@@ -1764,47 +1885,25 @@ class _TypingIndicatorState extends State<_TypingIndicator>
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final dots = AnimatedBuilder(
+    return AnimatedBuilder(
       animation: _ctrl,
-      builder: (context, child) => Row(
+      builder: (context, _) => Row(
         mainAxisSize: MainAxisSize.min,
         children: List.generate(3, (i) {
-          final delay = i * 0.33;
-          final opacity = ((_ctrl.value - delay).abs() < 0.33) ? 1.0 : 0.3;
+          final phase = (_ctrl.value - i * 0.25) % 1.0;
+          final opacity = phase < 0.5
+              ? 0.3 + 0.7 * (phase / 0.5)
+              : 1.0 - 0.7 * ((phase - 0.5) / 0.5);
           return Container(
-            margin: EdgeInsets.only(left: i > 0 ? 4 : 0),
-            width: 7,
-            height: 7,
+            margin: EdgeInsets.only(left: i > 0 ? 5 : 0),
+            width: 5,
+            height: 5,
             decoration: BoxDecoration(
-              color: theme.colorScheme.primary.withValues(alpha: opacity),
+              color: widget.color.withValues(alpha: opacity),
               shape: BoxShape.circle,
             ),
           );
         }),
-      ),
-    );
-    if (widget.inline) {
-      return Padding(
-        padding: const EdgeInsets.symmetric(vertical: 4),
-        child: dots,
-      );
-    }
-    return Align(
-      alignment: Alignment.centerLeft,
-      child: Container(
-        margin: const EdgeInsets.only(top: 6, bottom: 2),
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        decoration: BoxDecoration(
-          color: theme.colorScheme.surfaceContainerHighest,
-          borderRadius: const BorderRadius.only(
-            topLeft: Radius.circular(16),
-            topRight: Radius.circular(16),
-            bottomRight: Radius.circular(16),
-            bottomLeft: Radius.circular(4),
-          ),
-        ),
-        child: dots,
       ),
     );
   }
@@ -1821,6 +1920,10 @@ class _EmptyState extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    const coral = Color(0xFFCC785C);
+    final mutedColor = isDark ? const Color(0xFF8E8B82) : const Color(0xFF6C6A64);
+
     return LayoutBuilder(
       builder: (context, constraints) => SingleChildScrollView(
         padding: const EdgeInsets.all(32),
@@ -1830,44 +1933,59 @@ class _EmptyState extends StatelessWidget {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Container(
-                  width: 72,
-                  height: 72,
-                  decoration: BoxDecoration(
-                    color: theme.colorScheme.primaryContainer,
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  child: Icon(
-                    Icons.chat_bubble_outline_rounded,
-                    size: 36,
-                    color: theme.colorScheme.primary,
+                Text(
+                  '✦',
+                  style: GoogleFonts.inter(
+                    fontSize: 40,
+                    color: coral,
+                    fontWeight: FontWeight.w600,
+                    height: 1,
                   ),
                 ),
                 const SizedBox(height: 20),
                 Text(
-                  'Start a Conversation',
-                  style: theme.textTheme.titleLarge?.copyWith(
-                    fontWeight: FontWeight.w700,
+                  'What would you like\nto learn today?',
+                  textAlign: TextAlign.center,
+                  style: GoogleFonts.playfairDisplay(
+                    fontSize: 26,
+                    fontWeight: FontWeight.w400,
+                    height: 1.2,
+                    letterSpacing: -0.3,
+                    color: isDark ? const Color(0xFFFAF9F5) : const Color(0xFF141413),
                   ),
                 ),
-                const SizedBox(height: 8),
+                const SizedBox(height: 12),
                 Text(
                   hasContext
                       ? 'Type a question below to get started'
-                      : 'Select a subject and chapters for context-aware answers, or just ask anything',
+                      : 'Select a subject and chapters for context-aware answers,\nor just ask anything',
                   textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontSize: 13,
-                    color: theme.colorScheme.onSurface.withValues(alpha: 0.55),
-                    height: 1.5,
+                  style: GoogleFonts.inter(
+                    fontSize: 14,
+                    color: mutedColor,
+                    height: 1.6,
                   ),
                 ),
                 if (!hasContext) ...[
-                  const SizedBox(height: 20),
+                  const SizedBox(height: 24),
                   OutlinedButton.icon(
                     onPressed: onSelectContext,
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: coral,
+                      side: const BorderSide(color: Color(0xFFCC785C)),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+                    ),
                     icon: const Icon(Icons.menu_book_outlined, size: 16),
-                    label: const Text('Select Study Context'),
+                    label: Text(
+                      'Select Study Context',
+                      style: GoogleFonts.inter(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
                   ),
                 ],
               ],
@@ -2403,7 +2521,7 @@ class _PlusMenuSheetState extends State<_PlusMenuSheet> {
                 style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
               ),
               subtitle: Text(
-                _responseLength[0].toUpperCase() + _responseLength.substring(1),
+                _responseLength == 'small' ? 'Brief' : _responseLength == 'large' ? 'Detailed' : 'Normal',
                 style: TextStyle(
                   fontSize: 12,
                   color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
@@ -2441,9 +2559,9 @@ class _PlusMenuSheetState extends State<_PlusMenuSheet> {
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children:
                           [
-                            ('Small', 'small'),
+                            ('Brief', 'small'),
                             ('Normal', 'normal'),
-                            ('Large', 'large'),
+                            ('Detailed', 'large'),
                           ].map((pair) {
                             final active = _responseLength == pair.$2;
                             return Text(
