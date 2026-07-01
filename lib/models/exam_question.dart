@@ -9,7 +9,9 @@ class ExamQuestion {
   final List<String>? options; // MCQ options or ['True','False'] for TF
   final String correctAnswer;
   final String? explanation;
-  String? userAnswer; // mutable for practice mode
+  final double? marks; // null = use exam default marksPerQuestion
+  final int? timeLimitSeconds; // null = no per-question time limit
+  String? userAnswer; // mutable for attempt mode
 
   ExamQuestion({
     required this.id,
@@ -20,6 +22,8 @@ class ExamQuestion {
     this.options,
     required this.correctAnswer,
     this.explanation,
+    this.marks,
+    this.timeLimitSeconds,
     this.userAnswer,
   });
 
@@ -32,6 +36,8 @@ class ExamQuestion {
     'options': options != null ? jsonEncode(options) : null,
     'correctAnswer': correctAnswer,
     'explanation': explanation,
+    'marks': marks,
+    'timeLimitSeconds': timeLimitSeconds,
     'userAnswer': userAnswer,
   };
 
@@ -46,6 +52,8 @@ class ExamQuestion {
         : null,
     correctAnswer: m['correctAnswer'] as String,
     explanation: m['explanation'] as String?,
+    marks: (m['marks'] as num?)?.toDouble(),
+    timeLimitSeconds: m['timeLimitSeconds'] as int?,
     userAnswer: m['userAnswer'] as String?,
   );
 
@@ -54,6 +62,8 @@ class ExamQuestion {
     List<String>? options,
     String? correctAnswer,
     String? explanation,
+    double? marks,
+    int? timeLimitSeconds,
     String? userAnswer,
   }) => ExamQuestion(
     id: id,
@@ -64,6 +74,8 @@ class ExamQuestion {
     options: options ?? this.options,
     correctAnswer: correctAnswer ?? this.correctAnswer,
     explanation: explanation ?? this.explanation,
+    marks: marks ?? this.marks,
+    timeLimitSeconds: timeLimitSeconds ?? this.timeLimitSeconds,
     userAnswer: userAnswer ?? this.userAnswer,
   );
 }

@@ -17,7 +17,7 @@ class DatabaseHelper {
     final path = join(dbPath, 'right_answer.db');
     return openDatabase(
       path,
-      version: 8,
+      version: 9,
       onCreate: _onCreate,
       onUpgrade: _onUpgrade,
     );
@@ -28,6 +28,7 @@ class DatabaseHelper {
     await _createQueueTable(db);
     await _createChatTables(db);
     await _createExamTables(db);
+    await _createAttemptTable(db);
     // rawContent column is included in _createCoreTablesV1 for fresh installs
   }
 
@@ -54,6 +55,14 @@ class DatabaseHelper {
       await db.execute(
         'ALTER TABLE chats ADD COLUMN isPinned INTEGER NOT NULL DEFAULT 0',
       );
+    }
+    if (oldVersion < 9) {
+      await db.execute('ALTER TABLE exams ADD COLUMN marksPerQuestion REAL NOT NULL DEFAULT 1');
+      await db.execute('ALTER TABLE exams ADD COLUMN maxAttempts INTEGER NOT NULL DEFAULT 0');
+      await db.execute('ALTER TABLE exams ADD COLUMN passMark REAL NOT NULL DEFAULT 60');
+      await db.execute('ALTER TABLE exam_questions ADD COLUMN marks REAL');
+      await db.execute('ALTER TABLE exam_questions ADD COLUMN timeLimitSeconds INTEGER');
+      await _createAttemptTable(db);
     }
   }
 
@@ -192,6 +201,9 @@ class DatabaseHelper {
         timeLimit INTEGER,
         difficulty TEXT NOT NULL DEFAULT 'medium',
         mcqOptionCount INTEGER NOT NULL DEFAULT 4,
+        marksPerQuestion REAL NOT NULL DEFAULT 1,
+        maxAttempts INTEGER NOT NULL DEFAULT 0,
+        passMark REAL NOT NULL DEFAULT 60,
         createdAt TEXT NOT NULL,
         updatedAt TEXT NOT NULL
       )
@@ -207,6 +219,8 @@ class DatabaseHelper {
         options TEXT,
         correctAnswer TEXT NOT NULL,
         explanation TEXT,
+        marks REAL,
+        timeLimitSeconds INTEGER,
         userAnswer TEXT,
         FOREIGN KEY (examId) REFERENCES exams(id) ON DELETE CASCADE
       )
@@ -225,8 +239,25 @@ class DatabaseHelper {
     ''');
   }
 
+  Future<void> _createAttemptTable(Database db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS exam_attempts (
+        id TEXT PRIMARY KEY,
+        examId TEXT NOT NULL,
+        startedAt TEXT NOT NULL,
+        completedAt TEXT,
+        answers TEXT NOT NULL DEFAULT '{}',
+        score REAL NOT NULL DEFAULT 0,
+        totalMarks REAL NOT NULL DEFAULT 0,
+        isPassed INTEGER NOT NULL DEFAULT 0,
+        FOREIGN KEY (examId) REFERENCES exams(id) ON DELETE CASCADE
+      )
+    ''');
+  }
+
   Future<void> clearAllData() async {
     final db = await database;
+    await db.delete('exam_attempts');
     await db.delete('exam_messages');
     await db.delete('exam_questions');
     await db.delete('exams');

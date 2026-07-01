@@ -10,6 +10,9 @@ class Exam {
   final int? timeLimit; // minutes, null = no limit
   final String difficulty; // 'easy' | 'medium' | 'hard' | 'mixed'
   final int mcqOptionCount;
+  final double marksPerQuestion; // default marks per question
+  final int maxAttempts; // 0 = unlimited
+  final double passMark; // percentage 0-100
   final DateTime createdAt;
   final DateTime updatedAt;
 
@@ -25,6 +28,9 @@ class Exam {
     this.timeLimit,
     this.difficulty = 'medium',
     this.mcqOptionCount = 4,
+    this.marksPerQuestion = 1,
+    this.maxAttempts = 0,
+    this.passMark = 60,
     required this.createdAt,
     required this.updatedAt,
   });
@@ -44,6 +50,9 @@ class Exam {
     'timeLimit': timeLimit,
     'difficulty': difficulty,
     'mcqOptionCount': mcqOptionCount,
+    'marksPerQuestion': marksPerQuestion,
+    'maxAttempts': maxAttempts,
+    'passMark': passMark,
     'createdAt': createdAt.toIso8601String(),
     'updatedAt': updatedAt.toIso8601String(),
   };
@@ -60,9 +69,14 @@ class Exam {
     timeLimit: m['timeLimit'] as int?,
     difficulty: (m['difficulty'] as String?) ?? 'medium',
     mcqOptionCount: (m['mcqOptionCount'] as int?) ?? 4,
+    marksPerQuestion: (m['marksPerQuestion'] as num?)?.toDouble() ?? 1.0,
+    maxAttempts: (m['maxAttempts'] as int?) ?? 0,
+    passMark: (m['passMark'] as num?)?.toDouble() ?? 60.0,
     createdAt: DateTime.parse(m['createdAt'] as String),
     updatedAt: DateTime.parse(m['updatedAt'] as String),
   );
+
+  double get totalMarks => questionCount * marksPerQuestion;
 
   Exam copyWith({
     String? name,
@@ -75,6 +89,9 @@ class Exam {
     int? timeLimit,
     String? difficulty,
     int? mcqOptionCount,
+    double? marksPerQuestion,
+    int? maxAttempts,
+    double? passMark,
     DateTime? updatedAt,
   }) => Exam(
     id: id,
@@ -88,6 +105,9 @@ class Exam {
     timeLimit: timeLimit ?? this.timeLimit,
     difficulty: difficulty ?? this.difficulty,
     mcqOptionCount: mcqOptionCount ?? this.mcqOptionCount,
+    marksPerQuestion: marksPerQuestion ?? this.marksPerQuestion,
+    maxAttempts: maxAttempts ?? this.maxAttempts,
+    passMark: passMark ?? this.passMark,
     createdAt: createdAt,
     updatedAt: updatedAt ?? this.updatedAt,
   );
