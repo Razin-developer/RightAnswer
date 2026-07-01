@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import 'repositories/settings_repository.dart';
+import 'screens/login_screen.dart';
 import 'screens/main_screen.dart';
 import 'screens/saved_outputs_screen.dart';
 import 'screens/queue_screen.dart';
+import 'services/auth_service.dart';
 import 'services/background_service.dart';
 import 'services/connectivity_service.dart';
 import 'services/notification_service.dart';
@@ -31,6 +33,9 @@ void main() async {
 
   // ── Queue service ─────────────────────────────────────────────────────────
   await QueueService.instance.initialize();
+
+  // ── Auth: check stored JWT on launch ─────────────────────────────────────
+  await AuthService.instance.init();
 
   // ── Connectivity: trigger queue processing when back online ───────────────
   ConnectivityService.instance.onReconnect(() async {
@@ -106,7 +111,9 @@ class _RightAnswerAppState extends State<RightAnswerApp> {
       theme: lightTheme(),
       darkTheme: darkTheme(),
       themeMode: themeNotifier.mode,
-      home: const MainScreen(),
+      home: AuthService.instance.isLoggedIn
+          ? const MainScreen()
+          : const LoginScreen(),
     );
   }
 }

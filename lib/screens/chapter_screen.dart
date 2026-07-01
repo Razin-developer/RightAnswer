@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:uuid/uuid.dart';
 
@@ -15,7 +16,10 @@ import '../repositories/chapter_repository.dart';
 import '../repositories/chunk_repository.dart';
 import '../repositories/settings_repository.dart';
 import '../repositories/usage_log_repository.dart';
+import '../services/auth_service.dart';
+import '../services/cloud_sync_service.dart';
 import '../services/connectivity_service.dart';
+import '../services/import_export_service.dart';
 import '../services/notification_service.dart';
 import '../services/openai_service.dart';
 import '../services/queue_service.dart';
@@ -56,6 +60,7 @@ class _ChapterScreenState extends State<ChapterScreen> {
   bool _processingChunks = false;
   bool _extractingImages = false;
   bool _importingPdf = false;
+  bool _sharingLink = false;
   bool _editingContent = false;
   String _statusMessage = '';
   List<String> _sourceImagePaths = [];
@@ -233,6 +238,124 @@ class _ChapterScreenState extends State<ChapterScreen> {
       if (mounted) await AppFeedback.showErrorDialog(context, e);
     } finally {
       if (mounted) setState(() => _importingPdf = false);
+    }
+  }
+
+  // ── Share / Import via Link ───────────────────────────────────────────────
+
+  Future<void> _shareViaLink() async {
+    if (!AuthService.instance.isLoggedIn) {
+      AppFeedback.showToast(context, 'Sign in to share chapters');
+      return;
+    }
+    if (!ConnectivityService.instance.isOnline) {
+      AppFeedback.showToast(context, 'You are offline');
+      return;
+    }
+    setState(() => _sharingLink = true);
+    try {
+      final bytes = await ImportExportService.instance
+          .exportChapterToBytes(_chapter.id, widget.subject.id);
+      final result = await CloudSyncService.instance.uploadContentZip(
+        bytes: bytes,
+        metadata: {'type': 'chapter', 'name': _chapter.title},
+      );
+      final url = result['url'] as String? ?? '';
+      if (mounted) _showLinkDialog(url);
+    } catch (e) {
+      if (mounted) AppFeedback.showToast(context, 'Failed: ${e.toString()}');
+    } finally {
+      if (mounted) setState(() => _sharingLink = false);
+    }
+  }
+
+  void _showLinkDialog(String url) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Share Chapter'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Share this link to let others import this chapter.\nExpires in 10 minutes.',
+              style: TextStyle(fontSize: 13),
+            ),
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: Theme.of(ctx).colorScheme.surfaceContainer,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: SelectableText(url,
+                  style: const TextStyle(fontSize: 12, fontFamily: 'monospace')),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Close')),
+          FilledButton.icon(
+            icon: const Icon(Icons.copy, size: 16),
+            label: const Text('Copy'),
+            onPressed: () {
+              Clipboard.setData(ClipboardData(text: url));
+              Navigator.pop(ctx);
+              AppFeedback.showToast(context, 'Link copied');
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _importFromLink() {
+    final ctrl = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Import from Link'),
+        content: TextField(
+          controller: ctrl,
+          autofocus: true,
+          decoration: const InputDecoration(
+            hintText: 'Paste share link',
+            prefixIcon: Icon(Icons.link),
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          FilledButton(
+            onPressed: () async {
+              final raw = ctrl.text.trim();
+              if (raw.isEmpty) return;
+              Navigator.pop(ctx);
+              await _doImportFromLink(raw);
+            },
+            child: const Text('Import'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _doImportFromLink(String urlOrToken) async {
+    setState(() { _loading = true; _statusMessage = 'Downloading…'; });
+    try {
+      final bytes = await CloudSyncService.instance.downloadContentZip(urlOrToken);
+      if (!mounted) return;
+      setState(() => _statusMessage = 'Importing…');
+      final result = await ImportExportService.instance.importFromBytes(bytes);
+      if (!mounted) return;
+      AppFeedback.showSuccessToast(
+        context,
+        'Imported ${result.chapters} chapter(s)',
+      );
+    } catch (e) {
+      if (mounted) AppFeedback.showToast(context, 'Import failed: ${e.toString()}');
+    } finally {
+      if (mounted) setState(() { _loading = false; _statusMessage = ''; });
     }
   }
 
@@ -625,6 +748,41 @@ class _ChapterScreenState extends State<ChapterScreen> {
               ),
             ],
           ),
+          actions: [
+            if (_sharingLink)
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 12),
+                child: SizedBox(
+                  height: 20, width: 20,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+              ),
+            PopupMenuButton<String>(
+              icon: const Icon(Icons.more_vert),
+              onSelected: (v) {
+                if (v == 'share_link') _shareViaLink();
+                if (v == 'import_link') _importFromLink();
+              },
+              itemBuilder: (_) => const [
+                PopupMenuItem(
+                  value: 'share_link',
+                  child: Row(children: [
+                    Icon(Icons.ios_share_outlined, size: 18),
+                    SizedBox(width: 10),
+                    Text('Share via Link'),
+                  ]),
+                ),
+                PopupMenuItem(
+                  value: 'import_link',
+                  child: Row(children: [
+                    Icon(Icons.link, size: 18),
+                    SizedBox(width: 10),
+                    Text('Import from Link'),
+                  ]),
+                ),
+              ],
+            ),
+          ],
           bottom: hasChunks
               ? PreferredSize(
                   preferredSize: const Size.fromHeight(26),

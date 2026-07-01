@@ -15,7 +15,9 @@ import '../repositories/chat_message_repository.dart';
 import '../repositories/chat_repository.dart';
 import '../repositories/chapter_repository.dart';
 import '../repositories/subject_repository.dart';
+import '../services/auth_service.dart';
 import '../services/chat_ai_service.dart';
+import '../services/cloud_sync_service.dart';
 import '../services/connectivity_service.dart';
 import '../services/tts_service.dart';
 import '../models/app_exception.dart';
@@ -418,6 +420,119 @@ class _ChatScreenState extends State<ChatScreen> {
     await _loadAllChats();
   }
 
+  Future<void> _shareChat() async {
+    if (_currentChat == null || _isTemporary) return;
+    if (!AuthService.instance.isLoggedIn) {
+      AppFeedback.showToast(context, 'Sign in to share chats');
+      return;
+    }
+    if (!ConnectivityService.instance.isOnline) {
+      AppFeedback.showToast(context, 'You are offline');
+      return;
+    }
+    try {
+      final result = await CloudSyncService.instance.shareChatLink(_currentChat!.id);
+      final url = result['url'] as String? ?? '';
+      if (!mounted) return;
+      _showShareLinkDialog(url);
+    } catch (e) {
+      if (mounted) AppFeedback.showToast(context, 'Failed to create share link');
+    }
+  }
+
+  void _showShareLinkDialog(String url) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Share Chat'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'This link lets others join your chat.\nExpires in 10 minutes.',
+              style: TextStyle(fontSize: 13),
+            ),
+            const SizedBox(height: 14),
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: Theme.of(ctx).colorScheme.surfaceContainer,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: SelectableText(
+                url,
+                style: const TextStyle(fontSize: 12, fontFamily: 'monospace'),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Close'),
+          ),
+          FilledButton.icon(
+            icon: const Icon(Icons.copy, size: 16),
+            label: const Text('Copy'),
+            onPressed: () {
+              Clipboard.setData(ClipboardData(text: url));
+              Navigator.pop(ctx);
+              AppFeedback.showToast(context, 'Link copied');
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showJoinChatDialog() {
+    final ctrl = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Join Chat'),
+        content: TextField(
+          controller: ctrl,
+          autofocus: true,
+          decoration: const InputDecoration(
+            hintText: 'Paste share link or token',
+            prefixIcon: Icon(Icons.link),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () async {
+              final raw = ctrl.text.trim();
+              if (raw.isEmpty) return;
+              Navigator.pop(ctx);
+              // Extract token from URL if needed
+              final token = raw.contains('/') ? raw.split('/').last : raw;
+              try {
+                final data = await CloudSyncService.instance.joinChatViaToken(token);
+                final localId = data['localId'] as String? ?? data['_id'] as String? ?? '';
+                if (!mounted) return;
+                AppFeedback.showToast(context, 'Joined chat successfully');
+                await _loadAllChats();
+                if (localId.isNotEmpty) {
+                  final joined = _allChats.where((c) => c.id == localId).firstOrNull;
+                  if (joined != null) _loadChat(joined);
+                }
+              } catch (e) {
+                if (mounted) AppFeedback.showToast(context, 'Invalid or expired link');
+              }
+            },
+            child: const Text('Join'),
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<void> _renameChat() async {
     if (_currentChat == null) return;
     final ctrl = TextEditingController(text: _currentChat!.name);
@@ -653,6 +768,17 @@ class _ChatScreenState extends State<ChatScreen> {
         ),
         centerTitle: true,
         actions: [
+          if (_currentChat != null && !_isTemporary)
+            IconButton(
+              icon: const Icon(Icons.ios_share_outlined),
+              tooltip: 'Share Chat',
+              onPressed: _shareChat,
+            ),
+          IconButton(
+            icon: const Icon(Icons.group_add_outlined),
+            tooltip: 'Join Chat',
+            onPressed: _showJoinChatDialog,
+          ),
           IconButton(
             icon: const Icon(Icons.add_comment_outlined),
             tooltip: 'New Chat',

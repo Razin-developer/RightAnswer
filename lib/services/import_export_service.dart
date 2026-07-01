@@ -212,6 +212,158 @@ class ImportExportService {
 
     return (subjects: importedSubjects, chapters: importedChapters);
   }
+
+  // ── Per-subject / per-chapter export to bytes ─────────────────────────────
+
+  Future<List<int>> exportSubjectToBytes(String subjectId) async {
+    final subject = await _subjectRepo.getById(subjectId);
+    if (subject == null) throw const _ExportException('Subject not found');
+
+    final archive = Archive();
+    final chapters = await _chapterRepo.getBySubject(subjectId);
+    final chapterMaps = <Map<String, dynamic>>[];
+
+    for (final chapter in chapters) {
+      chapterMaps.add(chapter.toMap());
+      final chunks = await _chunkRepo.getByChapter(chapter.id);
+      if (chunks.isNotEmpty) {
+        final chunksBytes = utf8.encode(jsonEncode(chunks.map((c) => c.toMap()).toList()));
+        archive.addFile(ArchiveFile('chunks/${chapter.id}.json', chunksBytes.length, chunksBytes));
+      }
+    }
+
+    final manifest = {
+      'version': _version,
+      'exportedAt': DateTime.now().toIso8601String(),
+      'subjects': [{...subject.toMap(), 'chapters': chapterMaps}],
+    };
+    final manifestBytes = utf8.encode(jsonEncode(manifest));
+    archive.addFile(ArchiveFile('manifest.json', manifestBytes.length, manifestBytes));
+
+    final zipBytes = ZipEncoder().encode(archive);
+    if (zipBytes == null) throw const _ExportException('Failed to create archive');
+    return zipBytes;
+  }
+
+  Future<List<int>> exportChapterToBytes(String chapterId, String subjectId) async {
+    final subject = await _subjectRepo.getById(subjectId);
+    final chapter = await _chapterRepo.getById(chapterId);
+    if (chapter == null) throw const _ExportException('Chapter not found');
+
+    final archive = Archive();
+    final chunks = await _chunkRepo.getByChapter(chapterId);
+    if (chunks.isNotEmpty) {
+      final chunksBytes = utf8.encode(jsonEncode(chunks.map((c) => c.toMap()).toList()));
+      archive.addFile(ArchiveFile('chunks/$chapterId.json', chunksBytes.length, chunksBytes));
+    }
+
+    final manifest = {
+      'version': _version,
+      'exportedAt': DateTime.now().toIso8601String(),
+      'subjects': [
+        {
+          ...?subject?.toMap(),
+          'id': subjectId,
+          'name': subject?.name ?? 'Imported Subject',
+          'chapters': [chapter.toMap()],
+        }
+      ],
+    };
+    final manifestBytes = utf8.encode(jsonEncode(manifest));
+    archive.addFile(ArchiveFile('manifest.json', manifestBytes.length, manifestBytes));
+
+    final zipBytes = ZipEncoder().encode(archive);
+    if (zipBytes == null) throw const _ExportException('Failed to create archive');
+    return zipBytes;
+  }
+
+  /// Import from raw ZIP bytes (used when downloading from a share link).
+  Future<({int subjects, int chapters})> importFromBytes(List<int> bytes) async {
+    final Archive archive;
+    try {
+      archive = ZipDecoder().decodeBytes(bytes);
+    } catch (_) {
+      throw const ImportException('This file is not a valid .zip archive');
+    }
+
+    ArchiveFile? manifestFile;
+    for (final f in archive) {
+      if (f.name == 'manifest.json') { manifestFile = f; break; }
+    }
+    if (manifestFile == null) {
+      throw const ImportException('This file is not a valid RightAnswer backup');
+    }
+
+    final Map<String, dynamic> manifest;
+    try {
+      manifest = jsonDecode(utf8.decode(manifestFile.content as List<int>)) as Map<String, dynamic>;
+    } catch (_) {
+      throw const ImportException('Backup file is corrupted');
+    }
+
+    if (manifest['version'] != _version) {
+      throw const ImportException('Backup version is not supported');
+    }
+
+    final subjectsList = manifest['subjects'];
+    if (subjectsList == null || subjectsList is! List) {
+      throw const ImportException('Backup file is corrupted');
+    }
+
+    final chunkMap = <String, List<Map<String, dynamic>>>{};
+    for (final file in archive) {
+      if (file.name.startsWith('chunks/') && file.name.endsWith('.json')) {
+        final chapterId = file.name.replaceFirst('chunks/', '').replaceFirst('.json', '');
+        try {
+          final list = jsonDecode(utf8.decode(file.content as List<int>)) as List<dynamic>;
+          chunkMap[chapterId] = list.cast<Map<String, dynamic>>();
+        } catch (_) {}
+      }
+    }
+
+    var importedSubjects = 0;
+    var importedChapters = 0;
+    const uuid = Uuid();
+
+    for (final subjectData in subjectsList) {
+      final sm = subjectData as Map<String, dynamic>;
+      final newSubjectId = uuid.v4();
+      final subject = Subject(
+        id: newSubjectId,
+        name: (sm['name'] as String?) ?? 'Imported Subject',
+        createdAt: DateTime.tryParse(sm['createdAt'] as String? ?? '') ?? DateTime.now(),
+      );
+      await _subjectRepo.insert(subject);
+      importedSubjects++;
+
+      for (final chapterData in (sm['chapters'] as List<dynamic>? ?? [])) {
+        final cm = chapterData as Map<String, dynamic>;
+        final oldChapterId = cm['id'] as String? ?? '';
+        final newChapterId = uuid.v4();
+        await _chapterRepo.insert(Chapter(
+          id: newChapterId,
+          subjectId: newSubjectId,
+          title: (cm['title'] as String?) ?? 'Imported Chapter',
+          className: (cm['className'] as String?) ?? 'General',
+          rawContent: (cm['rawContent'] as String?) ?? '',
+          createdAt: DateTime.tryParse(cm['createdAt'] as String? ?? '') ?? DateTime.now(),
+        ));
+        importedChapters++;
+        final chunks = chunkMap[oldChapterId] ?? [];
+        if (chunks.isNotEmpty) {
+          await _chunkRepo.insertAll(chunks.map((c) => Chunk(
+            id: uuid.v4(),
+            chapterId: newChapterId,
+            chunkIndex: (c['chunkIndex'] as int?) ?? 0,
+            text: (c['text'] as String?) ?? '',
+            page: c['page'] as int?,
+            createdAt: DateTime.tryParse(c['createdAt'] as String? ?? '') ?? DateTime.now(),
+          )).toList());
+        }
+      }
+    }
+    return (subjects: importedSubjects, chapters: importedChapters);
+  }
 }
 
 class ImportException implements Exception {
