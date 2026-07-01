@@ -52,6 +52,8 @@ dependencies:
   archive: ^3.6.1
   file_picker: ^8.1.7
   share_plus: ^10.1.4
+  google_mlkit_text_recognition: ^0.13.1
+  pdfx: ^2.9.0
 
 dev_dependencies:
   flutter_test:

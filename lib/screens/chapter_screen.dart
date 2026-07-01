@@ -19,6 +19,7 @@ import '../services/connectivity_service.dart';
 import '../services/notification_service.dart';
 import '../services/openai_service.dart';
 import '../services/queue_service.dart';
+import '../services/pdf_import_service.dart';
 import '../services/retrieval_service.dart';
 import '../widgets/app_feedback.dart';
 import '../widgets/loading_overlay.dart';
@@ -54,6 +55,7 @@ class _ChapterScreenState extends State<ChapterScreen> {
   bool _loading = false;
   bool _processingChunks = false;
   bool _extractingImages = false;
+  bool _importingPdf = false;
   bool _editingContent = false;
   String _statusMessage = '';
   List<String> _sourceImagePaths = [];
@@ -193,6 +195,44 @@ class _ChapterScreenState extends State<ChapterScreen> {
       if (mounted) {
         setState(() => _extractingImages = false);
       }
+    }
+  }
+
+  Future<void> _importFromPdf() async {
+    final path = await PdfImportService.instance.pickPdfPath();
+    if (path == null || !mounted) return;
+
+    setState(() {
+      _importingPdf = true;
+      _statusMessage = 'Opening PDF…';
+    });
+
+    try {
+      final result = await PdfImportService.instance.extractText(
+        path,
+        onStatus: (s) {
+          if (mounted) setState(() => _statusMessage = s);
+        },
+      );
+
+      if (!mounted) return;
+
+      final existing = _contentCtrl.text.trim();
+      _contentCtrl.text = existing.isEmpty
+          ? result.text
+          : '$existing\n\n${result.text}';
+
+      setState(() {
+        _editingContent = true;
+        _statusMessage = result.truncated
+            ? 'Imported first 60 pages of ${result.pageCount}-page PDF via OCR'
+            : 'Imported ${result.pageCount} PDF page(s) via OCR';
+      });
+      AppFeedback.showToast(context, 'PDF content added to editor');
+    } catch (e) {
+      if (mounted) await AppFeedback.showErrorDialog(context, e);
+    } finally {
+      if (mounted) setState(() => _importingPdf = false);
     }
   }
 
@@ -727,7 +767,7 @@ class _ChapterScreenState extends State<ChapterScreen> {
                       ),
                       const SizedBox(height: 6),
                       Text(
-                        'Take photos or choose textbook images, then pull their chapter text into this editor.',
+                        'Import textbook pages via camera, gallery photos, or a PDF file. Text is extracted and added to the editor.',
                         style: TextStyle(
                           fontSize: 12,
                           height: 1.5,
@@ -760,6 +800,24 @@ class _ChapterScreenState extends State<ChapterScreen> {
                               size: 16,
                             ),
                             label: const Text('Photos'),
+                          ),
+                          OutlinedButton.icon(
+                            onPressed: (_extractingImages || _importingPdf)
+                                ? null
+                                : _importFromPdf,
+                            icon: _importingPdf
+                                ? const SizedBox(
+                                    width: 14,
+                                    height: 14,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                    ),
+                                  )
+                                : const Icon(
+                                    Icons.picture_as_pdf_outlined,
+                                    size: 16,
+                                  ),
+                            label: Text(_importingPdf ? 'Scanning…' : 'PDF'),
                           ),
                           FilledButton.icon(
                             onPressed: _extractingImages
@@ -799,18 +857,34 @@ class _ChapterScreenState extends State<ChapterScreen> {
                               final path = _sourceImagePaths[index];
                               return Stack(
                                 children: [
-                                  ClipRRect(
-                                    borderRadius: BorderRadius.circular(12),
-                                    child: Image.file(
-                                      File(path),
-                                      width: 82,
-                                      height: 82,
-                                      fit: BoxFit.cover,
+                                  GestureDetector(
+                                    onTap: () => Navigator.push(
+                                      context,
+                                      MaterialPageRoute(
+                                        builder: (_) => _ImageFullscreenPage(
+                                          imagePath: path,
+                                          caption:
+                                              'Image ${index + 1} of ${_sourceImagePaths.length}',
+                                          onRemove: _extractingImages
+                                              ? null
+                                              : () =>
+                                                  _removeTextbookImage(path),
+                                        ),
+                                      ),
+                                    ),
+                                    child: ClipRRect(
+                                      borderRadius: BorderRadius.circular(12),
+                                      child: Image.file(
+                                        File(path),
+                                        width: 82,
+                                        height: 82,
+                                        fit: BoxFit.cover,
+                                      ),
                                     ),
                                   ),
                                   Positioned(
-                                    top: 6,
-                                    right: 6,
+                                    top: 4,
+                                    right: 4,
                                     child: GestureDetector(
                                       onTap: _extractingImages
                                           ? null
@@ -1172,6 +1246,54 @@ class _ChapterScreenState extends State<ChapterScreen> {
                 const SizedBox(height: 16),
               ],
             ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ── Image Fullscreen ─────────────────────────────────────────────────────────
+
+class _ImageFullscreenPage extends StatelessWidget {
+  final String imagePath;
+  final String caption;
+  final VoidCallback? onRemove;
+
+  const _ImageFullscreenPage({
+    required this.imagePath,
+    required this.caption,
+    this.onRemove,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      appBar: AppBar(
+        backgroundColor: Colors.black,
+        foregroundColor: Colors.white,
+        title: Text(caption, style: const TextStyle(fontSize: 14)),
+        actions: [
+          if (onRemove != null)
+            IconButton(
+              icon: const Icon(Icons.delete_outline, color: Colors.redAccent),
+              tooltip: 'Remove',
+              onPressed: () {
+                Navigator.pop(context);
+                onRemove!();
+              },
+            ),
+        ],
+      ),
+      body: Center(
+        child: InteractiveViewer(
+          panEnabled: true,
+          minScale: 0.5,
+          maxScale: 4.0,
+          child: Image.file(
+            File(imagePath),
+            fit: BoxFit.contain,
           ),
         ),
       ),

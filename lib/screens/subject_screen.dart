@@ -4,6 +4,9 @@ import '../models/subject.dart';
 import '../models/chapter.dart';
 import '../repositories/chapter_repository.dart';
 import '../repositories/chunk_repository.dart';
+import '../services/pdf_import_service.dart';
+import '../widgets/app_feedback.dart';
+import '../widgets/loading_overlay.dart';
 import 'chapter_screen.dart';
 
 class SubjectScreen extends StatefulWidget {
@@ -21,6 +24,8 @@ class _SubjectScreenState extends State<SubjectScreen> {
   List<Chapter> _chapters = [];
   Map<String, int> _chunkCounts = {};
   bool _loading = true;
+  bool _importingPdf = false;
+  String _importStatus = '';
 
   @override
   void initState() {
@@ -41,6 +46,112 @@ class _SubjectScreenState extends State<SubjectScreen> {
         _loading = false;
       });
     }
+  }
+
+  Future<void> _importFromPdf() async {
+    final path = await PdfImportService.instance.pickPdfPath();
+    if (path == null || !mounted) return;
+
+    setState(() {
+      _importingPdf = true;
+      _importStatus = 'Opening PDF…';
+    });
+
+    try {
+      final result = await PdfImportService.instance.extractText(
+        path,
+        onStatus: (s) {
+          if (mounted) setState(() => _importStatus = s);
+        },
+        maxPages: 150,
+      );
+
+      if (!mounted) return;
+
+      setState(() => _importStatus = 'Detecting chapters…');
+      final detected = PdfImportService.instance.detectChapters(result.text);
+
+      if (!mounted) return;
+
+      // Show confirmation / chapter-naming dialog
+      final toCreate = await _showImportDialog(
+        detected: detected,
+        pageCount: result.pageCount,
+        fullText: result.text,
+        truncated: result.truncated,
+      );
+      if (toCreate == null || !mounted) return;
+
+      setState(() => _importStatus = 'Creating chapters…');
+      const uuid = Uuid();
+      for (int i = 0; i < toCreate.length; i++) {
+        setState(() =>
+            _importStatus = 'Creating chapter ${i + 1} of ${toCreate.length}…');
+        final ch = toCreate[i];
+        await _repo.insert(
+          Chapter(
+            id: uuid.v4(),
+            subjectId: widget.subject.id,
+            title: ch.title,
+            className: 'General',
+            rawContent: ch.content,
+            createdAt: DateTime.now(),
+          ),
+        );
+      }
+
+      AppFeedback.showSuccessToast(
+        context,
+        'Created ${toCreate.length} chapter(s) — open each to process content',
+      );
+      _load();
+    } catch (e) {
+      if (mounted) await AppFeedback.showErrorDialog(context, e);
+    } finally {
+      if (mounted) setState(() { _importingPdf = false; _importStatus = ''; });
+    }
+  }
+
+  Future<List<PdfChapter>?> _showImportDialog({
+    required List<PdfChapter> detected,
+    required int pageCount,
+    required String fullText,
+    required bool truncated,
+  }) async {
+    if (detected.isEmpty) {
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('No Chapter Structure Found'),
+          content: Text(
+            'We scanned $pageCount page(s) but couldn\'t find chapter headings.\n\n'
+            '${truncated ? 'Note: only the first 150 pages were scanned.\n\n' : ''}'
+            'Create a single chapter with all the extracted text?',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Create Chapter'),
+            ),
+          ],
+        ),
+      );
+      if (ok != true) return null;
+      return [PdfChapter(title: 'Chapter 1', content: fullText)];
+    }
+
+    return showDialog<List<PdfChapter>>(
+      context: context,
+      builder: (ctx) => _ImportChaptersDialog(
+        chapters: detected,
+        pageCount: pageCount,
+        truncated: truncated,
+      ),
+    );
   }
 
   Future<void> _addChapter() async {
@@ -108,7 +219,10 @@ class _SubjectScreenState extends State<SubjectScreen> {
     final theme = Theme.of(context);
     final readyCount = _chunkCounts.values.where((v) => v > 0).length;
 
-    return Scaffold(
+    return LoadingOverlay(
+      isLoading: _importingPdf,
+      message: _importStatus.isEmpty ? 'Importing PDF…' : _importStatus,
+      child: Scaffold(
       appBar: AppBar(
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -127,6 +241,26 @@ class _SubjectScreenState extends State<SubjectScreen> {
           ],
         ),
         centerTitle: false,
+        actions: [
+          PopupMenuButton<String>(
+            icon: const Icon(Icons.more_vert),
+            onSelected: (v) {
+              if (v == 'import_pdf') _importFromPdf();
+            },
+            itemBuilder: (_) => const [
+              PopupMenuItem(
+                value: 'import_pdf',
+                child: Row(
+                  children: [
+                    Icon(Icons.picture_as_pdf_outlined, size: 18),
+                    SizedBox(width: 10),
+                    Text('Import from PDF'),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ],
         bottom: PreferredSize(
           preferredSize: const Size.fromHeight(1),
           child: Divider(height: 1, color: theme.dividerColor),
@@ -150,6 +284,7 @@ class _SubjectScreenState extends State<SubjectScreen> {
         icon: const Icon(Icons.add),
         label: const Text('Add Chapter'),
       ),
+    ),
     );
   }
 
@@ -286,6 +421,109 @@ class _SubjectScreenState extends State<SubjectScreen> {
           ),
         ),
       ),
+    );
+  }
+}
+
+// ── Import Chapters Dialog ────────────────────────────────────────────────────
+
+class _ImportChaptersDialog extends StatefulWidget {
+  final List<PdfChapter> chapters;
+  final int pageCount;
+  final bool truncated;
+
+  const _ImportChaptersDialog({
+    required this.chapters,
+    required this.pageCount,
+    required this.truncated,
+  });
+
+  @override
+  State<_ImportChaptersDialog> createState() => _ImportChaptersDialogState();
+}
+
+class _ImportChaptersDialogState extends State<_ImportChaptersDialog> {
+  late final List<TextEditingController> _controllers;
+
+  @override
+  void initState() {
+    super.initState();
+    _controllers = widget.chapters
+        .map((ch) => TextEditingController(text: ch.title))
+        .toList();
+  }
+
+  @override
+  void dispose() {
+    for (final c in _controllers) {
+      c.dispose();
+    }
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text('${widget.chapters.length} Chapters Detected'),
+      content: SizedBox(
+        width: double.maxFinite,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Scanned ${widget.pageCount} page(s).'
+              '${widget.truncated ? ' (first 150 pages)' : ''}'
+              ' Review and rename chapters below.',
+              style: const TextStyle(fontSize: 12),
+            ),
+            const SizedBox(height: 12),
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: 300),
+              child: ListView.builder(
+                shrinkWrap: true,
+                itemCount: widget.chapters.length,
+                itemBuilder: (ctx, i) => Padding(
+                  padding: const EdgeInsets.only(bottom: 10),
+                  child: TextField(
+                    controller: _controllers[i],
+                    decoration: InputDecoration(
+                      labelText: 'Chapter ${i + 1}',
+                      border: const OutlineInputBorder(),
+                      isDense: true,
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 10,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: () {
+            final result = List.generate(
+              widget.chapters.length,
+              (i) => PdfChapter(
+                title: _controllers[i].text.trim().isEmpty
+                    ? 'Chapter ${i + 1}'
+                    : _controllers[i].text.trim(),
+                content: widget.chapters[i].content,
+              ),
+            );
+            Navigator.pop(context, result);
+          },
+          child: const Text('Create All'),
+        ),
+      ],
     );
   }
 }
