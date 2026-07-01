@@ -217,6 +217,7 @@ class _ChatScreenState extends State<ChatScreen> {
                         content: event.content,
                         tokenCount: event.inputTokens + event.outputTokens,
                         cost: event.cost,
+                        sourceChunks: event.isDone ? event.sourceChunks : null,
                       )
                     : message,
               )
@@ -316,6 +317,7 @@ class _ChatScreenState extends State<ChatScreen> {
                         content: event.content,
                         tokenCount: event.inputTokens + event.outputTokens,
                         cost: event.cost,
+                        sourceChunks: event.isDone ? event.sourceChunks : null,
                       )
                     : message,
               )
@@ -722,6 +724,28 @@ class _ChatScreenState extends State<ChatScreen> {
                         onRegenerate: msg.isUser
                             ? null
                             : () => _regenerate(msg),
+                        onFullscreen: msg.isUser
+                            ? null
+                            : () => Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  fullscreenDialog: true,
+                                  builder: (_) => _FullscreenResponseScreen(
+                                    content: msg.content,
+                                    onCopy: () => _copyText(msg.content),
+                                  ),
+                                ),
+                              ),
+                        onSources: msg.isUser || msg.sourceChunks.isEmpty
+                            ? null
+                            : () => showModalBottomSheet(
+                                context: context,
+                                isScrollControlled: true,
+                                backgroundColor: Colors.transparent,
+                                builder: (_) => _ResourcesSheet(
+                                  chunks: msg.sourceChunks,
+                                ),
+                              ),
                       );
                     },
                   ),
@@ -750,7 +774,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
 // ── Chat Drawer ───────────────────────────────────────────────────────────────
 
-class _ChatDrawer extends StatelessWidget {
+class _ChatDrawer extends StatefulWidget {
   final List<Chat> chats;
   final String? currentChatId;
   final void Function(Chat) onSelectChat;
@@ -770,100 +794,201 @@ class _ChatDrawer extends StatelessWidget {
   });
 
   @override
+  State<_ChatDrawer> createState() => _ChatDrawerState();
+}
+
+class _ChatDrawerState extends State<_ChatDrawer> {
+  final _searchCtrl = TextEditingController();
+  String _query = '';
+
+  @override
+  void dispose() {
+    _searchCtrl.dispose();
+    super.dispose();
+  }
+
+  List<Chat> get _filtered {
+    if (_query.isEmpty) return widget.chats;
+    final q = _query.toLowerCase();
+    return widget.chats.where((c) =>
+      c.name.toLowerCase().contains(q) ||
+      (c.subjectName?.toLowerCase().contains(q) ?? false),
+    ).toList();
+  }
+
+  Map<String, List<Chat>> _groupByTime(List<Chat> chats) {
+    final now = DateTime.now();
+    final todayStart = DateTime(now.year, now.month, now.day);
+    final yesterdayStart = todayStart.subtract(const Duration(days: 1));
+    final weekStart = todayStart.subtract(const Duration(days: 7));
+
+    final today = <Chat>[];
+    final yesterday = <Chat>[];
+    final thisWeek = <Chat>[];
+    final older = <Chat>[];
+
+    for (final c in chats) {
+      if (!c.updatedAt.isBefore(todayStart)) {
+        today.add(c);
+      } else if (!c.updatedAt.isBefore(yesterdayStart)) {
+        yesterday.add(c);
+      } else if (!c.updatedAt.isBefore(weekStart)) {
+        thisWeek.add(c);
+      } else {
+        older.add(c);
+      }
+    }
+
+    return {
+      if (today.isNotEmpty) 'Today': today,
+      if (yesterday.isNotEmpty) 'Yesterday': yesterday,
+      if (thisWeek.isNotEmpty) 'This Week': thisWeek,
+      if (older.isNotEmpty) 'Older': older,
+    };
+  }
+
+  @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-
-    final Map<String, List<Chat>> grouped = {};
-    for (final c in chats) {
-      final key = c.subjectName ?? 'Other';
-      grouped.putIfAbsent(key, () => []).add(c);
-    }
-    final groups = grouped.entries.toList()
-      ..sort(
-        (a, b) => a.key == 'Other'
-            ? 1
-            : b.key == 'Other'
-            ? -1
-            : a.key.compareTo(b.key),
-      );
+    final filtered = _filtered;
+    final groups = _groupByTime(filtered);
 
     return Drawer(
       child: SafeArea(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // Header
             Padding(
-              padding: const EdgeInsets.fromLTRB(16, 20, 16, 12),
+              padding: const EdgeInsets.fromLTRB(16, 16, 8, 8),
               child: Row(
                 children: [
-                  const AppLogo(size: 32),
-                  const SizedBox(width: 10),
+                  const AppLogo(size: 28),
+                  const SizedBox(width: 8),
                   Text(
                     'RightAnswer',
                     style: TextStyle(
-                      fontSize: 16,
+                      fontSize: 15,
                       fontWeight: FontWeight.w700,
                       color: theme.colorScheme.onSurface,
                     ),
                   ),
+                  const Spacer(),
+                  IconButton(
+                    icon: const Icon(Icons.add_comment_outlined, size: 20),
+                    tooltip: 'New Chat',
+                    color: theme.colorScheme.primary,
+                    onPressed: widget.onNewChat,
+                  ),
                 ],
               ),
             ),
+            // Search
             Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12),
-              child: Column(
-                children: [
-                  _DrawerBtn(
-                    icon: Icons.add_comment_outlined,
-                    label: 'New Chat',
-                    onTap: onNewChat,
+              padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+              child: TextField(
+                controller: _searchCtrl,
+                onChanged: (v) => setState(() => _query = v),
+                decoration: InputDecoration(
+                  hintText: 'Search chats',
+                  hintStyle: TextStyle(
+                    fontSize: 13,
+                    color: theme.colorScheme.onSurface.withValues(alpha: 0.4),
                   ),
-                  const SizedBox(height: 6),
-                  _DrawerBtn(
-                    icon: Icons.bolt_rounded,
-                    label: 'Temporary Chat',
-                    isSecondary: true,
-                    onTap: onTempChat,
+                  prefixIcon: Icon(
+                    Icons.search_rounded,
+                    size: 18,
+                    color: theme.colorScheme.onSurface.withValues(alpha: 0.4),
                   ),
-                ],
+                  suffixIcon: _query.isNotEmpty
+                      ? IconButton(
+                          icon: const Icon(Icons.close_rounded, size: 16),
+                          onPressed: () {
+                            _searchCtrl.clear();
+                            setState(() => _query = '');
+                          },
+                        )
+                      : null,
+                  filled: true,
+                  fillColor: theme.colorScheme.surfaceContainerHighest,
+                  contentPadding: const EdgeInsets.symmetric(vertical: 8),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide.none,
+                  ),
+                  isDense: true,
+                ),
               ),
             ),
-            Divider(
-              height: 24,
-              indent: 12,
-              endIndent: 12,
-              color: theme.dividerColor,
-            ),
-            Expanded(
-              child: chats.isEmpty
-                  ? Padding(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 16,
-                        vertical: 8,
+            // Temp chat row
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 0, 12, 6),
+              child: InkWell(
+                onTap: widget.onTempChat,
+                borderRadius: BorderRadius.circular(8),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+                  child: Row(
+                    children: [
+                      Icon(
+                        Icons.bolt_rounded,
+                        size: 16,
+                        color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
                       ),
-                      child: Text(
-                        'No chats yet',
+                      const SizedBox(width: 8),
+                      Text(
+                        'Temporary Chat',
                         style: TextStyle(
                           fontSize: 13,
-                          color: theme.colorScheme.onSurface.withValues(
-                            alpha: 0.4,
-                          ),
+                          color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+            Divider(height: 1, indent: 12, endIndent: 12, color: theme.dividerColor),
+            // Chat list
+            Expanded(
+              child: filtered.isEmpty
+                  ? Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Text(
+                        _query.isNotEmpty
+                            ? 'No chats matching "$_query"'
+                            : 'No chats yet',
+                        style: TextStyle(
+                          fontSize: 13,
+                          color: theme.colorScheme.onSurface.withValues(alpha: 0.4),
                         ),
                       ),
                     )
-                  : ListView.builder(
-                      padding: const EdgeInsets.only(bottom: 8),
-                      itemCount: groups.length,
-                      itemBuilder: (ctx, gi) {
-                        final group = groups[gi];
-                        return _ChatGroup(
-                          label: group.key,
-                          chats: group.value,
-                          currentChatId: currentChatId,
-                          onSelect: onSelectChat,
-                          onDelete: onDeleteChat,
-                        );
-                      },
+                  : ListView(
+                      padding: const EdgeInsets.only(top: 4, bottom: 8),
+                      children: [
+                        for (final entry in groups.entries) ...[
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+                            child: Text(
+                              entry.key.toUpperCase(),
+                              style: TextStyle(
+                                fontSize: 10,
+                                fontWeight: FontWeight.w800,
+                                letterSpacing: 0.8,
+                                color: theme.colorScheme.onSurface.withValues(alpha: 0.35),
+                              ),
+                            ),
+                          ),
+                          for (final chat in entry.value)
+                            _ChatTile(
+                              chat: chat,
+                              isSelected: chat.id == widget.currentChatId,
+                              onSelect: () => widget.onSelectChat(chat),
+                              onDelete: () => widget.onDeleteChat(chat.id),
+                            ),
+                        ],
+                      ],
                     ),
             ),
             Divider(height: 1, color: theme.dividerColor),
@@ -875,112 +1000,11 @@ class _ChatDrawer extends StatelessWidget {
                 color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
               ),
               title: const Text('Settings', style: TextStyle(fontSize: 13)),
-              onTap: onSettings,
+              onTap: widget.onSettings,
             ),
           ],
         ),
       ),
-    );
-  }
-}
-
-class _DrawerBtn extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final bool isSecondary;
-  final VoidCallback onTap;
-
-  const _DrawerBtn({
-    required this.icon,
-    required this.label,
-    required this.onTap,
-    this.isSecondary = false,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final color = isSecondary
-        ? theme.colorScheme.onSurface.withValues(alpha: 0.65)
-        : theme.colorScheme.primary;
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(10),
-      child: Container(
-        width: double.infinity,
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
-        decoration: BoxDecoration(
-          color: isSecondary
-              ? theme.colorScheme.surfaceContainerHighest
-              : theme.colorScheme.primary.withValues(alpha: 0.08),
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(
-            color: isSecondary
-                ? theme.dividerColor
-                : theme.colorScheme.primary.withValues(alpha: 0.2),
-          ),
-        ),
-        child: Row(
-          children: [
-            Icon(icon, size: 16, color: color),
-            const SizedBox(width: 10),
-            Text(
-              label,
-              style: TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w600,
-                color: color,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _ChatGroup extends StatelessWidget {
-  final String label;
-  final List<Chat> chats;
-  final String? currentChatId;
-  final void Function(Chat) onSelect;
-  final void Function(String) onDelete;
-
-  const _ChatGroup({
-    required this.label,
-    required this.chats,
-    required this.currentChatId,
-    required this.onSelect,
-    required this.onDelete,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-          child: Text(
-            label.toUpperCase(),
-            style: TextStyle(
-              fontSize: 10,
-              fontWeight: FontWeight.w800,
-              letterSpacing: 0.8,
-              color: theme.colorScheme.onSurface.withValues(alpha: 0.4),
-            ),
-          ),
-        ),
-        ...chats.map(
-          (chat) => _ChatTile(
-            chat: chat,
-            isSelected: chat.id == currentChatId,
-            onSelect: () => onSelect(chat),
-            onDelete: () => onDelete(chat.id),
-          ),
-        ),
-      ],
     );
   }
 }
@@ -1014,18 +1038,42 @@ class _ChatTile extends StatelessWidget {
         ),
         child: Row(
           children: [
-            Expanded(
-              child: Text(
-                chat.name,
-                style: TextStyle(
-                  fontSize: 13,
-                  fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
-                  color: isSelected
-                      ? theme.colorScheme.primary
-                      : theme.colorScheme.onSurface.withValues(alpha: 0.85),
+            if (chat.isTemporary)
+              Padding(
+                padding: const EdgeInsets.only(right: 4),
+                child: Icon(
+                  Icons.bolt_rounded,
+                  size: 12,
+                  color: theme.colorScheme.onSurface.withValues(alpha: 0.35),
                 ),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
+              ),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    chat.name,
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
+                      color: isSelected
+                          ? theme.colorScheme.primary
+                          : theme.colorScheme.onSurface.withValues(alpha: 0.85),
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  if (chat.subjectName != null)
+                    Text(
+                      chat.subjectName!,
+                      style: TextStyle(
+                        fontSize: 10,
+                        color: theme.colorScheme.onSurface.withValues(alpha: 0.4),
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                ],
               ),
             ),
             const SizedBox(width: 4),
@@ -1176,6 +1224,8 @@ class _MessageBubble extends StatelessWidget {
   final VoidCallback onCopy;
   final VoidCallback onRead;
   final VoidCallback? onRegenerate;
+  final VoidCallback? onFullscreen;
+  final VoidCallback? onSources;
 
   const _MessageBubble({
     required this.message,
@@ -1183,7 +1233,49 @@ class _MessageBubble extends StatelessWidget {
     required this.onCopy,
     required this.onRead,
     this.onRegenerate,
+    this.onFullscreen,
+    this.onSources,
   });
+
+  Widget _bubble(ThemeData theme, bool isUser, ChatMessage msg) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        color: isUser
+            ? theme.colorScheme.primary
+            : theme.colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.only(
+          topLeft: const Radius.circular(16),
+          topRight: const Radius.circular(16),
+          bottomLeft: Radius.circular(isUser ? 16 : 4),
+          bottomRight: Radius.circular(isUser ? 4 : 16),
+        ),
+      ),
+      child: isUser
+          ? SelectableText(
+              msg.content,
+              style: const TextStyle(
+                fontSize: 14,
+                color: Colors.white,
+                height: 1.45,
+              ),
+            )
+          : isStreaming && msg.content.trim().isEmpty
+          ? const _TypingIndicator(inline: true)
+          : MarkdownBody(
+              data: msg.content,
+              selectable: true,
+              styleSheet: MarkdownStyleSheet.fromTheme(theme).copyWith(
+                p: const TextStyle(fontSize: 14, height: 1.55),
+                code: TextStyle(
+                  fontSize: 12,
+                  fontFamily: 'monospace',
+                  backgroundColor: theme.colorScheme.surfaceContainerLowest,
+                ),
+              ),
+            ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -1191,97 +1283,89 @@ class _MessageBubble extends StatelessWidget {
     final msg = message;
     final isUser = msg.isUser;
 
-    return Align(
-      alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
-      child: Container(
-        margin: EdgeInsets.only(
-          top: 6,
-          bottom: 2,
-          left: isUser ? 48 : 0,
-          right: isUser ? 0 : 48,
+    final imageWidget = msg.imagePath != null
+        ? Container(
+            margin: const EdgeInsets.only(bottom: 6),
+            width: 200,
+            height: 140,
+            clipBehavior: Clip.antiAlias,
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Image.file(File(msg.imagePath!), fit: BoxFit.cover),
+          )
+        : null;
+
+    if (isUser) {
+      return Align(
+        alignment: Alignment.centerRight,
+        child: Container(
+          margin: const EdgeInsets.only(top: 6, bottom: 2, left: 48),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              if (imageWidget != null) imageWidget,
+              _bubble(theme, true, msg),
+            ],
+          ),
         ),
-        child: Column(
-          crossAxisAlignment: isUser
-              ? CrossAxisAlignment.end
-              : CrossAxisAlignment.start,
-          children: [
-            if (msg.imagePath != null)
-              Container(
-                margin: const EdgeInsets.only(bottom: 6),
-                width: 200,
-                height: 140,
-                clipBehavior: Clip.antiAlias,
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Image.file(File(msg.imagePath!), fit: BoxFit.cover),
-              ),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-              decoration: BoxDecoration(
-                color: isUser
-                    ? theme.colorScheme.primary
-                    : theme.colorScheme.surfaceContainerHighest,
-                borderRadius: BorderRadius.only(
-                  topLeft: const Radius.circular(16),
-                  topRight: const Radius.circular(16),
-                  bottomLeft: Radius.circular(isUser ? 16 : 4),
-                  bottomRight: Radius.circular(isUser ? 4 : 16),
-                ),
-              ),
-              child: isUser
-                  ? SelectableText(
-                      msg.content,
-                      style: const TextStyle(
-                        fontSize: 14,
-                        color: Colors.white,
-                        height: 1.45,
-                      ),
-                    )
-                  : isStreaming && msg.content.trim().isEmpty
-                  ? const _TypingIndicator(inline: true)
-                  : MarkdownBody(
-                      data: msg.content,
-                      selectable: true,
-                      styleSheet: MarkdownStyleSheet.fromTheme(theme).copyWith(
-                        p: const TextStyle(fontSize: 14, height: 1.55),
-                        code: TextStyle(
-                          fontSize: 12,
-                          fontFamily: 'monospace',
-                          backgroundColor:
-                              theme.colorScheme.surfaceContainerLowest,
-                        ),
+      );
+    }
+
+    // AI message — use IntrinsicWidth so the Expanded action row can fill
+    // the same width as the bubble content.
+    final showActions = msg.content.trim().isNotEmpty;
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: Container(
+        margin: const EdgeInsets.only(top: 6, bottom: 2, right: 48),
+        child: IntrinsicWidth(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              if (imageWidget != null) imageWidget,
+              _bubble(theme, false, msg),
+              if (showActions) ...[
+                const SizedBox(height: 6),
+                Row(
+                  children: [
+                    Expanded(
+                      child: _ActionBtn(
+                        icon: Icons.copy_outlined,
+                        label: 'Copy',
+                        onTap: onCopy,
                       ),
                     ),
-            ),
-            if (!isUser && msg.content.trim().isNotEmpty) ...[
-              const SizedBox(height: 4),
-              Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  _ActionBtn(
-                    icon: Icons.copy_outlined,
-                    label: 'Copy',
-                    onTap: onCopy,
-                  ),
-                  const SizedBox(width: 4),
-                  _ActionBtn(
-                    icon: Icons.volume_up_outlined,
-                    label: 'Read',
-                    onTap: onRead,
-                  ),
-                  if (onRegenerate != null) ...[
                     const SizedBox(width: 4),
-                    _ActionBtn(
-                      icon: Icons.refresh_rounded,
-                      label: 'Retry',
-                      onTap: onRegenerate!,
+                    Expanded(
+                      child: _ActionBtn(
+                        icon: Icons.volume_up_outlined,
+                        label: 'Read',
+                        onTap: onRead,
+                      ),
+                    ),
+                    const SizedBox(width: 4),
+                    Expanded(
+                      child: _ActionBtn(
+                        icon: Icons.open_in_full_rounded,
+                        label: 'Full',
+                        onTap: onFullscreen ?? () {},
+                      ),
+                    ),
+                    const SizedBox(width: 4),
+                    Expanded(
+                      child: _ActionBtn(
+                        icon: Icons.menu_book_outlined,
+                        label: 'Sources',
+                        onTap: onSources ?? () {},
+                        isActive: onSources != null,
+                      ),
                     ),
                   ],
-                ],
-              ),
+                ),
+              ],
             ],
-          ],
+          ),
         ),
       ),
     );
@@ -1292,40 +1376,44 @@ class _ActionBtn extends StatelessWidget {
   final IconData icon;
   final String label;
   final VoidCallback onTap;
+  final bool isActive;
 
   const _ActionBtn({
     required this.icon,
     required this.label,
     required this.onTap,
+    this.isActive = false,
   });
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final color = isActive
+        ? theme.colorScheme.primary
+        : theme.colorScheme.onSurface.withValues(alpha: 0.55);
     return GestureDetector(
       onTap: onTap,
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
         decoration: BoxDecoration(
-          color: theme.colorScheme.surfaceContainerHighest,
+          color: isActive
+              ? theme.colorScheme.primary.withValues(alpha: 0.08)
+              : theme.colorScheme.surfaceContainerHighest,
           borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: theme.dividerColor),
+          border: Border.all(
+            color: isActive
+                ? theme.colorScheme.primary.withValues(alpha: 0.3)
+                : theme.dividerColor,
+          ),
         ),
         child: Row(
-          mainAxisSize: MainAxisSize.min,
+          mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(
-              icon,
-              size: 13,
-              color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
-            ),
+            Icon(icon, size: 13, color: color),
             const SizedBox(width: 4),
             Text(
               label,
-              style: TextStyle(
-                fontSize: 11,
-                color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
-              ),
+              style: TextStyle(fontSize: 11, color: color),
             ),
           ],
         ),
@@ -2302,6 +2390,210 @@ class _FullscreenInputScreen extends StatelessWidget {
                 ),
               )
             : const Icon(Icons.arrow_upward_rounded, color: Colors.white),
+      ),
+    );
+  }
+}
+
+// ── Fullscreen Response Screen ────────────────────────────────────────────────
+
+class _FullscreenResponseScreen extends StatelessWidget {
+  final String content;
+  final VoidCallback onCopy;
+
+  const _FullscreenResponseScreen({
+    required this.content,
+    required this.onCopy,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Scaffold(
+      appBar: AppBar(
+        automaticallyImplyLeading: false,
+        title: Text(
+          'Response',
+          style: TextStyle(
+            fontSize: 15,
+            fontWeight: FontWeight.w600,
+            color: theme.colorScheme.onSurface.withValues(alpha: 0.7),
+          ),
+        ),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.copy_outlined, size: 20),
+            tooltip: 'Copy',
+            onPressed: () {
+              onCopy();
+              Navigator.pop(context);
+            },
+          ),
+          IconButton(
+            icon: const Icon(Icons.close_fullscreen_rounded),
+            tooltip: 'Close',
+            onPressed: () => Navigator.pop(context),
+          ),
+          const SizedBox(width: 4),
+        ],
+      ),
+      body: Scrollbar(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(20, 12, 20, 32),
+          child: MarkdownBody(
+            data: content,
+            selectable: true,
+            styleSheet: MarkdownStyleSheet.fromTheme(theme).copyWith(
+              p: const TextStyle(fontSize: 15, height: 1.6),
+              code: TextStyle(
+                fontSize: 13,
+                fontFamily: 'monospace',
+                backgroundColor: theme.colorScheme.surfaceContainerLowest,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ── Resources Sheet ───────────────────────────────────────────────────────────
+
+class _ResourcesSheet extends StatelessWidget {
+  final List<String> chunks;
+
+  const _ResourcesSheet({required this.chunks});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return DraggableScrollableSheet(
+      initialChildSize: 0.6,
+      maxChildSize: 0.92,
+      minChildSize: 0.35,
+      expand: false,
+      builder: (_, scrollCtrl) => Container(
+        decoration: BoxDecoration(
+          color: theme.colorScheme.surface,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Center(
+              child: Container(
+                margin: const EdgeInsets.only(top: 10, bottom: 4),
+                width: 36,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: theme.dividerColor,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 10, 16, 4),
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.menu_book_outlined,
+                    size: 18,
+                    color: theme.colorScheme.primary,
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    'Source Material',
+                    style: theme.textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const Spacer(),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                    decoration: BoxDecoration(
+                      color: theme.colorScheme.primary.withValues(alpha: 0.1),
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Text(
+                      '${chunks.length} excerpt${chunks.length != 1 ? 's' : ''}',
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        color: theme.colorScheme.primary,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 2, 16, 10),
+              child: Text(
+                'Text passages from your study material used to answer this question.',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
+                ),
+              ),
+            ),
+            Divider(height: 1, color: theme.dividerColor),
+            Expanded(
+              child: ListView.separated(
+                controller: scrollCtrl,
+                padding: const EdgeInsets.fromLTRB(12, 12, 12, 24),
+                itemCount: chunks.length,
+                separatorBuilder: (_, __) => const SizedBox(height: 10),
+                itemBuilder: (ctx, i) {
+                  return Container(
+                    padding: const EdgeInsets.all(14),
+                    decoration: BoxDecoration(
+                      color: theme.colorScheme.surfaceContainerHighest,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: theme.dividerColor),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 7,
+                                vertical: 2,
+                              ),
+                              decoration: BoxDecoration(
+                                color: theme.colorScheme.primary.withValues(alpha: 0.1),
+                                borderRadius: BorderRadius.circular(6),
+                              ),
+                              child: Text(
+                                'Excerpt ${i + 1}',
+                                style: TextStyle(
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.w700,
+                                  color: theme.colorScheme.primary,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        SelectableText(
+                          chunks[i],
+                          style: TextStyle(
+                            fontSize: 13,
+                            height: 1.55,
+                            color: theme.colorScheme.onSurface.withValues(alpha: 0.85),
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

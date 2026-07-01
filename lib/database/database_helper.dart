@@ -17,7 +17,7 @@ class DatabaseHelper {
     final path = join(dbPath, 'right_answer.db');
     return openDatabase(
       path,
-      version: 6,
+      version: 7,
       onCreate: _onCreate,
       onUpgrade: _onUpgrade,
     );
@@ -43,6 +43,11 @@ class DatabaseHelper {
     if (oldVersion < 6) {
       await db.execute(
         'ALTER TABLE chat_messages ADD COLUMN responseLanguage TEXT',
+      );
+    }
+    if (oldVersion < 7) {
+      await db.execute(
+        'ALTER TABLE chat_messages ADD COLUMN sourceChunks TEXT',
       );
     }
   }
@@ -160,6 +165,7 @@ class DatabaseHelper {
         reasoningLevel TEXT NOT NULL DEFAULT 'mid',
         tokenCount INTEGER NOT NULL DEFAULT 0,
         cost REAL NOT NULL DEFAULT 0,
+        sourceChunks TEXT,
         createdAt TEXT NOT NULL,
         FOREIGN KEY (chatId) REFERENCES chats(id) ON DELETE CASCADE
       )

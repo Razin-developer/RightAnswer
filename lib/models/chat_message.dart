@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 class ChatMessage {
   final String id;
   final String chatId;
@@ -9,6 +11,7 @@ class ChatMessage {
   final String reasoningLevel; // 'low' | 'mid' | 'high'
   final int tokenCount;
   final double cost;
+  final List<String> sourceChunks;
   final DateTime createdAt;
 
   const ChatMessage({
@@ -22,6 +25,7 @@ class ChatMessage {
     required this.reasoningLevel,
     required this.tokenCount,
     required this.cost,
+    this.sourceChunks = const [],
     required this.createdAt,
   });
 
@@ -38,6 +42,7 @@ class ChatMessage {
     String? reasoningLevel,
     int? tokenCount,
     double? cost,
+    List<String>? sourceChunks,
     DateTime? createdAt,
   }) => ChatMessage(
     id: id ?? this.id,
@@ -50,6 +55,7 @@ class ChatMessage {
     reasoningLevel: reasoningLevel ?? this.reasoningLevel,
     tokenCount: tokenCount ?? this.tokenCount,
     cost: cost ?? this.cost,
+    sourceChunks: sourceChunks ?? this.sourceChunks,
     createdAt: createdAt ?? this.createdAt,
   );
 
@@ -64,6 +70,7 @@ class ChatMessage {
     'reasoningLevel': reasoningLevel,
     'tokenCount': tokenCount,
     'cost': cost,
+    'sourceChunks': sourceChunks.isEmpty ? null : jsonEncode(sourceChunks),
     'createdAt': createdAt.toIso8601String(),
   };
 
@@ -78,6 +85,9 @@ class ChatMessage {
     reasoningLevel: (m['reasoningLevel'] as String?) ?? 'mid',
     tokenCount: (m['tokenCount'] as int?) ?? 0,
     cost: ((m['cost'] as num?)?.toDouble()) ?? 0.0,
+    sourceChunks: m['sourceChunks'] != null
+        ? List<String>.from(jsonDecode(m['sourceChunks'] as String) as List)
+        : [],
     createdAt: DateTime.parse(m['createdAt'] as String),
   );
 }

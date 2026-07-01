@@ -19,12 +19,14 @@ class ChatAIResult {
   final int inputTokens;
   final int outputTokens;
   final double cost;
+  final List<String> sourceChunks;
 
   const ChatAIResult({
     required this.content,
     required this.inputTokens,
     required this.outputTokens,
     required this.cost,
+    this.sourceChunks = const [],
   });
 }
 
@@ -34,6 +36,7 @@ class ChatAIStreamEvent {
   final int inputTokens;
   final int outputTokens;
   final double cost;
+  final List<String> sourceChunks;
 
   const ChatAIStreamEvent({
     required this.content,
@@ -41,6 +44,7 @@ class ChatAIStreamEvent {
     this.inputTokens = 0,
     this.outputTokens = 0,
     this.cost = 0,
+    this.sourceChunks = const [],
   });
 }
 
@@ -82,6 +86,7 @@ class ChatAIService {
           inputTokens: event.inputTokens,
           outputTokens: event.outputTokens,
           cost: event.cost,
+          sourceChunks: event.sourceChunks,
         );
       }
     }
@@ -110,7 +115,7 @@ class ChatAIService {
 
     await _checkDailyLimit();
 
-    final contextBlock = await _buildContextBlock(chapterIds, userContent);
+    final (contextBlock, sourceChunks) = await _buildContextBlock(chapterIds, userContent);
     final systemPrompt = _buildSystemPrompt(
       subjectName,
       contextBlock,
@@ -208,6 +213,7 @@ class ChatAIService {
         inputTokens: inputTokens,
         outputTokens: outputTokens,
         cost: cost,
+        sourceChunks: sourceChunks,
       );
     } on TimeoutException {
       throw AppException.network(
@@ -267,11 +273,11 @@ class ChatAIService {
     }
   }
 
-  Future<String> _buildContextBlock(
+  Future<(String, List<String>)> _buildContextBlock(
     List<String> chapterIds,
     String userContent,
   ) async {
-    if (chapterIds.isEmpty) return '';
+    if (chapterIds.isEmpty) return ('', []);
     final retrieval = RetrievalService(_chunkRepo);
     final chunks = <String>[];
     for (final chapterId in chapterIds) {
@@ -281,9 +287,10 @@ class ChatAIService {
       );
       chunks.addAll(found.map((chunk) => chunk.text));
     }
-    if (chunks.isEmpty) return '';
-    final joined = chunks.take(6).join('\n\n');
-    return '\n\nSTUDY MATERIAL:\n$joined';
+    if (chunks.isEmpty) return ('', []);
+    final taken = chunks.take(6).toList();
+    final joined = taken.join('\n\n');
+    return ('\n\nSTUDY MATERIAL:\n$joined', taken);
   }
 
   String _buildSystemPrompt(
