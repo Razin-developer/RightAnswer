@@ -6,6 +6,7 @@ import Chat from '@/lib/models/Chat';
 import ShareToken from '@/lib/models/ShareToken';
 import { requireAuth } from '@/lib/auth';
 import { corsResponse, corsOptions } from '@/lib/cors';
+import { accessLevel, serializeError } from '@/lib/validation';
 
 export async function OPTIONS() {
   return corsOptions();
@@ -30,24 +31,38 @@ export async function POST(
       chat.ownerId.equals(userObjectId) || chat.members.some((m: mongoose.Types.ObjectId) => m.equals(userObjectId));
     if (!isMember) return corsResponse({ error: 'Forbidden' }, { status: 403 });
 
+    const body = await request.json().catch(() => ({}));
+    const shareAccess = accessLevel(body.accessLevel, 'full');
+
     const token = crypto.randomBytes(16).toString('hex');
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
 
     await ShareToken.create({
       token,
       type: 'chat',
+      accessLevel: shareAccess,
       resourceId: chat._id.toString(),
       creatorId: userObjectId,
       expiresAt,
-      metadata: { title: chat.name, chatId: chat._id.toString(), localId },
+      metadata: {
+        title: chat.name,
+        chatId: chat._id.toString(),
+        localId,
+        resourceLabel: chat.name,
+      },
     });
 
     const baseUrl = process.env.APP_URL || 'http://localhost:3000';
-    const url = `${baseUrl}/api/share/${token}`;
+    const url = `${baseUrl}/share/chat/${token}`;
+    const appUrl = `rightanswer://share/chat/${token}`;
 
-    return corsResponse({ url, expiresAt }, { status: 201 });
+    return corsResponse(
+      { url, appUrl, expiresAt, accessLevel: shareAccess },
+      { status: 201 }
+    );
   } catch (error) {
     console.error('[POST /api/chats/by-local/:localId/share]', error);
-    return corsResponse({ error: 'Internal server error' }, { status: 500 });
+    const formatted = serializeError(error);
+    return corsResponse({ error: formatted.message }, { status: formatted.status });
   }
 }

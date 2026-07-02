@@ -44,6 +44,51 @@
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
+
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW"/>
+
+                <category android:name="android.intent.category.DEFAULT"/>
+                <category android:name="android.intent.category.BROWSABLE"/>
+
+                <data
+                    android:scheme="${appLinkScheme}"
+                    android:host="${appLinkHost}"
+                    android:pathPrefix="/share/" />
+                <data
+                    android:scheme="${appLinkScheme}"
+                    android:host="${appLinkHost}"
+                    android:pathPrefix="/api/share/" />
+            </intent-filter>
+
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW"/>
+
+                <category android:name="android.intent.category.DEFAULT"/>
+                <category android:name="android.intent.category.BROWSABLE"/>
+
+                <data
+                    android:scheme="rightanswer"
+                    android:host="share" />
+                <data
+                    android:scheme="rightanswer"
+                    android:host="chat" />
+                <data
+                    android:scheme="rightanswer"
+                    android:host="subject" />
+                <data
+                    android:scheme="rightanswer"
+                    android:host="chapter" />
+                <data
+                    android:scheme="rightanswer"
+                    android:host="study-plan" />
+                <data
+                    android:scheme="rightanswer"
+                    android:host="exam" />
+                <data
+                    android:scheme="rightanswer"
+                    android:host="quiz" />
+            </intent-filter>
         </activity>
 
         <!-- flutter_local_notifications exact alarm receiver -->

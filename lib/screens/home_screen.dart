@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:uuid/uuid.dart';
+import '../models/chapter.dart';
 import '../models/subject.dart';
 import '../repositories/subject_repository.dart';
 import '../repositories/chapter_repository.dart';
@@ -8,13 +9,17 @@ import '../services/connectivity_service.dart';
 import '../services/import_export_service.dart';
 import '../widgets/app_feedback.dart';
 import '../widgets/app_logo.dart';
+import 'chapter_screen.dart';
 import 'queue_screen.dart';
 import 'subject_screen.dart';
 import 'saved_outputs_screen.dart';
 import 'settings_screen.dart';
 
 class HomeScreen extends StatefulWidget {
-  const HomeScreen({super.key});
+  final String? initialSubjectId;
+  final String? initialChapterId;
+
+  const HomeScreen({super.key, this.initialSubjectId, this.initialChapterId});
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
@@ -31,6 +36,7 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _loading = true;
   bool _exporting = false;
   bool _importing = false;
+  bool _didConsumeInitialLink = false;
 
   @override
   void initState() {
@@ -61,7 +67,10 @@ class _HomeScreenState extends State<HomeScreen> {
     final subjectChunkCounts = <String, int>{};
     for (final s in subjects) {
       final ids = subjectChapters[s.id] ?? [];
-      subjectChunkCounts[s.id] = ids.fold(0, (t, id) => t + (chunkCounts[id] ?? 0));
+      subjectChunkCounts[s.id] = ids.fold(
+        0,
+        (t, id) => t + (chunkCounts[id] ?? 0),
+      );
     }
 
     if (mounted) {
@@ -72,6 +81,56 @@ class _HomeScreenState extends State<HomeScreen> {
         _loading = false;
       });
     }
+
+    if (_didConsumeInitialLink) {
+      return;
+    }
+    final initialSubjectId = widget.initialSubjectId;
+    final initialChapterId = widget.initialChapterId;
+    if (initialSubjectId == null && initialChapterId == null) {
+      _didConsumeInitialLink = true;
+      return;
+    }
+
+    _didConsumeInitialLink = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) {
+        return;
+      }
+
+      Subject? subject;
+      Chapter? chapter;
+
+      if (initialChapterId != null) {
+        chapter = await _chapterRepo.getById(initialChapterId);
+        if (chapter != null) {
+          subject = await _repo.getById(chapter.subjectId);
+        }
+      } else if (initialSubjectId != null) {
+        subject = await _repo.getById(initialSubjectId);
+      }
+
+      if (!mounted) {
+        return;
+      }
+
+      if (subject != null && chapter != null) {
+        await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => ChapterScreen(chapter: chapter!, subject: subject!),
+          ),
+        );
+        return;
+      }
+
+      if (subject != null) {
+        await Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => SubjectScreen(subject: subject!)),
+        );
+      }
+    });
   }
 
   Future<void> _addSubject() async {
@@ -86,13 +145,18 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
     );
     if (name == null || name.isEmpty) return;
-    await _repo.insert(Subject(id: Uuid().v4(), name: name, createdAt: DateTime.now()));
+    await _repo.insert(
+      Subject(id: Uuid().v4(), name: name, createdAt: DateTime.now()),
+    );
     _load();
   }
 
   Future<void> _deleteSubject(Subject s) async {
     final ok = await _confirmDelete(
-        context, 'Delete Subject', '"${s.name}" and all its chapters will be permanently removed.');
+      context,
+      'Delete Subject',
+      '"${s.name}" and all its chapters will be permanently removed.',
+    );
     if (!ok) return;
     await _repo.delete(s.id);
     _load();
@@ -151,29 +215,38 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
         actions: [
           ConnectivityChip(
-            onTap: () => Navigator.push(context,
-                MaterialPageRoute(builder: (_) => const QueueScreen())),
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const QueueScreen()),
+            ),
           ),
           IconButton(
             icon: const Icon(Icons.bookmark_outline),
             tooltip: 'Saved Outputs',
-            onPressed: () => Navigator.push(context,
-                MaterialPageRoute(builder: (_) => const SavedOutputsScreen())),
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const SavedOutputsScreen()),
+            ),
           ),
           IconButton(
             icon: const Icon(Icons.settings_outlined),
             tooltip: 'Settings',
-            onPressed: () => Navigator.push(context,
-                MaterialPageRoute(builder: (_) => const SettingsScreen()))
-                .then((_) => setState(() {})),
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const SettingsScreen()),
+            ).then((_) => setState(() {})),
           ),
           const SizedBox(width: 4),
         ],
       ),
       body: Column(
         children: [
-          _OfflineBanner(onViewQueue: () => Navigator.push(
-              context, MaterialPageRoute(builder: (_) => const QueueScreen()))),
+          _OfflineBanner(
+            onViewQueue: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const QueueScreen()),
+            ),
+          ),
           // Stats bar (only when content exists)
           if (!_loading && _subjects.isNotEmpty)
             _StatsBar(
@@ -185,16 +258,16 @@ class _HomeScreenState extends State<HomeScreen> {
             child: _loading
                 ? const Center(child: CircularProgressIndicator())
                 : _subjects.isEmpty
-                    ? _emptyState(theme)
-                    : RefreshIndicator(
-                        onRefresh: _load,
-                        child: ListView.builder(
-                          padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
-                          itemCount: _subjects.length,
-                          itemBuilder: (ctx, i) =>
-                              _subjectCard(_subjects[i], i, theme),
-                        ),
-                      ),
+                ? _emptyState(theme)
+                : RefreshIndicator(
+                    onRefresh: _load,
+                    child: ListView.builder(
+                      padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+                      itemCount: _subjects.length,
+                      itemBuilder: (ctx, i) =>
+                          _subjectCard(_subjects[i], i, theme),
+                    ),
+                  ),
           ),
           // Import / Export row
           _ImportExportBar(
@@ -214,70 +287,79 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _emptyState(ThemeData theme) => Center(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: 80,
-                height: 80,
-                decoration: BoxDecoration(
-                  color: theme.colorScheme.primaryContainer,
-                  borderRadius: BorderRadius.circular(22),
-                ),
-                child: Icon(Icons.library_books_outlined,
-                    size: 40, color: theme.colorScheme.primary),
-              ),
-              const SizedBox(height: 20),
-              Text(
-                'Your AI Study Assistant',
-                style: theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                'Upload your textbooks. Ask anything. Get instant, accurate answers.',
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  fontSize: 14,
-                  height: 1.5,
-                  color: theme.colorScheme.onSurface.withValues(alpha: 0.55),
-                ),
-              ),
-              const SizedBox(height: 28),
-              // 3-step guide
-              _StepRow(
-                icon: Icons.add_circle_outline,
-                color: theme.colorScheme.primary,
-                text: 'Add a subject',
-              ),
-              const SizedBox(height: 12),
-              _StepRow(
-                icon: Icons.upload_file_outlined,
-                color: const Color(0xFF7C3AED),
-                text: 'Upload chapter content',
-              ),
-              const SizedBox(height: 12),
-              _StepRow(
-                icon: Icons.chat_bubble_outline_rounded,
-                color: const Color(0xFF059669),
-                text: 'Ask the AI — get answers from your material',
-              ),
-              const SizedBox(height: 28),
-              FilledButton.icon(
-                onPressed: _addSubject,
-                icon: const Icon(Icons.add),
-                label: const Text('Add Subject'),
-              ),
-            ],
+    child: SingleChildScrollView(
+      padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 24),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 80,
+            height: 80,
+            decoration: BoxDecoration(
+              color: theme.colorScheme.primaryContainer,
+              borderRadius: BorderRadius.circular(22),
+            ),
+            child: Icon(
+              Icons.library_books_outlined,
+              size: 40,
+              color: theme.colorScheme.primary,
+            ),
           ),
-        ),
-      );
+          const SizedBox(height: 20),
+          Text(
+            'Your AI Study Assistant',
+            style: theme.textTheme.titleLarge?.copyWith(
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Upload your textbooks. Ask anything. Get instant, accurate answers.',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: 14,
+              height: 1.5,
+              color: theme.colorScheme.onSurface.withValues(alpha: 0.55),
+            ),
+          ),
+          const SizedBox(height: 28),
+          // 3-step guide
+          _StepRow(
+            icon: Icons.add_circle_outline,
+            color: theme.colorScheme.primary,
+            text: 'Add a subject',
+          ),
+          const SizedBox(height: 12),
+          _StepRow(
+            icon: Icons.upload_file_outlined,
+            color: const Color(0xFF7C3AED),
+            text: 'Upload chapter content',
+          ),
+          const SizedBox(height: 12),
+          _StepRow(
+            icon: Icons.chat_bubble_outline_rounded,
+            color: const Color(0xFF059669),
+            text: 'Ask the AI — get answers from your material',
+          ),
+          const SizedBox(height: 28),
+          FilledButton.icon(
+            onPressed: _addSubject,
+            icon: const Icon(Icons.add),
+            label: const Text('Add Subject'),
+          ),
+        ],
+      ),
+    ),
+  );
 
   Widget _subjectCard(Subject s, int i, ThemeData theme) {
     const accentColors = [
-      Color(0xFF2563EB), Color(0xFF7C3AED), Color(0xFF059669),
-      Color(0xFFDC2626), Color(0xFFD97706), Color(0xFF0891B2),
+      Color(0xFF2563EB),
+      Color(0xFF7C3AED),
+      Color(0xFF059669),
+      Color(0xFFDC2626),
+      Color(0xFFD97706),
+      Color(0xFF0891B2),
     ];
     final color = accentColors[i % accentColors.length];
     final chapters = _chapterCounts[s.id] ?? 0;
@@ -288,9 +370,10 @@ class _HomeScreenState extends State<HomeScreen> {
       child: Card(
         child: InkWell(
           borderRadius: BorderRadius.circular(14),
-          onTap: () => Navigator.push(context,
-                  MaterialPageRoute(builder: (_) => SubjectScreen(subject: s)))
-              .then((_) => _load()),
+          onTap: () => Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => SubjectScreen(subject: s)),
+          ).then((_) => _load()),
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
             child: Row(
@@ -309,32 +392,44 @@ class _HomeScreenState extends State<HomeScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(s.name,
-                          style: const TextStyle(
-                              fontSize: 15, fontWeight: FontWeight.w600)),
+                      Text(
+                        s.name,
+                        style: const TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
                       const SizedBox(height: 4),
                       Row(
                         children: [
                           Icon(
                             Icons.menu_book_outlined,
                             size: 12,
-                            color: theme.colorScheme.onSurface.withValues(alpha: 0.45),
+                            color: theme.colorScheme.onSurface.withValues(
+                              alpha: 0.45,
+                            ),
                           ),
                           const SizedBox(width: 4),
                           Text(
                             '$chapters chapter${chapters != 1 ? 's' : ''}',
                             style: TextStyle(
                               fontSize: 12,
-                              color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
+                              color: theme.colorScheme.onSurface.withValues(
+                                alpha: 0.5,
+                              ),
                             ),
                           ),
                           if (hasContent) ...[
                             const SizedBox(width: 8),
                             Container(
                               padding: const EdgeInsets.symmetric(
-                                  horizontal: 6, vertical: 2),
+                                horizontal: 6,
+                                vertical: 2,
+                              ),
                               decoration: BoxDecoration(
-                                color: const Color(0xFF059669).withValues(alpha: 0.1),
+                                color: const Color(
+                                  0xFF059669,
+                                ).withValues(alpha: 0.1),
                                 borderRadius: BorderRadius.circular(4),
                               ),
                               child: const Text(
@@ -353,9 +448,13 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                 ),
                 PopupMenuButton<String>(
-                  icon: Icon(Icons.more_vert,
-                      color: theme.colorScheme.onSurface.withValues(alpha: 0.4)),
-                  onSelected: (v) { if (v == 'delete') _deleteSubject(s); },
+                  icon: Icon(
+                    Icons.more_vert,
+                    color: theme.colorScheme.onSurface.withValues(alpha: 0.4),
+                  ),
+                  onSelected: (v) {
+                    if (v == 'delete') _deleteSubject(s);
+                  },
                   itemBuilder: (_) => [
                     const PopupMenuItem(value: 'delete', child: Text('Delete')),
                   ],
@@ -394,9 +493,13 @@ class _StatsBar extends StatelessWidget {
       ),
       child: Row(
         children: [
-          _StatChip(label: '$subjectCount subject${subjectCount != 1 ? 's' : ''}'),
+          _StatChip(
+            label: '$subjectCount subject${subjectCount != 1 ? 's' : ''}',
+          ),
           const SizedBox(width: 16),
-          _StatChip(label: '$chapterCount chapter${chapterCount != 1 ? 's' : ''}'),
+          _StatChip(
+            label: '$chapterCount chapter${chapterCount != 1 ? 's' : ''}',
+          ),
           const Spacer(),
           if (readyCount > 0)
             Row(
@@ -471,7 +574,9 @@ class _StepRow extends StatelessWidget {
             style: TextStyle(
               fontSize: 13,
               height: 1.4,
-              color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.75),
+              color: Theme.of(
+                context,
+              ).colorScheme.onSurface.withValues(alpha: 0.75),
             ),
           ),
         ),
@@ -562,7 +667,9 @@ class _OfflineBannerState extends State<_OfflineBanner> {
     super.dispose();
   }
 
-  void _rebuild() { if (mounted) setState(() {}); }
+  void _rebuild() {
+    if (mounted) setState(() {});
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -578,8 +685,10 @@ class _OfflineBannerState extends State<_OfflineBanner> {
             const Icon(Icons.wifi_off, size: 15, color: Colors.orange),
             const SizedBox(width: 8),
             const Expanded(
-              child: Text('You\'re offline — study tools will be queued',
-                  style: TextStyle(fontSize: 12, color: Colors.orange)),
+              child: Text(
+                'You\'re offline — study tools will be queued',
+                style: TextStyle(fontSize: 12, color: Colors.orange),
+              ),
             ),
             const Icon(Icons.chevron_right, size: 16, color: Colors.orange),
           ],
@@ -616,7 +725,10 @@ class _AddDialog extends StatelessWidget {
         onSubmitted: (v) => Navigator.pop(context, v.trim()),
       ),
       actions: [
-        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
         FilledButton(
           onPressed: () => Navigator.pop(context, controller.text.trim()),
           child: const Text('Add'),
@@ -633,7 +745,10 @@ Future<bool> _confirmDelete(BuildContext ctx, String title, String body) async {
       title: Text(title),
       content: Text(body),
       actions: [
-        TextButton(onPressed: () => Navigator.pop(dlgCtx, false), child: const Text('Cancel')),
+        TextButton(
+          onPressed: () => Navigator.pop(dlgCtx, false),
+          child: const Text('Cancel'),
+        ),
         FilledButton(
           style: FilledButton.styleFrom(backgroundColor: Colors.red),
           onPressed: () => Navigator.pop(dlgCtx, true),

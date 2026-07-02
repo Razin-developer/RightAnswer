@@ -29,7 +29,9 @@ import '../widgets/voice_input_sheet.dart';
 import 'settings_screen.dart';
 
 class ChatScreen extends StatefulWidget {
-  const ChatScreen({super.key});
+  final String? initialChatId;
+
+  const ChatScreen({super.key, this.initialChatId});
 
   @override
   State<ChatScreen> createState() => _ChatScreenState();
@@ -51,6 +53,7 @@ class _ChatScreenState extends State<ChatScreen> {
   bool _isGenerating = false;
   bool _isRecording = false;
   bool _isTemporary = false;
+  bool _didConsumeInitialChat = false;
 
   String? _selectedImagePath;
   String? _selectedResponseLanguage;
@@ -79,7 +82,17 @@ class _ChatScreenState extends State<ChatScreen> {
 
   Future<void> _loadAllChats() async {
     final chats = await _chatRepo.getAll();
-    if (mounted) setState(() => _allChats = chats);
+    if (!mounted) return;
+    setState(() => _allChats = chats);
+
+    final initialChatId = widget.initialChatId;
+    if (!_didConsumeInitialChat && initialChatId != null) {
+      _didConsumeInitialChat = true;
+      final match = chats.where((chat) => chat.id == initialChatId).firstOrNull;
+      if (match != null) {
+        await _loadChat(match);
+      }
+    }
   }
 
   Future<void> _loadChat(Chat chat) async {
@@ -387,16 +400,28 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   void _autoNameChat(String chatId, String firstMessage) async {
-    final name = await ChatAIService.instance.generateChatName(firstMessage);
-    if (!mounted) return;
-    await _chatRepo.updateName(chatId, name);
-    setState(
-      () => _currentChat = _currentChat?.copyWith(
-        name: name,
-        updatedAt: DateTime.now(),
-      ),
-    );
-    await _loadAllChats();
+    try {
+      final name = await ChatAIService.instance.generateChatName(firstMessage);
+      final safeName = name.trim();
+      if (!mounted || safeName.isEmpty) return;
+
+      await _chatRepo.updateName(chatId, safeName);
+      await CloudSyncService.instance.updateChat(chatId, {
+        'name': safeName,
+        'updatedAt': DateTime.now().toIso8601String(),
+      });
+
+      if (!mounted) return;
+      setState(
+        () => _currentChat = _currentChat?.copyWith(
+          name: safeName,
+          updatedAt: DateTime.now(),
+        ),
+      );
+      await _loadAllChats();
+    } catch (_) {
+      // Auto-naming is best-effort; a failure here should never break chat flow.
+    }
   }
 
   Future<void> _regenerate(ChatMessage assistantMsg) async =>
@@ -432,12 +457,16 @@ class _ChatScreenState extends State<ChatScreen> {
       return;
     }
     try {
-      final result = await CloudSyncService.instance.shareChatLink(_currentChat!.id);
+      final result = await CloudSyncService.instance.shareChatLink(
+        _currentChat!.id,
+      );
       final url = result['url'] as String? ?? '';
       if (!mounted) return;
       _showShareLinkDialog(url);
     } catch (e) {
-      if (mounted) AppFeedback.showToast(context, 'Failed to create share link');
+      if (mounted) {
+        AppFeedback.showToast(context, 'Failed to create share link');
+      }
     }
   }
 
@@ -514,17 +543,24 @@ class _ChatScreenState extends State<ChatScreen> {
               // Extract token from URL if needed
               final token = raw.contains('/') ? raw.split('/').last : raw;
               try {
-                final data = await CloudSyncService.instance.joinChatViaToken(token);
-                final localId = data['localId'] as String? ?? data['_id'] as String? ?? '';
+                final joinResult = await CloudSyncService.instance
+                    .joinChatFromShareToken(token);
+                final localId = joinResult.localChatId;
                 if (!mounted) return;
                 AppFeedback.showToast(context, 'Joined chat successfully');
                 await _loadAllChats();
                 if (localId.isNotEmpty) {
-                  final joined = _allChats.where((c) => c.id == localId).firstOrNull;
-                  if (joined != null) _loadChat(joined);
+                  final chat = _allChats
+                      .where((c) => c.id == localId)
+                      .firstOrNull;
+                  if (chat != null) {
+                    _loadChat(chat);
+                  }
                 }
               } catch (e) {
-                if (mounted) AppFeedback.showToast(context, 'Invalid or expired link');
+                if (mounted) {
+                  AppFeedback.showToast(context, 'Invalid or expired link');
+                }
               }
             },
             child: const Text('Join'),
@@ -535,8 +571,10 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Future<void> _renameChat() async {
-    if (_currentChat == null) return;
-    final ctrl = TextEditingController(text: _currentChat!.name);
+    final currentChat = _currentChat;
+    if (currentChat == null) return;
+
+    final ctrl = TextEditingController(text: currentChat.name);
     final name = await showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -564,10 +602,46 @@ class _ChatScreenState extends State<ChatScreen> {
       ),
     );
     ctrl.dispose();
-    if (name == null || name.isEmpty) return;
-    await _chatRepo.updateName(_currentChat!.id, name);
-    setState(() => _currentChat = _currentChat!.copyWith(name: name));
-    await _loadAllChats();
+    if (!mounted || name == null) return;
+
+    final safeName = name.trim();
+    if (safeName.isEmpty) {
+      AppFeedback.showToast(context, 'Chat name cannot be empty');
+      return;
+    }
+    if (safeName.length > 60) {
+      AppFeedback.showToast(context, 'Chat name must be 60 characters or less');
+      return;
+    }
+    if (safeName == currentChat.name) return;
+
+    try {
+      final renamedAt = DateTime.now();
+      await _chatRepo.updateName(currentChat.id, safeName);
+      await CloudSyncService.instance.updateChat(currentChat.id, {
+        'name': safeName,
+        'updatedAt': renamedAt.toIso8601String(),
+      });
+
+      if (!mounted) return;
+      setState(() {
+        if (_currentChat?.id == currentChat.id) {
+          _currentChat = _currentChat!.copyWith(
+            name: safeName,
+            updatedAt: renamedAt,
+          );
+        }
+      });
+      await _loadAllChats();
+      if (!mounted) return;
+      AppFeedback.showToast(context, 'Chat renamed');
+    } catch (e) {
+      if (!mounted) return;
+      AppFeedback.showToast(
+        context,
+        'Could not rename chat: ${AppException.from(e).message}',
+      );
+    }
   }
 
   Future<void> _pickImage(ImageSource source) async {
@@ -880,9 +954,8 @@ class _ChatScreenState extends State<ChatScreen> {
                                 context: context,
                                 isScrollControlled: true,
                                 backgroundColor: Colors.transparent,
-                                builder: (_) => _ResourcesSheet(
-                                  chunks: msg.sourceChunks,
-                                ),
+                                builder: (_) =>
+                                    _ResourcesSheet(chunks: msg.sourceChunks),
                               ),
                       );
                     },
@@ -952,9 +1025,11 @@ class _ChatDrawerState extends State<_ChatDrawer> {
     if (_query.isEmpty) return widget.chats;
     final q = _query.toLowerCase();
     return widget.chats
-        .where((c) =>
-            c.name.toLowerCase().contains(q) ||
-            (c.subjectName?.toLowerCase().contains(q) ?? false))
+        .where(
+          (c) =>
+              c.name.toLowerCase().contains(q) ||
+              (c.subjectName?.toLowerCase().contains(q) ?? false),
+        )
         .toList();
   }
 
@@ -1020,10 +1095,7 @@ class _ChatDrawerState extends State<_ChatDrawer> {
             ),
             ListTile(
               leading: const Icon(Icons.delete_outline, color: Colors.red),
-              title: const Text(
-                'Delete',
-                style: TextStyle(color: Colors.red),
-              ),
+              title: const Text('Delete', style: TextStyle(color: Colors.red)),
               onTap: () async {
                 Navigator.pop(ctx);
                 final ok = await showDialog<bool>(
@@ -1090,17 +1162,17 @@ class _ChatDrawerState extends State<_ChatDrawer> {
   }
 
   Widget _sectionLabel(ThemeData theme, String label) => Padding(
-        padding: const EdgeInsets.fromLTRB(16, 14, 16, 4),
-        child: Text(
-          label,
-          style: TextStyle(
-            fontSize: 10,
-            fontWeight: FontWeight.w700,
-            letterSpacing: 0.7,
-            color: theme.colorScheme.onSurface.withValues(alpha: 0.35),
-          ),
-        ),
-      );
+    padding: const EdgeInsets.fromLTRB(16, 14, 16, 4),
+    child: Text(
+      label,
+      style: TextStyle(
+        fontSize: 10,
+        fontWeight: FontWeight.w700,
+        letterSpacing: 0.7,
+        color: theme.colorScheme.onSurface.withValues(alpha: 0.35),
+      ),
+    ),
+  );
 
   @override
   Widget build(BuildContext context) {
@@ -1140,14 +1212,16 @@ class _ChatDrawerState extends State<_ChatDrawer> {
                           hintText: 'Search chats',
                           hintStyle: TextStyle(
                             fontSize: 14,
-                            color: theme.colorScheme.onSurface
-                                .withValues(alpha: 0.4),
+                            color: theme.colorScheme.onSurface.withValues(
+                              alpha: 0.4,
+                            ),
                           ),
                           filled: true,
-                          fillColor:
-                              theme.colorScheme.surfaceContainerHighest,
-                          contentPadding:
-                              const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
+                          fillColor: theme.colorScheme.surfaceContainerHighest,
+                          contentPadding: const EdgeInsets.symmetric(
+                            vertical: 8,
+                            horizontal: 12,
+                          ),
                           border: OutlineInputBorder(
                             borderRadius: BorderRadius.circular(10),
                             borderSide: BorderSide.none,
@@ -1155,7 +1229,10 @@ class _ChatDrawerState extends State<_ChatDrawer> {
                           isDense: true,
                           suffixIcon: _query.isNotEmpty
                               ? IconButton(
-                                  icon: const Icon(Icons.close_rounded, size: 16),
+                                  icon: const Icon(
+                                    Icons.close_rounded,
+                                    size: 16,
+                                  ),
                                   onPressed: () {
                                     _searchCtrl.clear();
                                     setState(() => _query = '');
@@ -1206,8 +1283,9 @@ class _ChatDrawerState extends State<_ChatDrawer> {
                               : 'No chats matching "$_query"',
                           style: TextStyle(
                             fontSize: 13,
-                            color: theme.colorScheme.onSurface
-                                .withValues(alpha: 0.4),
+                            color: theme.colorScheme.onSurface.withValues(
+                              alpha: 0.4,
+                            ),
                           ),
                         ),
                       )
@@ -1261,8 +1339,9 @@ class _ChatDrawerState extends State<_ChatDrawer> {
                           'No chats yet',
                           style: TextStyle(
                             fontSize: 13,
-                            color: theme.colorScheme.onSurface
-                                .withValues(alpha: 0.4),
+                            color: theme.colorScheme.onSurface.withValues(
+                              alpha: 0.4,
+                            ),
                           ),
                         ),
                       )
@@ -1285,7 +1364,12 @@ class _ChatDrawerState extends State<_ChatDrawer> {
                             _sectionLabel(theme, 'RECENTS'),
                             for (final entry in groups.entries) ...[
                               Padding(
-                                padding: const EdgeInsets.fromLTRB(16, 8, 16, 2),
+                                padding: const EdgeInsets.fromLTRB(
+                                  16,
+                                  8,
+                                  16,
+                                  2,
+                                ),
                                 child: Text(
                                   entry.key,
                                   style: TextStyle(
@@ -1315,7 +1399,10 @@ class _ChatDrawerState extends State<_ChatDrawer> {
             InkWell(
               onTap: widget.onSettings,
               child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 13,
+                ),
                 child: Row(
                   children: [
                     Icon(
@@ -1328,7 +1415,9 @@ class _ChatDrawerState extends State<_ChatDrawer> {
                       'Settings',
                       style: TextStyle(
                         fontSize: 14,
-                        color: theme.colorScheme.onSurface.withValues(alpha: 0.85),
+                        color: theme.colorScheme.onSurface.withValues(
+                          alpha: 0.85,
+                        ),
                       ),
                     ),
                   ],
@@ -1398,8 +1487,9 @@ class _ChatTile extends StatelessWidget {
                     chat.name,
                     style: TextStyle(
                       fontSize: 13,
-                      fontWeight:
-                          isSelected ? FontWeight.w600 : FontWeight.w400,
+                      fontWeight: isSelected
+                          ? FontWeight.w600
+                          : FontWeight.w400,
                       color: isSelected
                           ? theme.colorScheme.primary
                           : theme.colorScheme.onSurface.withValues(alpha: 0.85),
@@ -1412,7 +1502,9 @@ class _ChatTile extends StatelessWidget {
                       chat.subjectName!,
                       style: TextStyle(
                         fontSize: 10,
-                        color: theme.colorScheme.onSurface.withValues(alpha: 0.4),
+                        color: theme.colorScheme.onSurface.withValues(
+                          alpha: 0.4,
+                        ),
                       ),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
@@ -1641,9 +1733,15 @@ class _AiMessage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final bodyColor = isDark ? const Color(0xFFA09D96) : const Color(0xFF6C6A64);
-    final textColor = isDark ? const Color(0xFFFAF9F5) : const Color(0xFF141413);
-    final codeBackground = isDark ? const Color(0xFF1F1E1B) : const Color(0xFFEFE9DE);
+    final bodyColor = isDark
+        ? const Color(0xFFA09D96)
+        : const Color(0xFF6C6A64);
+    final textColor = isDark
+        ? const Color(0xFFFAF9F5)
+        : const Color(0xFF141413);
+    final codeBackground = isDark
+        ? const Color(0xFF1F1E1B)
+        : const Color(0xFFEFE9DE);
     const coral = Color(0xFFCC785C);
 
     final showContent = message.content.trim().isNotEmpty;
@@ -1688,7 +1786,9 @@ class _AiMessage extends StatelessWidget {
               width: 200,
               height: 140,
               clipBehavior: Clip.antiAlias,
-              decoration: BoxDecoration(borderRadius: BorderRadius.circular(12)),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(12),
+              ),
               child: Image.file(File(message.imagePath!), fit: BoxFit.cover),
             ),
           // Editorial AI content — no box, flows on canvas
@@ -1697,64 +1797,100 @@ class _AiMessage extends StatelessWidget {
               data: message.content,
               selectable: true,
               styleSheet: MarkdownStyleSheet(
-                p: GoogleFonts.inter(fontSize: 15, height: 1.65, color: textColor),
+                p: GoogleFonts.inter(
+                  fontSize: 15,
+                  height: 1.65,
+                  color: textColor,
+                ),
                 pPadding: const EdgeInsets.only(bottom: 8),
                 h1: GoogleFonts.playfairDisplay(
-                  fontSize: 22, fontWeight: FontWeight.w400, height: 1.25,
-                  letterSpacing: -0.3, color: textColor,
+                  fontSize: 22,
+                  fontWeight: FontWeight.w400,
+                  height: 1.25,
+                  letterSpacing: -0.3,
+                  color: textColor,
                 ),
                 h1Padding: const EdgeInsets.only(top: 4, bottom: 4),
                 h2: GoogleFonts.playfairDisplay(
-                  fontSize: 18, fontWeight: FontWeight.w400, height: 1.3,
-                  letterSpacing: -0.2, color: textColor,
+                  fontSize: 18,
+                  fontWeight: FontWeight.w400,
+                  height: 1.3,
+                  letterSpacing: -0.2,
+                  color: textColor,
                 ),
                 h2Padding: const EdgeInsets.only(top: 4, bottom: 4),
                 h3: GoogleFonts.inter(
-                  fontSize: 15, fontWeight: FontWeight.w600, height: 1.4, color: textColor,
+                  fontSize: 15,
+                  fontWeight: FontWeight.w600,
+                  height: 1.4,
+                  color: textColor,
                 ),
                 h3Padding: const EdgeInsets.only(top: 2, bottom: 2),
                 strong: GoogleFonts.inter(
-                  fontSize: 15, fontWeight: FontWeight.w600, color: textColor,
+                  fontSize: 15,
+                  fontWeight: FontWeight.w600,
+                  color: textColor,
                 ),
                 em: GoogleFonts.inter(
-                  fontSize: 15, fontStyle: FontStyle.italic, color: textColor,
+                  fontSize: 15,
+                  fontStyle: FontStyle.italic,
+                  color: textColor,
                 ),
                 code: GoogleFonts.jetBrainsMono(
-                  fontSize: 13, height: 1.5,
-                  color: isDark ? const Color(0xFFE8A55A) : const Color(0xFFA9583E),
+                  fontSize: 13,
+                  height: 1.5,
+                  color: isDark
+                      ? const Color(0xFFE8A55A)
+                      : const Color(0xFFA9583E),
                   backgroundColor: codeBackground,
                 ),
                 codeblockDecoration: BoxDecoration(
                   color: codeBackground,
                   borderRadius: BorderRadius.circular(8),
                   border: Border.all(
-                    color: isDark ? const Color(0xFF2E2C28) : const Color(0xFFE6DFD8),
+                    color: isDark
+                        ? const Color(0xFF2E2C28)
+                        : const Color(0xFFE6DFD8),
                   ),
                 ),
                 codeblockPadding: const EdgeInsets.all(14),
                 blockquoteDecoration: BoxDecoration(
-                  border: Border(
-                    left: BorderSide(color: coral, width: 3),
-                  ),
+                  border: Border(left: BorderSide(color: coral, width: 3)),
                 ),
-                blockquotePadding: const EdgeInsets.only(left: 14, top: 4, bottom: 4),
+                blockquotePadding: const EdgeInsets.only(
+                  left: 14,
+                  top: 4,
+                  bottom: 4,
+                ),
                 blockquote: GoogleFonts.inter(
-                  fontSize: 14, fontStyle: FontStyle.italic,
-                  color: bodyColor, height: 1.6,
+                  fontSize: 14,
+                  fontStyle: FontStyle.italic,
+                  color: bodyColor,
+                  height: 1.6,
                 ),
                 listBullet: GoogleFonts.inter(fontSize: 15, color: coral),
                 tableHead: GoogleFonts.inter(
-                  fontSize: 13, fontWeight: FontWeight.w600, color: textColor,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: textColor,
                 ),
-                tableBody: GoogleFonts.inter(fontSize: 13, color: textColor, height: 1.5),
+                tableBody: GoogleFonts.inter(
+                  fontSize: 13,
+                  color: textColor,
+                  height: 1.5,
+                ),
                 tableBorder: TableBorder.all(
-                  color: isDark ? const Color(0xFF2E2C28) : const Color(0xFFE6DFD8),
+                  color: isDark
+                      ? const Color(0xFF2E2C28)
+                      : const Color(0xFFE6DFD8),
                   width: 1,
                 ),
                 horizontalRuleDecoration: BoxDecoration(
                   border: Border(
                     top: BorderSide(
-                      color: isDark ? const Color(0xFF2E2C28) : const Color(0xFFE6DFD8),
+                      color: isDark
+                          ? const Color(0xFF2E2C28)
+                          : const Color(0xFFE6DFD8),
                     ),
                   ),
                 ),
@@ -1832,7 +1968,9 @@ class _AiActionBtn extends StatelessWidget {
     const coral = Color(0xFFCC785C);
     final fgColor = isActive
         ? coral
-        : isDark ? const Color(0xFF8E8B82) : const Color(0xFF6C6A64);
+        : isDark
+        ? const Color(0xFF8E8B82)
+        : const Color(0xFF6C6A64);
     return GestureDetector(
       onTap: onTap,
       child: Row(
@@ -1922,7 +2060,9 @@ class _EmptyState extends StatelessWidget {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
     const coral = Color(0xFFCC785C);
-    final mutedColor = isDark ? const Color(0xFF8E8B82) : const Color(0xFF6C6A64);
+    final mutedColor = isDark
+        ? const Color(0xFF8E8B82)
+        : const Color(0xFF6C6A64);
 
     return LayoutBuilder(
       builder: (context, constraints) => SingleChildScrollView(
@@ -1951,7 +2091,9 @@ class _EmptyState extends StatelessWidget {
                     fontWeight: FontWeight.w400,
                     height: 1.2,
                     letterSpacing: -0.3,
-                    color: isDark ? const Color(0xFFFAF9F5) : const Color(0xFF141413),
+                    color: isDark
+                        ? const Color(0xFFFAF9F5)
+                        : const Color(0xFF141413),
                   ),
                 ),
                 const SizedBox(height: 12),
@@ -1976,7 +2118,10 @@ class _EmptyState extends StatelessWidget {
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(8),
                       ),
-                      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 20,
+                        vertical: 10,
+                      ),
                     ),
                     icon: const Icon(Icons.menu_book_outlined, size: 16),
                     label: Text(
@@ -2521,7 +2666,11 @@ class _PlusMenuSheetState extends State<_PlusMenuSheet> {
                 style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
               ),
               subtitle: Text(
-                _responseLength == 'small' ? 'Brief' : _responseLength == 'large' ? 'Detailed' : 'Normal',
+                _responseLength == 'small'
+                    ? 'Brief'
+                    : _responseLength == 'large'
+                    ? 'Detailed'
+                    : 'Normal',
                 style: TextStyle(
                   fontSize: 12,
                   color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
@@ -2938,7 +3087,10 @@ class _ResourcesSheet extends StatelessWidget {
                   ),
                   const Spacer(),
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 3,
+                    ),
                     decoration: BoxDecoration(
                       color: theme.colorScheme.primary.withValues(alpha: 0.1),
                       borderRadius: BorderRadius.circular(20),
@@ -2991,7 +3143,9 @@ class _ResourcesSheet extends StatelessWidget {
                                 vertical: 2,
                               ),
                               decoration: BoxDecoration(
-                                color: theme.colorScheme.primary.withValues(alpha: 0.1),
+                                color: theme.colorScheme.primary.withValues(
+                                  alpha: 0.1,
+                                ),
                                 borderRadius: BorderRadius.circular(6),
                               ),
                               child: Text(
@@ -3011,7 +3165,9 @@ class _ResourcesSheet extends StatelessWidget {
                           style: TextStyle(
                             fontSize: 13,
                             height: 1.55,
-                            color: theme.colorScheme.onSurface.withValues(alpha: 0.85),
+                            color: theme.colorScheme.onSurface.withValues(
+                              alpha: 0.85,
+                            ),
                           ),
                         ),
                       ],

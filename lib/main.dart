@@ -1,9 +1,12 @@
 import 'package:flutter/material.dart';
+
+import 'app/app_router.dart';
 import 'repositories/settings_repository.dart';
 import 'screens/login_screen.dart';
 import 'screens/main_screen.dart';
-import 'screens/saved_outputs_screen.dart';
 import 'screens/queue_screen.dart';
+import 'screens/saved_outputs_screen.dart';
+import 'services/app_link_service.dart';
 import 'services/auth_service.dart';
 import 'services/background_service.dart';
 import 'services/connectivity_service.dart';
@@ -11,36 +14,31 @@ import 'services/notification_service.dart';
 import 'services/queue_service.dart';
 import 'theme/app_theme.dart';
 
-/// Global navigator key — used by [NotificationService] for tap navigation.
-final navigatorKey = GlobalKey<NavigatorState>();
-
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
   final settingsRepo = SettingsRepository();
   await settingsRepo.delete(SettingKeys.openAiApiKey);
 
-  // ── Load persisted theme before first paint ───────────────────────────────
   final savedTheme = await settingsRepo.get(SettingKeys.themeMode);
-  if (savedTheme != null) themeNotifier.setFromString(savedTheme);
+  if (savedTheme != null) {
+    themeNotifier.setFromString(savedTheme);
+  }
 
-  // ── Notifications ─────────────────────────────────────────────────────────
   await NotificationService.instance.initialize();
   NotificationService.onTap = _handleNotificationTap;
 
-  // ── Background workmanager ────────────────────────────────────────────────
   await BackgroundService.initialize();
   await BackgroundService.registerPeriodicQueueCheck();
 
-  // ── Queue service ─────────────────────────────────────────────────────────
   await QueueService.instance.initialize();
 
-  // ── Auth: check stored JWT on launch ─────────────────────────────────────
   await AuthService.instance.init();
+  await AppLinkService.instance.initialize();
 
-  // ── Connectivity: trigger queue processing when back online ───────────────
   ConnectivityService.instance.onReconnect(() async {
     final pending = await QueueService.instance.getAll().then(
-      (list) => list.where((r) => r.status == 'pending').length,
+      (list) => list.where((request) => request.status == 'pending').length,
     );
     if (pending > 0) {
       await NotificationService.instance.showConnectivityRestored(pending);
@@ -49,16 +47,15 @@ void main() async {
   });
   await ConnectivityService.instance.initialize();
 
-  // ── Reschedule daily reminder if enabled ──────────────────────────────────
   final settings = await settingsRepo.getAll();
   if (settings[SettingKeys.dailyReminderEnabled] == 'true') {
     final hour =
         int.tryParse(settings[SettingKeys.dailyReminderHour] ?? '') ?? 8;
-    final min =
+    final minute =
         int.tryParse(settings[SettingKeys.dailyReminderMinute] ?? '') ?? 0;
     await NotificationService.instance.scheduleDailyReminder(
       hour: hour,
-      minute: min,
+      minute: minute,
     );
   }
 
@@ -66,19 +63,21 @@ void main() async {
 }
 
 void _handleNotificationTap(String? payload) {
-  final nav = navigatorKey.currentState;
-  if (nav == null) return;
-  switch (payload) {
-    case 'saved_outputs':
-      nav.push(MaterialPageRoute(builder: (_) => const SavedOutputsScreen()));
-    case 'queue':
-      nav.push(MaterialPageRoute(builder: (_) => const QueueScreen()));
-    default:
-      nav.popUntil((r) => r.isFirst);
+  final navigator = navigatorKey.currentState;
+  if (navigator == null) {
+    return;
+  }
+
+  if (payload == 'saved_outputs') {
+    navigator.push(
+      MaterialPageRoute(builder: (_) => const SavedOutputsScreen()),
+    );
+  } else if (payload == 'queue') {
+    navigator.push(MaterialPageRoute(builder: (_) => const QueueScreen()));
+  } else {
+    navigator.popUntil((route) => route.isFirst);
   }
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
 
 class RightAnswerApp extends StatefulWidget {
   const RightAnswerApp({super.key});
@@ -99,6 +98,7 @@ class _RightAnswerAppState extends State<RightAnswerApp> {
   @override
   void dispose() {
     themeNotifier.removeListener(_onTheme);
+    AppLinkService.instance.dispose();
     super.dispose();
   }
 

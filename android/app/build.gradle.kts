@@ -1,4 +1,6 @@
 import java.util.Properties
+import java.util.Base64
+import java.net.URI
 
 plugins {
     id("com.android.application")
@@ -12,6 +14,35 @@ val keystorePropertiesFile = rootProject.file("key.properties")
 if (keystorePropertiesFile.exists()) {
     keystorePropertiesFile.inputStream().use(keystoreProperties::load)
 }
+
+fun dartDefines(): Map<String, String> {
+    val encoded = project.findProperty("dart-defines") as String?
+        ?: System.getenv("DART_DEFINES")
+        ?: return emptyMap()
+
+    return encoded
+        .split(",")
+        .mapNotNull { item ->
+            runCatching {
+                String(Base64.getDecoder().decode(item), Charsets.UTF_8)
+            }.getOrNull()
+        }
+        .mapNotNull { entry ->
+            val separatorIndex = entry.indexOf('=')
+            if (separatorIndex <= 0) {
+                null
+            } else {
+                entry.substring(0, separatorIndex) to entry.substring(separatorIndex + 1)
+            }
+        }
+        .toMap()
+}
+
+val dartDefineMap = dartDefines()
+val appUrl = dartDefineMap["APP_URL"] ?: "https://localhost"
+val appUri = runCatching { URI(appUrl) }.getOrElse { URI("https://localhost") }
+val appLinkHost = appUri.host?.takeIf { it.isNotBlank() } ?: "localhost"
+val appLinkScheme = appUri.scheme?.takeIf { it.isNotBlank() } ?: "https"
 
 android {
     namespace = "com.rightanswer.right_answer"
@@ -37,6 +68,8 @@ android {
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+        manifestPlaceholders["appLinkHost"] = appLinkHost
+        manifestPlaceholders["appLinkScheme"] = appLinkScheme
     }
 
     signingConfigs {

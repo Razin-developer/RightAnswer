@@ -53,9 +53,10 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     });
 
     const baseUrl = process.env.APP_URL || 'http://localhost:3000';
-    const url = `${baseUrl}/api/share/${token}`;
+    const url = `${baseUrl}/share/chat/${token}`;
+    const appUrl = `rightanswer://share/chat/${token}`;
 
-    return corsResponse({ url, expiresAt }, { status: 201 });
+    return corsResponse({ url, appUrl, expiresAt }, { status: 201 });
   } catch (error) {
     console.error('[POST /api/chats/:id/share]', error);
     return corsResponse({ error: 'Internal server error' }, { status: 500 });

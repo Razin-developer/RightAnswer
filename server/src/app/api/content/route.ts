@@ -8,6 +8,7 @@ import ShareToken from '@/lib/models/ShareToken';
 import { requireAuth } from '@/lib/auth';
 import { cleanupExpiredTokens } from '@/lib/cleanup';
 import { corsResponse, corsOptions } from '@/lib/cors';
+import { accessLevel, optionalString, serializeError } from '@/lib/validation';
 
 const UPLOAD_DIR = process.env.UPLOAD_DIR || './uploads';
 const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100MB
@@ -78,24 +79,44 @@ export async function POST(request: NextRequest) {
 
     const token = crypto.randomBytes(16).toString('hex');
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+    const shareAccess = accessLevel(metadata.accessLevel, 'full');
+    const resourceLabel =
+      optionalString(metadata.name, { max: 160 }) ??
+      optionalString(metadata.title, { max: 160 }) ??
+      'Shared content';
 
     await ShareToken.create({
       token,
       type: 'content',
+      accessLevel: shareAccess,
       resourceId: fileId,
       creatorId: new mongoose.Types.ObjectId(userId),
       expiresAt,
       filePath,
-      metadata,
+      metadata: {
+        ...metadata,
+        resourceLabel,
+        originalFileName: file.name,
+      },
       redeemed: false,
     });
 
     const baseUrl = process.env.APP_URL || 'http://localhost:3000';
-    const url = `${baseUrl}/api/share/${token}`;
+    const shareKind =
+      (optionalString(metadata.type, { max: 80 }) ?? 'content')
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9_-]+/g, '-');
+    const url = `${baseUrl}/share/${shareKind}/${token}`;
+    const appUrl = `rightanswer://share/${shareKind}/${token}`;
 
-    return corsResponse({ url, expiresAt }, { status: 201 });
+    return corsResponse(
+      { url, appUrl, expiresAt, accessLevel: shareAccess },
+      { status: 201 }
+    );
   } catch (error) {
     console.error('[POST /api/content]', error);
-    return corsResponse({ error: 'Internal server error' }, { status: 500 });
+    const formatted = serializeError(error);
+    return corsResponse({ error: formatted.message }, { status: formatted.status });
   }
 }
