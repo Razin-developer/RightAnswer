@@ -69,7 +69,7 @@ class _SubjectScreenState extends State<SubjectScreen> {
         onStatus: (s) {
           if (mounted) setState(() => _importStatus = s);
         },
-        maxPages: 150,
+        maxPages: PdfImportService.maxPagesSubject,
       );
 
       if (!mounted) return;
@@ -106,6 +106,7 @@ class _SubjectScreenState extends State<SubjectScreen> {
         );
       }
 
+      if (!mounted) return;
       AppFeedback.showSuccessToast(
         context,
         'Created ${toCreate.length} chapter(s) — open each to process content',

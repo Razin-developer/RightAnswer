@@ -29,8 +29,8 @@ class PdfImportService {
   static final PdfImportService instance = PdfImportService._();
   PdfImportService._();
 
-  static const _maxPagesChapter = 60;
-  static const _maxPagesSubject = 150;
+  static const maxPagesChapter = 60;
+  static const maxPagesSubject = 150;
 
   /// Opens the system file picker and returns the chosen PDF path.
   Future<String?> pickPdfPath() async {
@@ -46,12 +46,12 @@ class PdfImportService {
   Future<PdfImportResult> extractText(
     String pdfPath, {
     void Function(String status)? onStatus,
-    int maxPages = _maxPagesChapter,
+    int maxPages = maxPagesChapter,
   }) async {
     onStatus?.call('Opening PDF…');
     final doc = await PdfDocument.openFile(pdfPath);
     final total = doc.pagesCount;
-    final limit = total.clamp(1, maxPages);
+    final limit = total > maxPages ? maxPages : total;
     final truncated = total > maxPages;
 
     final buffer = StringBuffer();
@@ -65,18 +65,18 @@ class PdfImportService {
       try {
         page = await doc.getPage(i);
         image = await page.render(
-          width: (page.width * 2).toInt(),
-          height: (page.height * 2).toInt(),
+          width: page.width * 2,
+          height: page.height * 2,
           format: PdfPageImageFormat.jpeg,
           quality: 88,
           backgroundColor: '#FFFFFF',
         );
-        if (image?.bytes == null) continue;
+        if (image == null) continue;
 
         tmpFile = File(
           '${tempDir.path}/pdf_p${i}_${DateTime.now().millisecondsSinceEpoch}.jpg',
         );
-        await tmpFile.writeAsBytes(image!.bytes!);
+        await tmpFile.writeAsBytes(image.bytes);
 
         final pageText = await OcrService.instance.recognizeFromFile(tmpFile.path);
         if (pageText.isNotEmpty) {
@@ -86,9 +86,14 @@ class PdfImportService {
       } catch (_) {
         // skip unreadable pages silently
       } finally {
-        await image?.close();
         await page?.close();
-        await tmpFile?.delete().catchError((_) {});
+        if (tmpFile != null) {
+          try {
+            if (await tmpFile.exists()) {
+              await tmpFile.delete();
+            }
+          } catch (_) {}
+        }
       }
     }
 

@@ -28,7 +28,11 @@ class OcrService {
     try {
       return await recognizeFromFile(file.path);
     } finally {
-      await file.delete().catchError((_) {});
+      try {
+        if (await file.exists()) {
+          await file.delete();
+        }
+      } catch (_) {}
     }
   }
 }

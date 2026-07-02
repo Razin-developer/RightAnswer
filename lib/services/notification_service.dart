@@ -165,6 +165,44 @@ class NotificationService {
     await _plugin.cancel(idDailyReminder);
   }
 
+  // ── Per-plan study reminders ───────────────────────────────────────────────
+
+  Future<void> scheduleStudyPlanReminder({
+    required String planId,
+    required String planName,
+    required int hour,
+    required int minute,
+  }) async {
+    if (!_initialized || kIsWeb) return;
+    final id = _studyPlanNotifId(planId);
+    await _plugin.cancel(id);
+
+    final now = tz.TZDateTime.now(tz.local);
+    var next =
+        tz.TZDateTime(tz.local, now.year, now.month, now.day, hour, minute);
+    if (next.isBefore(now)) next = next.add(const Duration(days: 1));
+
+    await _plugin.zonedSchedule(
+      id,
+      'Time to study! 📚',
+      'Keep your streak — open $planName',
+      next,
+      _details(_chReminder, Importance.defaultImportance),
+      androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
+      uiLocalNotificationDateInterpretation:
+          UILocalNotificationDateInterpretation.absoluteTime,
+      matchDateTimeComponents: DateTimeComponents.time,
+      payload: 'study_plan:$planId',
+    );
+  }
+
+  Future<void> cancelStudyPlanReminder(String planId) async {
+    if (!_initialized || kIsWeb) return;
+    await _plugin.cancel(_studyPlanNotifId(planId));
+  }
+
+  int _studyPlanNotifId(String planId) => 2000 + planId.hashCode.abs() % 999;
+
   Future<void> cancelAll() async {
     if (!_initialized || kIsWeb) return;
     await _plugin.cancelAll();
