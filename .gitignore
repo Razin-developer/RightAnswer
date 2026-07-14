@@ -1,0 +1,11 @@
+node_modules
+.turbo
+.next
+dist
+coverage
+.env
+.env.local
+storage
+*.log
+.venv-qwen-embeddings
+temp-*.mts

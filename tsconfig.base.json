@@ -1,0 +1,21 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "allowSyntheticDefaultImports": true,
+    "baseUrl": ".",
+    "paths": {
+      "@right-answer/config/*": ["packages/config/src/*"],
+      "@right-answer/database/*": ["packages/database/src/*"],
+      "@right-answer/prompts/*": ["packages/prompts/src/*"],
+      "@right-answer/storage/*": ["packages/storage/src/*"],
+      "@right-answer/types/*": ["packages/types/src/*"],
+      "@right-answer/ui/*": ["packages/ui/src/*"]
+    }
+  }
+}

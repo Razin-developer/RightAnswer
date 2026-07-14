@@ -1,0 +1,22 @@
+{
+  "name": "@right-answer/workers",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "test": "node -e \"console.log('Worker tests will run via Vitest')\"",
+    "format": "prettier --check \"src/**/*.ts\""
+  },
+  "dependencies": {
+    "@prisma/client": "^6.16.2",
+    "@right-answer/config": "workspace:*",
+    "@right-answer/database": "workspace:*",
+    "@right-answer/storage": "workspace:*",
+    "bullmq": "^5.58.5",
+    "ioredis": "^5.7.0"
+  }
+}

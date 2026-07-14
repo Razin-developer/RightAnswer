@@ -1,0 +1,702 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  student
+  teacher
+  admin
+  org_owner
+}
+
+enum UserStatus {
+  active
+  suspended
+  pending
+}
+
+enum Medium {
+  en
+  ml
+}
+
+enum ContentLanguage {
+  en
+  ml
+  mixed
+}
+
+enum ContentType {
+  chapter_heading
+  section_heading
+  subsection_heading
+  paragraph
+  definition
+  formula
+  table_ref
+  graph_ref
+  diagram_ref
+  activity
+  experiment
+  exercise
+  question
+  sub_question
+  answer_hint
+  summary
+  glossary
+}
+
+enum SubscriptionStatus {
+  active
+  cancelled
+  expired
+  grace
+}
+
+enum UsageEventType {
+  cached_answer
+  live_answer
+  premium_fallback
+  worksheet_generation
+  image_analysis
+  login
+}
+
+enum TextbookVersionStatus {
+  draft
+  processing
+  approved
+  published
+  archived
+}
+
+enum VerificationStatus {
+  gold
+  silver
+  bronze
+  unsafe
+}
+
+enum AssetType {
+  image
+  illustration
+  diagram
+  table
+  graph
+}
+
+enum ModelCallStatus {
+  success
+  failed
+  skipped
+}
+
+enum ProviderCircuitState {
+  closed
+  open
+  half_open
+}
+
+enum TeacherVerificationStatus {
+  approved
+  rejected
+  flagged
+}
+
+enum JobStatus {
+  pending
+  running
+  completed
+  failed
+  cancelled
+}
+
+enum IngestionStage {
+  registered
+  downloaded
+  parsed
+  ocr
+  structured
+  indexed
+  published
+}
+
+enum TrafficMode {
+  normal
+  exam
+  cached_only
+}
+
+model User {
+  id                     String                  @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  email                  String                  @unique
+  passwordHash           String                  @map("password_hash")
+  role                   UserRole
+  status                 UserStatus              @default(active)
+  lastLoginAt            DateTime?               @map("last_login_at") @db.Timestamptz(6)
+  createdAt              DateTime                @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt              DateTime                @updatedAt @map("updated_at") @db.Timestamptz(6)
+  profile                UserProfile?
+  subscriptions          Subscription[]
+  usageEvents            UsageEvent[]
+  retrievalLogs          RetrievalLog[]
+  feedback               Feedback[]
+  teacherVerifiedAnswers TeacherVerifiedAnswer[] @relation("TeacherVerifier")
+  adminJobs              AdminJob[]              @relation("AdminJobInitiator")
+}
+
+model UserProfile {
+  id                String   @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  userId            String   @unique @map("user_id") @db.Uuid
+  fullName          String?  @map("full_name")
+  preferredLanguage Medium   @default(en) @map("preferred_language")
+  classLevel        Int      @default(10) @map("class_level")
+  schoolName        String?  @map("school_name")
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Subscription {
+  id               String             @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  userId           String             @map("user_id") @db.Uuid
+  planCode         String             @map("plan_code")
+  status           SubscriptionStatus @default(active)
+  startsAt         DateTime           @map("starts_at") @db.Timestamptz(6)
+  endsAt           DateTime?          @map("ends_at") @db.Timestamptz(6)
+  billingReference String?            @map("billing_reference")
+  createdAt        DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime           @updatedAt @map("updated_at") @db.Timestamptz(6)
+  user             User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([status, endsAt])
+}
+
+model UsageLimit {
+  id                     String    @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  planCode               String    @unique @map("plan_code")
+  cachedDailyLimit       Int       @map("cached_daily_limit")
+  liveDailyLimit         Int       @map("live_daily_limit")
+  premiumDailyLimit      Int       @map("premium_daily_limit")
+  imageAnalysisLimit     Int       @map("image_analysis_limit")
+  worksheetGenerationLimit Int     @map("worksheet_generation_limit")
+  priorityLevel          Int       @default(0) @map("priority_level")
+  createdAt              DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt              DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+}
+
+model UsageEvent {
+  id         String         @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  userId     String         @map("user_id") @db.Uuid
+  eventType  UsageEventType @map("event_type")
+  requestId  String?        @unique @map("request_id") @db.Uuid
+  units      Int
+  metadata   Json           @default("{}")
+  createdAt  DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+  user       User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([eventType, createdAt])
+}
+
+model Subject {
+  id         String     @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  name       String
+  code       String
+  classLevel Int        @default(10) @map("class_level")
+  syllabus   String     @default("Kerala SSLC")
+  active     Boolean    @default(true)
+  createdAt  DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt  DateTime   @updatedAt @map("updated_at") @db.Timestamptz(6)
+  textbooks  Textbook[]
+  answerCaches AnswerCache[]
+
+  @@unique([code, classLevel, syllabus])
+}
+
+model Textbook {
+  id         String            @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  subjectId  String            @map("subject_id") @db.Uuid
+  title      String
+  medium     Medium
+  partLabel  String?           @map("part_label")
+  publisher  String?
+  classLevel Int               @default(10) @map("class_level")
+  syllabus   String            @default("Kerala SSLC")
+  createdAt  DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt  DateTime          @updatedAt @map("updated_at") @db.Timestamptz(6)
+  subject    Subject           @relation(fields: [subjectId], references: [id])
+  versions   TextbookVersion[]
+  ingestionJobs IngestionJob[]
+
+  @@unique([subjectId, medium, classLevel, syllabus, partLabel])
+  @@index([subjectId, medium])
+}
+
+model TextbookVersion {
+  id               String                @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  textbookId       String                @map("textbook_id") @db.Uuid
+  versionLabel     String                @map("version_label")
+  academicYear     String?               @map("academic_year")
+  sourceUrl        String?               @map("source_url")
+  sourceType       String?               @map("source_type")
+  sourceDomain     String?               @map("source_domain")
+  checksumSha256   String                @map("checksum_sha256")
+  storagePath      String                @map("storage_path")
+  status           TextbookVersionStatus @default(draft)
+  isActive         Boolean               @default(false) @map("is_active")
+  downloadedAt     DateTime?             @map("downloaded_at") @db.Timestamptz(6)
+  metadata         Json                  @default("{}")
+  createdAt        DateTime              @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime              @updatedAt @map("updated_at") @db.Timestamptz(6)
+  textbook         Textbook              @relation(fields: [textbookId], references: [id], onDelete: Cascade)
+  chapters         Chapter[]
+  pages            Page[]
+  exactCaches      ExactCache[]
+  ingestionJobs    IngestionJob[]
+
+  @@index([textbookId])
+  @@index([isActive])
+  @@index([checksumSha256])
+  @@unique([textbookId, checksumSha256])
+}
+
+model Chapter {
+  id                String       @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  textbookVersionId String       @map("textbook_version_id") @db.Uuid
+  chapterNumber     Int          @map("chapter_number")
+  title             String
+  startPage         Int?         @map("start_page")
+  endPage           Int?         @map("end_page")
+  createdAt         DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime     @updatedAt @map("updated_at") @db.Timestamptz(6)
+  textbookVersion   TextbookVersion @relation(fields: [textbookVersionId], references: [id], onDelete: Cascade)
+  pages             Page[]
+  contentUnits      ContentUnit[]
+  exercises         Exercise[]
+  answerCaches      AnswerCache[]
+  retrievalLogs     RetrievalLog[]
+
+  @@unique([textbookVersionId, chapterNumber])
+  @@index([textbookVersionId, chapterNumber])
+}
+
+model Page {
+  id               String        @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  textbookVersionId String       @map("textbook_version_id") @db.Uuid
+  chapterId        String?       @map("chapter_id") @db.Uuid
+  pageNumber       Int           @map("page_number")
+  rawText          String        @map("raw_text")
+  normalizedText   String        @default("") @map("normalized_text")
+  ocrUsed          Boolean       @default(false) @map("ocr_used")
+  parseConfidence  Float         @default(0.0) @map("parse_confidence")
+  storagePath      String        @map("storage_path")
+  metadata         Json          @default("{}")
+  createdAt        DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime      @updatedAt @map("updated_at") @db.Timestamptz(6)
+  textbookVersion  TextbookVersion @relation(fields: [textbookVersionId], references: [id], onDelete: Cascade)
+  chapter          Chapter?      @relation(fields: [chapterId], references: [id], onDelete: SetNull)
+  contentUnits     ContentUnit[]
+  assets           TextbookAsset[]
+
+  @@unique([textbookVersionId, pageNumber])
+  @@index([chapterId])
+}
+
+model ContentUnit {
+  id                  String          @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  pageId              String          @map("page_id") @db.Uuid
+  chapterId           String          @map("chapter_id") @db.Uuid
+  parentContentUnitId String?         @map("parent_content_unit_id") @db.Uuid
+  contentType         ContentType     @map("content_type")
+  text                String
+  normalizedText      String          @map("normalized_text")
+  language            ContentLanguage
+  keywords            String[]
+  contentHash         String          @unique @map("content_hash")
+  metadata            Json            @default("{}")
+  createdAt           DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt           DateTime        @updatedAt @map("updated_at") @db.Timestamptz(6)
+  page                Page            @relation(fields: [pageId], references: [id], onDelete: Cascade)
+  chapter             Chapter         @relation(fields: [chapterId], references: [id], onDelete: Cascade)
+  parent              ContentUnit?    @relation("ContentUnitHierarchy", fields: [parentContentUnitId], references: [id], onDelete: SetNull)
+  children            ContentUnit[]   @relation("ContentUnitHierarchy")
+  assets              TextbookAsset[]
+  embeddings          Embedding[]
+  tableRecords        TableAsset[]
+  questionRecords     Question[]      @relation("QuestionContentUnit")
+
+  @@index([chapterId])
+  @@index([pageId])
+  @@index([contentType])
+}
+
+model TextbookAsset {
+  id                   String       @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  contentUnitId        String?      @map("content_unit_id") @db.Uuid
+  pageId               String       @map("page_id") @db.Uuid
+  assetType            AssetType    @map("asset_type")
+  filePath             String       @map("file_path")
+  captionText          String?      @map("caption_text")
+  ocrText              String?      @map("ocr_text")
+  nearbyContentUnitIds String[]     @default([]) @map("nearby_content_unit_ids")
+  metadata             Json         @default("{}")
+  createdAt            DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt            DateTime     @updatedAt @map("updated_at") @db.Timestamptz(6)
+  contentUnit          ContentUnit? @relation(fields: [contentUnitId], references: [id], onDelete: SetNull)
+  page                 Page         @relation(fields: [pageId], references: [id], onDelete: Cascade)
+  tableRecord          TableAsset?
+  graphRecord          GraphAsset?
+  diagramRecord        DiagramAsset?
+
+  @@index([pageId])
+  @@index([assetType])
+}
+
+model TableAsset {
+  id                String       @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  assetId           String       @unique @map("asset_id") @db.Uuid
+  contentUnitId     String?      @map("content_unit_id") @db.Uuid
+  rawTableText      String?      @map("raw_table_text")
+  structuredRows    Json         @default("[]")
+  columnHeaders     Json         @default("[]")
+  generatedExplanation String?   @map("generated_explanation")
+  createdAt         DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime     @updatedAt @map("updated_at") @db.Timestamptz(6)
+  asset             TextbookAsset @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  contentUnit       ContentUnit? @relation(fields: [contentUnitId], references: [id], onDelete: SetNull)
+}
+
+model GraphAsset {
+  id                   String       @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  assetId              String       @unique @map("asset_id") @db.Uuid
+  graphType            String?      @map("graph_type")
+  axisXLabel           String?      @map("axis_x_label")
+  axisYLabel           String?      @map("axis_y_label")
+  captionText          String?      @map("caption_text")
+  generatedExplanation String?      @map("generated_explanation")
+  possibleQuestions    Json         @default("[]") @map("possible_questions")
+  createdAt            DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt            DateTime     @updatedAt @map("updated_at") @db.Timestamptz(6)
+  asset                TextbookAsset @relation(fields: [assetId], references: [id], onDelete: Cascade)
+}
+
+model DiagramAsset {
+  id                   String       @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  assetId              String       @unique @map("asset_id") @db.Uuid
+  captionText          String?      @map("caption_text")
+  labelMap             Json         @default("[]") @map("label_map")
+  generatedDescription String?      @map("generated_description")
+  possibleQuestions    Json         @default("[]") @map("possible_questions")
+  createdAt            DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt            DateTime     @updatedAt @map("updated_at") @db.Timestamptz(6)
+  asset                TextbookAsset @relation(fields: [assetId], references: [id], onDelete: Cascade)
+}
+
+model Exercise {
+  id           String    @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  chapterId    String    @map("chapter_id") @db.Uuid
+  title        String
+  pageStart    Int?      @map("page_start")
+  pageEnd      Int?      @map("page_end")
+  exerciseType String?   @map("exercise_type")
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+  chapter      Chapter   @relation(fields: [chapterId], references: [id], onDelete: Cascade)
+  questions    Question[]
+
+  @@index([chapterId])
+}
+
+model Question {
+  id                String      @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  exerciseId        String      @map("exercise_id") @db.Uuid
+  parentQuestionId  String?     @map("parent_question_id") @db.Uuid
+  contentUnitId     String?     @map("content_unit_id") @db.Uuid
+  questionNumber    String?     @map("question_number")
+  questionText      String      @map("question_text")
+  marksHint         Int?        @map("marks_hint")
+  answerHint        String?     @map("answer_hint")
+  createdAt         DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime    @updatedAt @map("updated_at") @db.Timestamptz(6)
+  exercise          Exercise    @relation(fields: [exerciseId], references: [id], onDelete: Cascade)
+  parentQuestion    Question?   @relation("QuestionHierarchy", fields: [parentQuestionId], references: [id], onDelete: SetNull)
+  childQuestions    Question[]  @relation("QuestionHierarchy")
+  contentUnit       ContentUnit? @relation("QuestionContentUnit", fields: [contentUnitId], references: [id], onDelete: SetNull)
+
+  @@index([exerciseId])
+  @@index([parentQuestionId])
+}
+
+model Embedding {
+  id                String                 @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  contentUnitId     String                 @map("content_unit_id") @db.Uuid
+  embeddingModel    String                 @map("embedding_model")
+  embeddingVersion  String                 @map("embedding_version")
+  embeddingValues   Json                   @default("[]") @map("embedding_values")
+  contentHash       String                 @map("content_hash")
+  createdAt         DateTime               @default(now()) @map("created_at") @db.Timestamptz(6)
+  contentUnit       ContentUnit            @relation(fields: [contentUnitId], references: [id], onDelete: Cascade)
+
+  @@index([contentUnitId])
+  @@index([embeddingModel, embeddingVersion])
+}
+
+model RetrievalLog {
+  id                String      @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  requestId         String      @unique @map("request_id") @db.Uuid
+  userId            String?     @map("user_id") @db.Uuid
+  chapterId         String?     @map("chapter_id") @db.Uuid
+  question          String
+  filters           Json        @default("{}")
+  retrievedUnitIds  String[]    @default([]) @map("retrieved_unit_ids")
+  scores            Json        @default("[]")
+  confidence        Float       @default(0.0)
+  createdAt         DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
+  chapter           Chapter?    @relation(fields: [chapterId], references: [id], onDelete: SetNull)
+  user              User?       @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([createdAt])
+}
+
+model AnswerCache {
+  id                    String             @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  normalizedQuestion    String             @map("normalized_question")
+  question              String
+  subjectId             String?            @map("subject_id") @db.Uuid
+  chapterId             String?            @map("chapter_id") @db.Uuid
+  language              Medium
+  answerFormat          String             @map("answer_format")
+  answerText            String             @map("answer_text")
+  citations             Json               @default("[]")
+  confidenceScore       Float              @map("confidence_score")
+  sourceContentUnitIds  String[]           @default([]) @map("source_content_unit_ids")
+  modelUsed             String?            @map("model_used")
+  cacheType             String             @map("cache_type")
+  verificationStatus    VerificationStatus @map("verification_status")
+  usageCount            Int                @default(0) @map("usage_count")
+  positiveFeedbackCount Int                @default(0) @map("positive_feedback_count")
+  negativeFeedbackCount Int                @default(0) @map("negative_feedback_count")
+  lastServedAt          DateTime?          @map("last_served_at") @db.Timestamptz(6)
+  expiresAt             DateTime?          @map("expires_at") @db.Timestamptz(6)
+  createdAt             DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+  subject               Subject?           @relation(fields: [subjectId], references: [id], onDelete: SetNull)
+  chapter               Chapter?           @relation(fields: [chapterId], references: [id], onDelete: SetNull)
+  feedback              Feedback[]
+  semanticEntries       SemanticCache[]
+  exactEntries          ExactCache[]
+  teacherVerifiedEntries TeacherVerifiedAnswer[]
+
+  @@index([normalizedQuestion, language, answerFormat, subjectId, chapterId])
+  @@index([verificationStatus])
+}
+
+model SemanticCache {
+  id                     String                 @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  questionText           String                 @map("question_text")
+  normalizedQuestion     String                 @map("normalized_question")
+  questionEmbeddingValues Json                  @default("[]") @map("question_embedding_values")
+  answerCacheId          String                 @map("answer_cache_id") @db.Uuid
+  similarityFloor        Float                  @default(0.85) @map("similarity_floor")
+  createdAt              DateTime               @default(now()) @map("created_at") @db.Timestamptz(6)
+  answerCache            AnswerCache            @relation(fields: [answerCacheId], references: [id], onDelete: Cascade)
+
+  @@index([answerCacheId])
+}
+
+model ExactCache {
+  id                String          @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  cacheKey          String          @unique @map("cache_key")
+  answerCacheId     String          @map("answer_cache_id") @db.Uuid
+  textbookVersionId String?         @map("textbook_version_id") @db.Uuid
+  hitCount          Int             @default(0) @map("hit_count")
+  createdAt         DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime        @updatedAt @map("updated_at") @db.Timestamptz(6)
+  answerCache       AnswerCache     @relation(fields: [answerCacheId], references: [id], onDelete: Cascade)
+  textbookVersion   TextbookVersion? @relation(fields: [textbookVersionId], references: [id], onDelete: SetNull)
+
+  @@index([answerCacheId])
+}
+
+model ModelProvider {
+  id                String            @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  providerName      String            @map("provider_name")
+  modelName         String            @map("model_name")
+  enabled           Boolean           @default(true)
+  priority          Int               @default(1)
+  supportsMalayalam Boolean           @default(true) @map("supports_malayalam")
+  supportsVision    Boolean           @default(false) @map("supports_vision")
+  rpmLimit          Int?              @map("rpm_limit")
+  tpmLimit          Int?              @map("tpm_limit")
+  dailyBudgetInr    Decimal?          @map("daily_budget_inr") @db.Decimal(12, 2)
+  monthlyBudgetInr  Decimal?          @map("monthly_budget_inr") @db.Decimal(12, 2)
+  createdAt         DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime          @updatedAt @map("updated_at") @db.Timestamptz(6)
+  modelCalls        ModelCall[]
+  providerFailures  ProviderFailure[]
+
+  @@unique([providerName, modelName])
+  @@index([enabled])
+}
+
+model ModelRoute {
+  id                 String      @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  routeCode          String      @unique @map("route_code")
+  userPlan           String      @map("user_plan")
+  trafficMode        TrafficMode @default(normal)
+  difficulty         String?
+  language           Medium?
+  answerType         String?     @map("answer_type")
+  orderedProviderIds String[]    @default([]) @map("ordered_provider_ids")
+  createdAt          DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt          DateTime    @updatedAt @map("updated_at") @db.Timestamptz(6)
+  modelCalls         ModelCall[]
+
+  @@index([userPlan, trafficMode, answerType])
+}
+
+model ModelCall {
+  id           String          @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  requestId    String          @map("request_id") @db.Uuid
+  providerId   String          @map("provider_id") @db.Uuid
+  routeId      String?         @map("route_id") @db.Uuid
+  modelName    String          @map("model_name")
+  status       ModelCallStatus
+  inputTokens  Int             @default(0) @map("input_tokens")
+  outputTokens Int             @default(0) @map("output_tokens")
+  latencyMs    Int             @map("latency_ms")
+  costInr      Decimal         @default(0) @map("cost_inr") @db.Decimal(12, 4)
+  errorType    String?         @map("error_type")
+  createdAt    DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  provider     ModelProvider   @relation(fields: [providerId], references: [id], onDelete: Cascade)
+  route        ModelRoute?     @relation(fields: [routeId], references: [id], onDelete: SetNull)
+
+  @@index([requestId])
+  @@index([providerId])
+  @@index([status, createdAt])
+}
+
+model ProviderFailure {
+  id                 String               @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  providerId         String               @map("provider_id") @db.Uuid
+  errorType          String               @map("error_type")
+  statusCode         Int?                 @map("status_code")
+  failureCountWindow Int                  @default(1) @map("failure_count_window")
+  circuitState       ProviderCircuitState @default(closed) @map("circuit_state")
+  createdAt          DateTime             @default(now()) @map("created_at") @db.Timestamptz(6)
+  provider           ModelProvider        @relation(fields: [providerId], references: [id], onDelete: Cascade)
+
+  @@index([providerId, circuitState])
+}
+
+model Feedback {
+  id            String      @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  userId        String      @map("user_id") @db.Uuid
+  answerCacheId String      @map("answer_cache_id") @db.Uuid
+  rating        Int
+  feedbackText  String?     @map("feedback_text")
+  issueType     String?     @map("issue_type")
+  createdAt     DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
+  user          User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  answerCache   AnswerCache @relation(fields: [answerCacheId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([answerCacheId])
+}
+
+model TeacherVerifiedAnswer {
+  id            String                    @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  teacherUserId String                    @map("teacher_user_id") @db.Uuid
+  answerCacheId String                    @map("answer_cache_id") @db.Uuid
+  status        TeacherVerificationStatus
+  notes         String?
+  verifiedAt    DateTime                  @default(now()) @map("verified_at") @db.Timestamptz(6)
+  teacherUser   User                      @relation("TeacherVerifier", fields: [teacherUserId], references: [id], onDelete: Cascade)
+  answerCache   AnswerCache               @relation(fields: [answerCacheId], references: [id], onDelete: Cascade)
+
+  @@index([teacherUserId])
+  @@index([answerCacheId, status])
+}
+
+model AdminJob {
+  id                String      @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  jobType           String      @map("job_type")
+  initiatedByUserId String      @map("initiated_by_user_id") @db.Uuid
+  status            JobStatus   @default(pending)
+  payload           Json        @default("{}")
+  startedAt         DateTime?   @map("started_at") @db.Timestamptz(6)
+  finishedAt        DateTime?   @map("finished_at") @db.Timestamptz(6)
+  createdAt         DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
+  initiator         User        @relation("AdminJobInitiator", fields: [initiatedByUserId], references: [id], onDelete: Cascade)
+  queueJobs         QueueJob[]
+
+  @@index([status, jobType])
+}
+
+model IngestionJob {
+  id                String         @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  textbookId        String?        @map("textbook_id") @db.Uuid
+  textbookVersionId String?        @map("textbook_version_id") @db.Uuid
+  status            JobStatus      @default(pending)
+  stage             IngestionStage @default(registered)
+  errorMessage      String?        @map("error_message")
+  retryCount        Int            @default(0) @map("retry_count")
+  metrics           Json           @default("{}")
+  createdAt         DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime       @updatedAt @map("updated_at") @db.Timestamptz(6)
+  textbook          Textbook?      @relation(fields: [textbookId], references: [id], onDelete: SetNull)
+  textbookVersion   TextbookVersion? @relation(fields: [textbookVersionId], references: [id], onDelete: SetNull)
+
+  @@index([textbookVersionId, status, stage])
+}
+
+model QueueJob {
+  id          String    @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  adminJobId  String?   @map("admin_job_id") @db.Uuid
+  queueName   String    @map("queue_name")
+  jobReference String   @map("job_reference")
+  status      JobStatus @default(pending)
+  priority    Int       @default(0)
+  attempts    Int       @default(0)
+  availableAt DateTime? @map("available_at") @db.Timestamptz(6)
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  adminJob    AdminJob? @relation(fields: [adminJobId], references: [id], onDelete: SetNull)
+
+  @@index([queueName, status])
+  @@index([jobReference])
+}
+
+model ExamModeSetting {
+  id                   String      @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  enabled              Boolean     @default(false)
+  startsAt             DateTime?   @map("starts_at") @db.Timestamptz(6)
+  endsAt               DateTime?   @map("ends_at") @db.Timestamptz(6)
+  freePremiumDisabled  Boolean     @default(true) @map("free_premium_disabled")
+  shortAnswerDefault   Boolean     @default(true) @map("short_answer_default")
+  queueThreshold       Int         @default(250) @map("queue_threshold")
+  trafficMode          TrafficMode @default(normal) @map("traffic_mode")
+  createdAt            DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt            DateTime    @updatedAt @map("updated_at") @db.Timestamptz(6)
+}
+
+model RateLimitRule {
+  id               String    @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  scopeType        String    @map("scope_type")
+  scopeValue       String    @map("scope_value")
+  requestType      String    @map("request_type")
+  rpmLimit         Int?      @map("rpm_limit")
+  dailyLimit       Int?      @map("daily_limit")
+  concurrencyLimit Int?      @map("concurrency_limit")
+  active           Boolean   @default(true)
+  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@index([scopeType, scopeValue, requestType])
+}
