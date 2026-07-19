@@ -112,3 +112,11 @@ pub struct AiAnswer {
     pub output_tokens: i32,
     pub source_chunks: Vec<String>,
 }
+
+#[derive(Debug, Clone, FromRow)]
+pub struct CachedAnswer {
+    pub answer: String,
+    pub model: String,
+    pub provider: String,
+    pub source_chunks: Vec<String>,
+}

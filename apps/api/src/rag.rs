@@ -4,6 +4,7 @@ pub async fn select_contexts(
     state: &AppState,
     request: &AiChatRequest,
     question: &str,
+    question_embedding: Option<&[f32]>,
 ) -> Result<Vec<String>, ApiError> {
     let direct_contexts = request
         .contexts
@@ -18,10 +19,16 @@ pub async fn select_contexts(
     let mut candidates = direct_contexts;
     let chapter_ids = request.chapter_ids.clone().unwrap_or_default();
     if !chapter_ids.is_empty() {
-        let embedding = state.ai.embed(question).await.unwrap_or_default();
+        let owned_embedding;
+        let embedding = if let Some(embedding) = question_embedding {
+            embedding
+        } else {
+            owned_embedding = state.ai.embed(question).await.unwrap_or_default();
+            &owned_embedding
+        };
         let retrieved = state
             .qdrant
-            .search(&embedding, &chapter_ids, 12)
+            .search(embedding, &chapter_ids, 12)
             .await
             .unwrap_or_default();
         candidates.extend(retrieved.into_iter().map(|chunk| {

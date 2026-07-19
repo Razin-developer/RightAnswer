@@ -16,11 +16,30 @@ async fn main() -> anyhow::Result<()> {
 
     let pool = PgPool::connect(&database_url).await?;
     let client = Client::new();
+    let has_vector_column = sqlx::query_scalar::<_, bool>(
+        r#"
+        SELECT EXISTS (
+          SELECT 1
+          FROM information_schema.columns
+          WHERE table_schema = 'public'
+            AND table_name = 'Embedding'
+            AND column_name = 'embedding_vector'
+        )
+        "#,
+    )
+    .fetch_one(&pool)
+    .await?;
 
-    let rows = sqlx::query(
+    let embedding_vector_select = if has_vector_column {
+        "e.embedding_vector::text AS embedding_vector"
+    } else {
+        "NULL::text AS embedding_vector"
+    };
+    let rows = sqlx::query(&format!(
         r#"
         SELECT
           e.id::text AS embedding_id,
+          {embedding_vector_select},
           e.embedding_values,
           e.embedding_model,
           e.embedding_version,
@@ -33,10 +52,16 @@ async fn main() -> anyhow::Result<()> {
         FROM "Embedding" e
         JOIN "ContentUnit" cu ON cu.id = e.content_unit_id
         JOIN "Page" p ON p.id = cu.page_id
-        LEFT JOIN "TextbookAsset" a ON a.content_unit_id = cu.id
+        LEFT JOIN LATERAL (
+          SELECT file_path
+          FROM "TextbookAsset"
+          WHERE content_unit_id = cu.id
+          ORDER BY created_at ASC
+          LIMIT 1
+        ) a ON true
         ORDER BY e.created_at ASC
-        "#,
-    )
+        "#
+    ))
     .fetch_all(&pool)
     .await?;
 
@@ -46,8 +71,7 @@ async fn main() -> anyhow::Result<()> {
         ));
     }
 
-    let first_vector: Vec<f32> =
-        serde_json::from_value(rows[0].get::<Value, _>("embedding_values"))?;
+    let first_vector = vector_from_row(&rows[0])?;
     if first_vector.is_empty() {
         return Err(anyhow!("First embedding vector is empty. Stop."));
     }
@@ -65,7 +89,7 @@ async fn main() -> anyhow::Result<()> {
     for batch in rows.chunks(64) {
         let mut points = Vec::with_capacity(batch.len());
         for row in batch {
-            let vector: Vec<f32> = serde_json::from_value(row.get::<Value, _>("embedding_values"))?;
+            let vector = vector_from_row(row)?;
             if vector.is_empty() {
                 return Err(anyhow!(
                     "Embedding {} has an empty vector. Stop.",
@@ -114,7 +138,8 @@ async fn main() -> anyhow::Result<()> {
     }
 
     println!(
-        "Migrated {migrated} PostgreSQL embeddings into Qdrant collection {qdrant_collection}."
+        "Migrated {migrated} PostgreSQL embeddings into Qdrant collection {qdrant_collection}. Vector source: {}.",
+        if has_vector_column { "pgvector embedding_vector" } else { "JSON embedding_values fallback" }
     );
     Ok(())
 }
@@ -126,11 +151,38 @@ async fn create_collection(
     api_key: Option<&str>,
     vector_size: usize,
 ) -> anyhow::Result<()> {
-    let mut request = client.put(format!(
+    let collection_url = format!(
         "{}/collections/{}",
         base_url.trim_end_matches('/'),
         collection
-    ));
+    );
+    let mut inspect = client.get(&collection_url);
+    if let Some(api_key) = api_key {
+        inspect = inspect.header("api-key", api_key);
+    }
+    let inspect_response = inspect.send().await?;
+    if inspect_response.status().is_success() {
+        let value: Value = inspect_response.json().await?;
+        let existing_size = value["result"]["config"]["params"]["vectors"]["size"]
+            .as_u64()
+            .or_else(|| value["result"]["config"]["params"]["vectors"][""]["size"].as_u64());
+        if existing_size == Some(vector_size as u64) {
+            return Ok(());
+        }
+        return Err(anyhow!(
+            "Qdrant collection {collection} already exists with vector size {:?}, expected {vector_size}. Stop to avoid mixing incompatible data.",
+            existing_size
+        ));
+    }
+    if inspect_response.status().as_u16() != 404 {
+        let status = inspect_response.status();
+        let text = inspect_response.text().await.unwrap_or_default();
+        return Err(anyhow!(
+            "Qdrant inspect collection failed ({status}): {text}"
+        ));
+    }
+
+    let mut request = client.put(collection_url);
     if let Some(api_key) = api_key {
         request = request.header("api-key", api_key);
     }
@@ -199,4 +251,43 @@ async fn count_points(
     }
     let value: Value = response.json().await?;
     Ok(value["result"]["count"].as_u64().unwrap_or(0))
+}
+
+fn vector_from_row(row: &sqlx::postgres::PgRow) -> anyhow::Result<Vec<f32>> {
+    let embedding_id = row.get::<String, _>("embedding_id");
+    if let Some(vector_text) = row.try_get::<Option<String>, _>("embedding_vector")? {
+        let vector = parse_pgvector_text(&vector_text).with_context(|| {
+            format!("Failed to parse pgvector embedding_vector for embedding {embedding_id}")
+        })?;
+        if !vector.is_empty() {
+            return Ok(vector);
+        }
+    }
+
+    let value = row.get::<Value, _>("embedding_values");
+    let vector: Vec<f32> = serde_json::from_value(value)
+        .with_context(|| format!("Failed to parse JSON embedding_values for {embedding_id}"))?;
+    Ok(vector)
+}
+
+fn parse_pgvector_text(value: &str) -> anyhow::Result<Vec<f32>> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Ok(vec![]);
+    }
+    let inner = trimmed
+        .strip_prefix('[')
+        .and_then(|value| value.strip_suffix(']'))
+        .ok_or_else(|| anyhow!("expected pgvector text like [0.1,0.2], got {trimmed}"))?;
+    if inner.trim().is_empty() {
+        return Ok(vec![]);
+    }
+    inner
+        .split(',')
+        .map(|part| {
+            part.trim()
+                .parse::<f32>()
+                .with_context(|| format!("invalid vector number: {}", part.trim()))
+        })
+        .collect()
 }

@@ -8,6 +8,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::{
@@ -16,7 +17,7 @@ use crate::{
     config::Config,
     db::Database,
     error::ApiError,
-    models::{AiAnswer, AiChatRequest, AuthUser, Chat},
+    models::{AiAnswer, AiChatRequest, AuthUser, CachedAnswer, Chat},
     openrouter::AiGateway,
     qdrant::QdrantGateway,
     rag::select_contexts,
@@ -141,8 +142,78 @@ async fn ai_chat(
         .filter(|value| !value.is_empty())
         .ok_or_else(|| ApiError::BadRequest("question is required".into()))?;
 
-    let selected_contexts = select_contexts(&state, &body, question).await?;
+    let normalized_question = normalize_question(question);
+    let response_length = body.response_length.as_deref().unwrap_or("normal");
+    let reasoning_level = body.reasoning_level.as_deref().unwrap_or("mid");
+    let chapter_ids = normalized_chapter_ids(&body);
+    let exact_key = cache_key(
+        &normalized_question,
+        body.response_language.as_deref(),
+        response_length,
+        reasoning_level,
+        body.subject_id.as_deref(),
+        &chapter_ids,
+    );
+
+    if let Some(cached) = state.db.lookup_exact_cache(&exact_key).await? {
+        let answer = cached_answer(cached, "exact-cache");
+        persist_ai_chat(&state, user.as_ref(), &body, question, &answer).await?;
+        return Ok(ok(json!({
+            "answer": answer,
+            "content": answer.content,
+            "servedFrom": answer.served_from,
+            "sourceChunks": answer.source_chunks
+        })));
+    }
+
+    let question_embedding = state.ai.embed(question).await.unwrap_or_default();
+    if let Some(cached) = state
+        .db
+        .lookup_semantic_cache(
+            &question_embedding,
+            state.config.semantic_cache_threshold,
+            body.response_language.as_deref(),
+            response_length,
+            reasoning_level,
+            body.subject_id.as_deref(),
+            &chapter_ids,
+        )
+        .await?
+    {
+        let answer = cached_answer(cached, "semantic-cache");
+        persist_ai_chat(&state, user.as_ref(), &body, question, &answer).await?;
+        return Ok(ok(json!({
+            "answer": answer,
+            "content": answer.content,
+            "servedFrom": answer.served_from,
+            "sourceChunks": answer.source_chunks
+        })));
+    }
+
+    let selected_contexts =
+        select_contexts(&state, &body, question, Some(&question_embedding)).await?;
     let answer = state.ai.chat(&body, &selected_contexts).await?;
+    let _ = state
+        .db
+        .store_answer_cache(
+            &exact_key,
+            &normalized_question,
+            question,
+            &answer.content,
+            &question_embedding,
+            &answer.model,
+            &answer.provider,
+            body.response_language.as_deref(),
+            response_length,
+            reasoning_level,
+            body.subject_id.as_deref(),
+            body.subject_name.as_deref(),
+            &chapter_ids,
+            &answer.source_chunks,
+            answer.input_tokens,
+            answer.output_tokens,
+        )
+        .await;
     persist_ai_chat(&state, user.as_ref(), &body, question, &answer).await?;
 
     Ok(ok(json!({
@@ -306,4 +377,60 @@ pub fn ok<T: Serialize>(data: T) -> Json<ApiResponse<T>> {
         success: true,
         data,
     })
+}
+
+fn cached_answer(cached: CachedAnswer, served_from: &str) -> AiAnswer {
+    AiAnswer {
+        content: cached.answer,
+        served_from: served_from.into(),
+        model: cached.model,
+        provider: cached.provider,
+        input_tokens: 0,
+        output_tokens: 0,
+        source_chunks: cached.source_chunks,
+    }
+}
+
+fn normalized_chapter_ids(body: &AiChatRequest) -> Vec<String> {
+    let mut chapter_ids = body.chapter_ids.clone().unwrap_or_default();
+    chapter_ids.sort();
+    chapter_ids.dedup();
+    chapter_ids
+}
+
+fn normalize_question(question: &str) -> String {
+    question
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch.is_whitespace() {
+                ch.to_ascii_lowercase()
+            } else {
+                ' '
+            }
+        })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn cache_key(
+    normalized_question: &str,
+    language: Option<&str>,
+    response_length: &str,
+    reasoning_level: &str,
+    subject_id: Option<&str>,
+    chapter_ids: &[String],
+) -> String {
+    let input = json!({
+        "question": normalized_question,
+        "language": language.unwrap_or(""),
+        "responseLength": response_length,
+        "reasoningLevel": reasoning_level,
+        "subjectId": subject_id.unwrap_or(""),
+        "chapterIds": chapter_ids,
+    })
+    .to_string();
+    let digest = Sha256::digest(input.as_bytes());
+    format!("{digest:x}")
 }

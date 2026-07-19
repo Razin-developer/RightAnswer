@@ -18,6 +18,7 @@ pub struct Config {
     pub qdrant_url: String,
     pub qdrant_api_key: Option<String>,
     pub qdrant_collection: String,
+    pub semantic_cache_threshold: f32,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -67,6 +68,9 @@ impl Config {
             qdrant_api_key: read("QDRANT_API_KEY"),
             qdrant_collection: read("QDRANT_COLLECTION")
                 .unwrap_or_else(|| "right_answer_textbook_chunks".into()),
+            semantic_cache_threshold: read("SEMANTIC_CACHE_THRESHOLD")
+                .and_then(|value| value.parse().ok())
+                .unwrap_or(0.90),
         })
     }
 

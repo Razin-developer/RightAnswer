@@ -3,7 +3,7 @@ use std::time::Duration;
 use sqlx::{postgres::PgPoolOptions, PgPool};
 use uuid::Uuid;
 
-use crate::models::{Chat, ChatMessage, User};
+use crate::models::{CachedAnswer, Chat, ChatMessage, User};
 
 #[derive(Clone)]
 pub struct Database {
@@ -178,6 +178,159 @@ impl Database {
         .await?;
         Ok(())
     }
+
+    pub async fn lookup_exact_cache(
+        &self,
+        exact_key: &str,
+    ) -> Result<Option<CachedAnswer>, sqlx::Error> {
+        let answer = sqlx::query_as::<_, CachedAnswer>(
+            r#"
+            UPDATE answer_cache
+            SET hit_count = hit_count + 1, updated_at = now()
+            WHERE exact_key = $1
+            RETURNING answer, model, provider, source_chunks
+            "#,
+        )
+        .bind(exact_key)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(answer)
+    }
+
+    pub async fn lookup_semantic_cache(
+        &self,
+        embedding: &[f32],
+        threshold: f32,
+        language: Option<&str>,
+        response_length: &str,
+        reasoning_level: &str,
+        subject_id: Option<&str>,
+        chapter_ids: &[String],
+    ) -> Result<Option<CachedAnswer>, sqlx::Error> {
+        if embedding.is_empty() {
+            return Ok(None);
+        }
+
+        let candidates = sqlx::query_as::<_, CacheCandidate>(
+            r#"
+            SELECT id, answer, model, provider, source_chunks, embedding
+            FROM answer_cache
+            WHERE cardinality(embedding) = $1
+              AND ($2::text IS NULL OR language = $2)
+              AND response_length = $3
+              AND reasoning_level = $4
+              AND ($5::text IS NULL OR subject_id = $5)
+              AND chapter_ids = $6
+            ORDER BY updated_at DESC
+            LIMIT 80
+            "#,
+        )
+        .bind(embedding.len() as i32)
+        .bind(language)
+        .bind(response_length)
+        .bind(reasoning_level)
+        .bind(subject_id)
+        .bind(chapter_ids)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut best: Option<(CacheCandidate, f32)> = None;
+        for candidate in candidates {
+            let score = cosine_similarity_f64(&candidate.embedding, embedding);
+            if score >= threshold && best.as_ref().map(|(_, best)| score > *best).unwrap_or(true) {
+                best = Some((candidate, score));
+            }
+        }
+
+        let Some((candidate, _)) = best else {
+            return Ok(None);
+        };
+        sqlx::query(
+            "UPDATE answer_cache SET hit_count = hit_count + 1, updated_at = now() WHERE id = $1",
+        )
+        .bind(candidate.id)
+        .execute(&self.pool)
+        .await?;
+        Ok(Some(CachedAnswer {
+            answer: candidate.answer,
+            model: candidate.model,
+            provider: candidate.provider,
+            source_chunks: candidate.source_chunks,
+        }))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn store_answer_cache(
+        &self,
+        exact_key: &str,
+        normalized_question: &str,
+        question: &str,
+        answer: &str,
+        embedding: &[f32],
+        model: &str,
+        provider: &str,
+        language: Option<&str>,
+        response_length: &str,
+        reasoning_level: &str,
+        subject_id: Option<&str>,
+        subject_name: Option<&str>,
+        chapter_ids: &[String],
+        source_chunks: &[String],
+        input_tokens: i32,
+        output_tokens: i32,
+    ) -> Result<(), sqlx::Error> {
+        let embedding = embedding
+            .iter()
+            .map(|value| *value as f64)
+            .collect::<Vec<_>>();
+        sqlx::query(
+            r#"
+            INSERT INTO answer_cache
+              (exact_key, normalized_question, question, answer, embedding, model, provider,
+               language, response_length, reasoning_level, subject_id, subject_name, chapter_ids,
+               source_chunks, input_tokens, output_tokens)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+            ON CONFLICT (exact_key) DO UPDATE SET
+              answer = EXCLUDED.answer,
+              embedding = EXCLUDED.embedding,
+              model = EXCLUDED.model,
+              provider = EXCLUDED.provider,
+              source_chunks = EXCLUDED.source_chunks,
+              input_tokens = EXCLUDED.input_tokens,
+              output_tokens = EXCLUDED.output_tokens,
+              updated_at = now()
+            "#,
+        )
+        .bind(exact_key)
+        .bind(normalized_question)
+        .bind(question)
+        .bind(answer)
+        .bind(&embedding)
+        .bind(model)
+        .bind(provider)
+        .bind(language)
+        .bind(response_length)
+        .bind(reasoning_level)
+        .bind(subject_id)
+        .bind(subject_name)
+        .bind(chapter_ids)
+        .bind(source_chunks)
+        .bind(input_tokens)
+        .bind(output_tokens)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+}
+
+#[derive(sqlx::FromRow)]
+struct CacheCandidate {
+    id: Uuid,
+    answer: String,
+    model: String,
+    provider: String,
+    source_chunks: Vec<String>,
+    embedding: Vec<f64>,
 }
 
 fn estimate_cost(model: &str, input_tokens: i32, output_tokens: i32) -> f64 {
@@ -189,4 +342,24 @@ fn estimate_cost(model: &str, input_tokens: i32, output_tokens: i32) -> f64 {
         };
     (input_tokens as f64 / 1_000_000.0) * input_per_million
         + (output_tokens as f64 / 1_000_000.0) * output_per_million
+}
+
+fn cosine_similarity_f64(left: &[f64], right: &[f32]) -> f32 {
+    if left.len() != right.len() || left.is_empty() {
+        return 0.0;
+    }
+    let mut dot = 0.0;
+    let mut left_norm = 0.0;
+    let mut right_norm = 0.0;
+    for (a, b) in left.iter().zip(right.iter()) {
+        let b = *b as f64;
+        dot += a * b;
+        left_norm += a * a;
+        right_norm += b * b;
+    }
+    if left_norm == 0.0 || right_norm == 0.0 {
+        0.0
+    } else {
+        (dot / (left_norm.sqrt() * right_norm.sqrt())) as f32
+    }
 }

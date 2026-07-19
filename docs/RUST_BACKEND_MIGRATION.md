@@ -82,12 +82,23 @@ Command:
 cargo run --manifest-path apps/api/Cargo.toml --bin migrate_qdrant
 ```
 
+If Docker Desktop is not running, Qdrant can be started locally with:
+
+```bash
+node scripts/start-local-qdrant.mjs
+```
+
 Failure conditions:
 
 - No PostgreSQL embeddings.
 - Empty vector in any row.
 - Qdrant collection create/upsert/count error.
 - Qdrant point count lower than migrated PostgreSQL rows.
+
+The migrator copies only textbook embedding vectors into Qdrant. It does not
+move relational data out of PostgreSQL. It reads the pgvector
+`Embedding.embedding_vector` column when present and falls back to
+`Embedding.embedding_values` for older local databases.
 
 ## Admin Expense Model
 

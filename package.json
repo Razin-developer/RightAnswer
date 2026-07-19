@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "concurrently \"pnpm dev:api\" \"pnpm --filter @right-answer/web dev\" \"pnpm --filter @right-answer/workers dev\"",
     "dev:db": "node scripts/start-local-postgres.mjs",
+    "dev:qdrant": "node scripts/start-local-qdrant.mjs",
     "dev:web": "pnpm --filter @right-answer/web dev",
     "dev:api": "cargo run --manifest-path apps/api/Cargo.toml",
     "dev:workers": "pnpm --filter @right-answer/workers dev",

@@ -40,6 +40,14 @@ Start infrastructure:
 docker compose up -d postgres qdrant redis
 ```
 
+Without Docker Desktop, run the local embedded-style helpers in separate
+terminals:
+
+```bash
+node scripts/start-local-postgres.mjs
+node scripts/start-local-qdrant.mjs
+```
+
 Run the Rust API:
 
 ```bash
@@ -70,7 +78,9 @@ cargo run --manifest-path apps/api/Cargo.toml --bin migrate_qdrant
 
 The migration stops if PostgreSQL embeddings are empty, any vector is empty,
 Qdrant writes fail, or the final Qdrant point count is lower than the migrated
-PostgreSQL row count.
+PostgreSQL embedding count. It reads `Embedding.embedding_vector` when the
+pgvector column exists, and falls back to `Embedding.embedding_values` for older
+local databases that only have the JSON backup values.
 
 ## Documentation
 
@@ -85,6 +95,7 @@ PostgreSQL row count.
 pnpm dev
 pnpm dev:api
 pnpm dev:web
+pnpm dev:qdrant
 cargo check --manifest-path apps/api/Cargo.toml
 pnpm --filter @right-answer/web build
 ```
