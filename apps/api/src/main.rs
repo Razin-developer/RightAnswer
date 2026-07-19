@@ -11,7 +11,10 @@ mod routes;
 
 use std::{net::SocketAddr, sync::Arc, time::Duration};
 
-use axum::{http::StatusCode, Router};
+use axum::{
+    http::{HeaderValue, Method, StatusCode},
+    Router,
+};
 use tokio::net::TcpListener;
 use tower_http::{cors::CorsLayer, timeout::TimeoutLayer, trace::TraceLayer};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -46,6 +49,20 @@ async fn main() -> anyhow::Result<()> {
         qdrant: QdrantGateway::new(config.clone()),
     });
 
+    let cors = if config.cors_origins.is_empty() {
+        CorsLayer::permissive()
+    } else {
+        let origins = config
+            .cors_origins
+            .iter()
+            .filter_map(|origin| origin.parse::<HeaderValue>().ok())
+            .collect::<Vec<_>>();
+        CorsLayer::new()
+            .allow_origin(origins)
+            .allow_methods([Method::GET, Method::POST, Method::PUT, Method::PATCH, Method::DELETE])
+            .allow_headers(tower_http::cors::Any)
+    };
+
     let app = Router::new()
         .route("/health", axum::routing::get(routes::health))
         .nest("/api", api_router(state.clone()))
@@ -55,7 +72,7 @@ async fn main() -> anyhow::Result<()> {
             Duration::from_secs(180),
         ))
         .layer(TraceLayer::new_for_http())
-        .layer(CorsLayer::permissive());
+        .layer(cors);
 
     let addr = SocketAddr::from(([0, 0, 0, 0], config.port));
     tracing::info!(%addr, "right-answer rust api listening");

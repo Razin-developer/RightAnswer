@@ -86,6 +86,7 @@ local databases that only have the JSON backup values.
 
 - [System Documentation](docs/SYSTEM_DOCUMENTATION.md)
 - [Rust Backend Migration](docs/RUST_BACKEND_MIGRATION.md)
+- [Production VPS Deployment](docs/PRODUCTION_VPS_DEPLOYMENT.md)
 - [Flutter App Overview](apps/app/docs/APP_OVERVIEW.md)
 - [Flutter Architecture](apps/app/docs/ARCHITECTURE.md)
 

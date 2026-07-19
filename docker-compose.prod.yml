@@ -1,0 +1,140 @@
+name: right-answer
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: right-answer-postgres
+    restart: unless-stopped
+    mem_limit: 512m
+    cpus: "0.60"
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-right_answer}
+      POSTGRES_USER: ${POSTGRES_USER:-right_answer}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+    command:
+      - postgres
+      - -c
+      - shared_buffers=128MB
+      - -c
+      - effective_cache_size=512MB
+      - -c
+      - work_mem=4MB
+      - -c
+      - maintenance_work_mem=64MB
+      - -c
+      - max_connections=25
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-right_answer} -d ${POSTGRES_DB:-right_answer}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: right-answer-redis
+    restart: unless-stopped
+    mem_limit: 128m
+    cpus: "0.15"
+    command: redis-server --appendonly yes --maxmemory 64mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  qdrant:
+    image: qdrant/qdrant:v1.18.3
+    container_name: right-answer-qdrant
+    restart: unless-stopped
+    mem_limit: 700m
+    cpus: "0.75"
+    volumes:
+      - qdrant_data:/qdrant/storage
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    image: right-answer-api:prod
+    container_name: right-answer-api
+    restart: unless-stopped
+    mem_limit: 384m
+    cpus: "0.35"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-right_answer}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-right_answer}
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
+      PORT: 4000
+      APP_URL: ${APP_URL:?APP_URL is required}
+      CORS_ORIGINS: ${CORS_ORIGINS:?CORS_ORIGINS is required}
+      QDRANT_URL: http://qdrant:6333
+      QDRANT_COLLECTION: ${QDRANT_COLLECTION:-right_answer_textbook_chunks}
+      AI_METHOD: ${AI_METHOD:-openrouter}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      HACKAI_API_KEY: ${HACKAI_API_KEY:-}
+      AI_SIMPLE_MODEL: ${AI_SIMPLE_MODEL:-google/gemma-3-12b-it}
+      AI_REASONING_MODEL: ${AI_REASONING_MODEL:-google/gemma-4-31b-it}
+      AI_EMBEDDING_MODEL: ${AI_EMBEDDING_MODEL:-perplexity/pplx-embed-v1-0.6b}
+      AI_RERANK_MODEL: ${AI_RERANK_MODEL:-nvidia/llama-nemotron-rerank-vl-1b-v2:free}
+      SEMANTIC_CACHE_THRESHOLD: ${SEMANTIC_CACHE_THRESHOLD:-0.9}
+      RUST_LOG: ${RUST_LOG:-right_answer_api=info,tower_http=info}
+    ports:
+      - "127.0.0.1:4000:4000"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:4000/health >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      args:
+        VITE_API_URL: ${VITE_API_URL:?VITE_API_URL is required}
+    image: right-answer-web:prod
+    container_name: right-answer-web
+    restart: unless-stopped
+    mem_limit: 128m
+    cpus: "0.15"
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:3000:80"
+
+  workers:
+    profiles: ["workers"]
+    build:
+      context: .
+      dockerfile: apps/workers/Dockerfile
+    image: right-answer-workers:prod
+    container_name: right-answer-workers
+    restart: unless-stopped
+    mem_limit: 256m
+    cpus: "0.25"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-right_answer}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-right_answer}
+      REDIS_URL: redis://redis:6379
+
+volumes:
+  postgres_data:
+  redis_data:
+  qdrant_data:

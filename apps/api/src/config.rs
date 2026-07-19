@@ -8,6 +8,7 @@ pub struct Config {
     pub database_url: String,
     pub jwt_secret: String,
     pub app_url: String,
+    pub cors_origins: Vec<String>,
     pub ai_method: AiMethod,
     pub openrouter_api_key: Option<String>,
     pub hackai_api_key: Option<String>,
@@ -54,6 +55,16 @@ impl Config {
             app_url: read("APP_URL")
                 .or_else(|| read("NEXT_PUBLIC_APP_URL"))
                 .unwrap_or_else(|| "http://localhost:3000".into()),
+            cors_origins: read("CORS_ORIGINS")
+                .map(|value| {
+                    value
+                        .split(',')
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .map(ToString::to_string)
+                        .collect()
+                })
+                .unwrap_or_default(),
             ai_method,
             openrouter_api_key: read("OPENROUTER_API_KEY").or_else(|| read("openrouter_api_key")),
             hackai_api_key: read("HACKAI_API_KEY").or_else(|| read("hackai_api_key")),
