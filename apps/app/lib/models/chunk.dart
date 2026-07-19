@@ -5,7 +5,7 @@ class Chunk {
   final String chapterId;
   final int chunkIndex;
   final String text;
-  final List<double>? embedding; // nullable — only set if API key exists
+  final List<double>? embedding; // nullable; only set after backend embedding
   final int? page;
   final DateTime createdAt;
 

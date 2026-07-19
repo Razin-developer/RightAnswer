@@ -138,11 +138,11 @@ class _ExamCreateScreenState extends State<ExamCreateScreen> {
 
   Future<void> _generateWithAI() async {
     if (_isGenerating) return;
-    if (!AppConfig.hasAnyAiApiKey) {
+    if (!AppConfig.hasApiUrl) {
       await AppFeedback.showErrorDialog(
         context,
         AppException.configuration(
-          'Missing AI API key. Add OPENAI_API_KEY or HACKCLUB_API_KEY.',
+          'Missing backend API URL. Add API_URL when building the app.',
         ),
       );
       return;
@@ -198,11 +198,11 @@ class _ExamCreateScreenState extends State<ExamCreateScreen> {
 
   Future<void> _refineWithAI() async {
     if (_isGenerating || _aiPromptCtrl.text.trim().isEmpty) return;
-    if (!AppConfig.hasAnyAiApiKey) {
+    if (!AppConfig.hasApiUrl) {
       await AppFeedback.showErrorDialog(
         context,
         AppException.configuration(
-          'Missing AI API key. Add OPENAI_API_KEY or HACKCLUB_API_KEY.',
+          'Missing backend API URL. Add API_URL when building the app.',
         ),
       );
       return;

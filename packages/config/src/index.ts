@@ -18,12 +18,20 @@ export const CORE_SUBJECT_CODES = [
   "malayalam",
 ] as const;
 
-export const EMBEDDING_MODEL_DEFAULT = "Qwen/Qwen3-Embedding-4B";
+export const EMBEDDING_MODEL_DEFAULT = "perplexity-ai/pplx-embed-v1-0.6b";
 export const DEFAULT_EMBEDDING_BACKEND = process.env.RIGHT_ANSWER_EMBEDDING_BACKEND ?? "hf-transformers";
 
 export function resolveEmbeddingDimensions(modelId: string, explicitDimensions?: string | number | null) {
   if (explicitDimensions !== undefined && explicitDimensions !== null && String(explicitDimensions).trim()) {
     return Number(explicitDimensions);
+  }
+
+  if (modelId.includes("pplx-embed-v1-4b") || modelId.includes("pplx-embed-context-v1-4b")) {
+    return 2560;
+  }
+
+  if (modelId.includes("pplx-embed-v1-0.6b") || modelId.includes("pplx-embed-context-v1-0.6b")) {
+    return 1024;
   }
 
   if (modelId.includes("Qwen3-Embedding-8B")) {

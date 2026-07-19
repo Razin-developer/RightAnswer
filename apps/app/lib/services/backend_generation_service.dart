@@ -38,7 +38,7 @@ class ImageTextExtractionResult {
   });
 }
 
-class OpenAIService {
+class BackendGenerationService {
   final SettingsRepository _settings;
   final UsageLogRepository _usageLog;
   final RetrievalService _retrieval;
@@ -46,7 +46,7 @@ class OpenAIService {
   static const double _defaultInputPrice = 0.0005;
   static const double _defaultOutputPrice = 0.0015;
 
-  OpenAIService(this._settings, this._usageLog, this._retrieval);
+  BackendGenerationService(this._settings, this._usageLog, this._retrieval);
 
   Future<GenerationResult> generateFromContext({
     required String toolType,
@@ -76,6 +76,7 @@ class OpenAIService {
           {'role': 'system', 'content': AppPrompts.chapterTutorSystemPrompt},
           {'role': 'user', 'content': userPrompt},
         ],
+        'contexts': contextChunks,
         'temperature': 0.3,
       },
       timeout: const Duration(seconds: 120),
@@ -266,7 +267,7 @@ class OpenAIService {
   }
 
   AppException _buildApiException(http.Response response) {
-    var message = 'The AI provider returned an unexpected error.';
+    var message = 'The backend returned an unexpected error.';
     try {
       final decoded = jsonDecode(response.body) as Map<String, dynamic>;
       message = decoded['error']?['message'] as String? ?? message;
@@ -276,7 +277,7 @@ class OpenAIService {
 
     if (response.statusCode == 401 || response.statusCode == 403) {
       return AppException.authentication(
-        'The configured AI API key was rejected. Check your debug or release API configuration and rebuild the app.',
+        'Your session was rejected. Sign in again and retry.',
       );
     }
     if (response.statusCode == 429) {
@@ -284,7 +285,7 @@ class OpenAIService {
     }
     if (response.statusCode >= 500) {
       return AppException.service(
-        'The AI provider is having trouble right now. Please try again in a little while.',
+        'The backend is having trouble right now. Please try again in a little while.',
       );
     }
     return AppException.service(message);

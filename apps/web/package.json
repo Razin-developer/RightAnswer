@@ -2,28 +2,25 @@
   "name": "@right-answer/web",
   "version": "0.1.0",
   "private": true,
+  "type": "module",
   "scripts": {
-    "dev": "next dev --port 3000",
-    "build": "next build",
-    "start": "next start --port 3000",
-    "lint": "next lint",
+    "dev": "vite --host 0.0.0.0 --port 3000",
+    "build": "tsc -b && vite build",
+    "start": "vite preview --host 0.0.0.0 --port 3000",
+    "lint": "tsc -b --noEmit",
     "test": "node -e \"console.log('Web tests will run via Vitest/Playwright')\"",
-    "format": "prettier --check \"app/**/*.{ts,tsx}\" \"components/**/*.{ts,tsx}\""
+    "format": "prettier --check \"src/**/*.{ts,tsx,css}\""
   },
   "dependencies": {
-    "@right-answer/config": "workspace:*",
-    "@right-answer/types": "workspace:*",
-    "@right-answer/ui": "workspace:*",
-    "clsx": "^2.1.1",
-    "next": "^15.5.0",
+    "@vitejs/plugin-react": "^5.0.4",
+    "vite": "^7.1.7",
+    "typescript": "^5.9.3",
     "react": "^19.1.1",
-    "react-dom": "^19.1.1"
+    "react-dom": "^19.1.1",
+    "lucide-react": "^0.544.0"
   },
   "devDependencies": {
     "@types/react": "^19.1.9",
-    "@types/react-dom": "^19.1.7",
-    "autoprefixer": "^10.4.21",
-    "postcss": "^8.5.6",
-    "tailwindcss": "^3.4.17"
+    "@types/react-dom": "^19.1.7"
   }
 }

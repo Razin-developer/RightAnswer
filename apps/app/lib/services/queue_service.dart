@@ -8,7 +8,7 @@ import '../repositories/saved_output_repository.dart';
 import '../repositories/settings_repository.dart';
 import '../repositories/usage_log_repository.dart';
 import '../services/notification_service.dart';
-import '../services/openai_service.dart';
+import '../services/backend_generation_service.dart';
 import '../services/retrieval_service.dart';
 
 /// Manages the offline request queue and drives foreground processing.
@@ -23,7 +23,7 @@ class QueueService {
   final _savedOutputRepo = SavedOutputRepository();
 
   late final RetrievalService _retrieval;
-  late final OpenAIService _openAI;
+  late final BackendGenerationService _backendGeneration;
 
   bool _processing = false;
 
@@ -42,7 +42,11 @@ class QueueService {
 
   Future<void> initialize() async {
     _retrieval = RetrievalService(_chunkRepo);
-    _openAI = OpenAIService(_settingsRepo, _usageLogRepo, _retrieval);
+    _backendGeneration = BackendGenerationService(
+      _settingsRepo,
+      _usageLogRepo,
+      _retrieval,
+    );
     // Reset any items that got stuck as 'processing' from a previous crash
     await _queueRepo.resetStuck();
     await _refreshCount();
@@ -84,7 +88,7 @@ class QueueService {
       await _processQueueItems(
         queueRepo: _queueRepo,
         retrieval: _retrieval,
-        openAI: _openAI,
+        backendGeneration: _backendGeneration,
         savedOutputRepo: _savedOutputRepo,
         onProgress: _refreshCount,
       );
@@ -100,7 +104,7 @@ class QueueService {
 Future<int> processQueueItems({
   required QueueRepository queueRepo,
   required RetrievalService retrieval,
-  required OpenAIService openAI,
+  required BackendGenerationService backendGeneration,
   required SavedOutputRepository savedOutputRepo,
   Future<void> Function()? onProgress,
 }) async {
@@ -116,7 +120,7 @@ Future<int> processQueueItems({
         req.chapterId,
         req.question ?? '',
       );
-      final result = await openAI.generateFromContext(
+      final result = await backendGeneration.generateFromContext(
         toolType: req.toolType,
         question: req.question,
         contextChunks: chunks.map((c) => c.text).toList(),
@@ -159,13 +163,13 @@ Future<int> processQueueItems({
 Future<void> _processQueueItems({
   required QueueRepository queueRepo,
   required RetrievalService retrieval,
-  required OpenAIService openAI,
+  required BackendGenerationService backendGeneration,
   required SavedOutputRepository savedOutputRepo,
   Future<void> Function()? onProgress,
 }) => processQueueItems(
   queueRepo: queueRepo,
   retrieval: retrieval,
-  openAI: openAI,
+  backendGeneration: backendGeneration,
   savedOutputRepo: savedOutputRepo,
   onProgress: onProgress,
 );

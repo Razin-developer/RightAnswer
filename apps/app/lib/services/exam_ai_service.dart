@@ -31,6 +31,7 @@ class ExamAIService {
 
   static const double _defaultInputPrice = 0.0005;
   static const double _defaultOutputPrice = 0.0015;
+  static const int _creationHarnessPasses = 4;
 
   // ── Generate from scratch ────────────────────────────────────────────────
 
@@ -73,6 +74,7 @@ class ExamAIService {
           {'role': 'system', 'content': systemPrompt},
           userMsg,
         ],
+        if (contextBlock.isNotEmpty) 'contexts': [contextBlock],
         'temperature': 0.5,
         'max_tokens': 4000,
         'response_format': {'type': 'json_object'},
@@ -85,7 +87,18 @@ class ExamAIService {
     final content = data['choices'][0]['message']['content'] as String;
     await _logUsage(data, 'exam_generate');
 
-    return _parseResponse(content, '', type);
+    final draft = _parseResponse(content, '', type);
+    return _runCreationHarness(
+      draft: draft,
+      model: model,
+      prompt: prompt,
+      type: type,
+      questionCount: questionCount,
+      difficulty: difficulty,
+      mcqOptionCount: mcqOptionCount,
+      subjectName: subjectName,
+      contextBlock: contextBlock,
+    );
   }
 
   // ── Edit existing exam ───────────────────────────────────────────────────
@@ -136,6 +149,7 @@ class ExamAIService {
       payload: {
         'model': model,
         'messages': messages,
+        if (contextBlock.isNotEmpty) 'contexts': [contextBlock],
         'temperature': 0.4,
         'max_tokens': 4000,
         'response_format': {'type': 'json_object'},
@@ -180,6 +194,69 @@ class ExamAIService {
     } catch (_) {
       return '${_typeLabel(type)} Exam';
     }
+  }
+
+  Future<ExamGenerationResult> _runCreationHarness({
+    required ExamGenerationResult draft,
+    required String model,
+    required String prompt,
+    required String type,
+    required int questionCount,
+    required String difficulty,
+    required int mcqOptionCount,
+    String? subjectName,
+    required String contextBlock,
+  }) async {
+    var current = draft;
+
+    for (var pass = 2; pass <= _creationHarnessPasses; pass++) {
+      try {
+        final currentJson = _questionsToJson(current.title, current.questions);
+        final system =
+            '''You are pass $pass in an exam creation harness${subjectName != null ? ' for $subjectName' : ''}.
+Validate and improve the current exam against the original request.
+Return ONLY a valid JSON object with the COMPLETE exam.
+
+REQUIREMENTS:
+- Exactly $questionCount questions
+- Difficulty: $difficulty
+- ${_typeInstruction(type, mcqOptionCount)}
+- Every question must have a correctAnswer and explanation
+- Use the provided study material as the primary source when available
+
+${contextBlock.isEmpty ? '' : 'STUDY MATERIAL:\n$contextBlock\n\n'}CURRENT EXAM:
+$currentJson''';
+
+        final resp = await AIBackendService.postChatCompletions(
+          payload: {
+            'model': model,
+            'messages': [
+              {'role': 'system', 'content': system},
+              {
+                'role': 'user',
+                'content':
+                    'Original request: ${prompt.trim().isEmpty ? 'Generate $questionCount questions.' : prompt}\nCreate the next improved complete exam draft.',
+              },
+            ],
+            if (contextBlock.isNotEmpty) 'contexts': [contextBlock],
+            'temperature': 0.35,
+            'max_tokens': 5000,
+            'response_format': {'type': 'json_object'},
+          },
+          timeout: const Duration(seconds: 120),
+        );
+        if (resp.statusCode != 200) break;
+
+        final data = jsonDecode(resp.body) as Map<String, dynamic>;
+        final content = data['choices'][0]['message']['content'] as String;
+        await _logUsage(data, 'exam_generate_harness');
+        current = _parseResponse(content, current.title, type);
+      } catch (_) {
+        break;
+      }
+    }
+
+    return current;
   }
 
   // ── Prompt builders ──────────────────────────────────────────────────────
@@ -434,13 +511,13 @@ $currentExamJson''';
   };
 
   AppException _buildException(http.Response r) {
-    var msg = 'Unexpected error from the AI provider.';
+    var msg = 'Unexpected error from the backend.';
     try {
       final d = jsonDecode(r.body) as Map<String, dynamic>;
       msg = d['error']?['message'] as String? ?? msg;
     } catch (_) {}
     if (r.statusCode == 401 || r.statusCode == 403) {
-      return AppException.authentication('Invalid API key.');
+      return AppException.authentication('Sign in again and retry.');
     }
     if (r.statusCode == 429) return AppException.rateLimit(msg);
     return AppException.service(msg);

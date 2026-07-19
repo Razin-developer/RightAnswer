@@ -7,7 +7,7 @@ import '../repositories/saved_output_repository.dart';
 import '../repositories/settings_repository.dart';
 import '../repositories/usage_log_repository.dart';
 import '../services/notification_service.dart';
-import '../services/openai_service.dart';
+import '../services/backend_generation_service.dart';
 import '../services/queue_service.dart' show processQueueItems;
 import '../services/retrieval_service.dart';
 
@@ -26,7 +26,11 @@ void callbackDispatcher() {
     final savedOutputRepo = SavedOutputRepository();
     final queueRepo = QueueRepository();
     final retrieval = RetrievalService(chunkRepo);
-    final openAI = OpenAIService(settingsRepo, usageLogRepo, retrieval);
+    final backendGeneration = BackendGenerationService(
+      settingsRepo,
+      usageLogRepo,
+      retrieval,
+    );
 
     await NotificationService.instance.initialize();
 
@@ -40,7 +44,7 @@ void callbackDispatcher() {
     final processed = await processQueueItems(
       queueRepo: queueRepo,
       retrieval: retrieval,
-      openAI: openAI,
+      backendGeneration: backendGeneration,
       savedOutputRepo: savedOutputRepo,
     );
 

@@ -90,7 +90,7 @@ Capabilities:
 - Create subjects and chapters
 - Paste raw chapter content
 - Split content into chunks
-- Optionally generate embeddings when an API key is available
+- Optionally generate embeddings when the backend API is available
 - Generate structured study outputs from chapter context
 - Queue requests offline
 - Store completed outputs for later review
@@ -101,21 +101,21 @@ Primary files:
 - `lib/screens/subject_screen.dart`
 - `lib/screens/chapter_screen.dart`
 - `lib/screens/result_screen.dart`
-- `lib/services/openai_service.dart`
+- `lib/services/backend_generation_service.dart`
 - `lib/services/queue_service.dart`
 - `lib/services/retrieval_service.dart`
 
 ## Runtime Configuration
 
-OpenAI access is now build-time configured through:
+Backend access is build-time configured through:
 
-- `--dart-define=OPENAI_API_KEY=...`
+- `--dart-define=API_URL=...`
 
 Code source:
 
 - `lib/config/app_config.dart`
 
-Legacy user-saved API keys are explicitly cleared during startup and again in settings load.
+AI provider keys live only on the backend.
 
 ## Offline / Background Behavior
 

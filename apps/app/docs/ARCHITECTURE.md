@@ -25,13 +25,13 @@ The app mostly follows a simple Flutter local-first layering style:
 
 1. Ensures Flutter bindings are initialized.
 2. Creates a `SettingsRepository`.
-3. Deletes any legacy stored OpenAI key.
-4. Loads theme mode from local settings.
-5. Initializes local notifications.
-6. Initializes `Workmanager` background tasks.
-7. Initializes the queue service.
-8. Registers reconnect behavior through `ConnectivityService`.
-9. Restores daily reminders from settings.
+3. Loads theme mode from local settings.
+4. Initializes local notifications.
+5. Initializes `Workmanager` background tasks.
+6. Initializes the queue service.
+7. Registers reconnect behavior through `ConnectivityService`.
+8. Restores daily reminders from settings.
+9. Checks whether first-run onboarding has been completed.
 10. Starts `RightAnswerApp`.
 
 ## Navigation Architecture
@@ -60,15 +60,16 @@ Notifications navigate through a global `navigatorKey`.
 
 ## AI Service Split
 
-The codebase now has three separate AI-facing service paths:
+The codebase now has backend-facing AI service paths:
 
-### `OpenAIService`
+### `BackendGenerationService`
 
 Purpose:
 
 - Chapter-based structured generation
 - Embedding generation
 - Usage logging for study-tool outputs
+- Sends selected local textbook chunks to the backend as context
 
 Used by:
 
@@ -116,7 +117,7 @@ Core behavior:
 
 This retrieval path is shared by:
 
-- `OpenAIService`
+- `BackendGenerationService`
 - `ChatAIService`
 - `ExamAIService`
 - `QueueService`
@@ -199,7 +200,7 @@ Queue output:
 - Business logic is screen-heavy, especially in `ChatScreen` and `ExamScreen`.
 - Chat and exams are now large feature modules with substantial in-file UI logic.
 - The original subject/chapter tool flow remains the only area with offline queueing.
-- OpenAI configuration is build-time only, not user-entered.
+- Backend API configuration is build-time only, not user-entered.
 
 ## Likely Future Refactor Targets
 
@@ -209,4 +210,4 @@ If the codebase keeps growing, the most obvious extraction points are:
 - split `exam_screen.dart` into smaller widgets/files
 - introduce feature-specific controllers or notifiers
 - centralize shared context-selection UI
-- centralize OpenAI request plumbing shared across AI services
+- centralize backend request plumbing shared across AI services

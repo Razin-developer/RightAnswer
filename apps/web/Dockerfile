@@ -1,15 +1,16 @@
-FROM node:22-alpine AS base
+FROM node:22-alpine AS deps
 WORKDIR /app
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY apps/web/package.json apps/web/package.json
+RUN corepack enable && pnpm install --filter @right-answer/web... --no-frozen-lockfile
 
-COPY . .
-RUN corepack enable \
-  && pnpm config set store-dir /root/.pnpm-store \
-  && pnpm config set package-import-method copy \
-  && pnpm install \
-  && pnpm --filter @right-answer/config build \
-  && pnpm --filter @right-answer/types build \
-  && pnpm --filter @right-answer/ui build \
-  && pnpm --filter @right-answer/web build
+FROM deps AS build
+COPY apps/web apps/web
+WORKDIR /app/apps/web
+ARG VITE_API_URL=http://localhost:4000/api
+ENV VITE_API_URL=$VITE_API_URL
+RUN pnpm build
 
-EXPOSE 3000
-CMD ["pnpm", "--filter", "@right-answer/web", "start"]
+FROM nginx:1.27-alpine
+COPY --from=build /app/apps/web/dist /usr/share/nginx/html
+EXPOSE 80

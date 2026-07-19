@@ -8,19 +8,20 @@ Flutter app for chapter-based AI study tools with offline queueing.
 - `docs/ARCHITECTURE.md`: code structure, service split, and app boot flow
 - `docs/DATA_MODEL.md`: local SQLite schema and persistence notes
 
-## OpenAI Configuration
+## Backend Configuration
 
-The app no longer reads an API key from Settings or local storage.
+The app does not contain AI provider keys. It talks to the Right Answer backend,
+which owns provider routing, caching, embeddings, and reranking.
 
-Provide the key at run or build time:
+Provide the backend URL at run or build time:
 
 ```bash
-flutter run --dart-define=OPENAI_API_KEY=your_key_here
-flutter build apk --debug --dart-define=OPENAI_API_KEY=your_key_here
-flutter build apk --release --dart-define=OPENAI_API_KEY=your_key_here
+flutter run --dart-define=API_URL=https://your-api.example.com
+flutter build apk --debug --dart-define=API_URL=https://your-api.example.com
+flutter build apk --release --dart-define=API_URL=https://your-api.example.com
 ```
 
-You can also use `--dart-define-from-file` if you prefer keeping secrets in a local json file.
+You can also use `--dart-define-from-file` if you prefer a local config file.
 
 ## Development Checks
 

@@ -41,6 +41,12 @@ dependencies:
   uuid: ^4.3.3
   intl: ^0.20.3
   flutter_markdown_plus: ^1.0.6
+  gpt_markdown: ^1.1.7
+  flutter_math_fork: ^0.7.4
+  flutter_svg: ^2.2.0
+  fl_chart: ^1.2.0
+  math_expressions: ^3.1.0
+  graphview: ^1.5.1
   shared_preferences: ^2.2.3
   flutter_local_notifications: ^17.2.4
   connectivity_plus: ^6.1.5

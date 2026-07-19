@@ -6,7 +6,7 @@ import '../constants/tool_types.dart';
 import '../models/chunk.dart';
 import '../models/saved_output.dart';
 import '../repositories/saved_output_repository.dart';
-import '../services/openai_service.dart';
+import '../services/backend_generation_service.dart';
 
 class ResultScreen extends StatefulWidget {
   final GenerationResult result;

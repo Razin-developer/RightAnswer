@@ -2,7 +2,6 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:uuid/uuid.dart';
@@ -25,6 +24,7 @@ import '../models/app_exception.dart';
 import '../widgets/app_feedback.dart';
 import '../widgets/app_logo.dart';
 import '../widgets/language_picker_sheet.dart';
+import '../widgets/rich_answer_view.dart';
 import '../widgets/voice_input_sheet.dart';
 import 'settings_screen.dart';
 
@@ -91,7 +91,12 @@ class _ChatScreenState extends State<ChatScreen> {
       final match = chats.where((chat) => chat.id == initialChatId).firstOrNull;
       if (match != null) {
         await _loadChat(match);
+        return;
       }
+    }
+
+    if (_currentChat == null && chats.isNotEmpty) {
+      await _loadChat(chats.first);
     }
   }
 
@@ -1733,15 +1738,6 @@ class _AiMessage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final bodyColor = isDark
-        ? const Color(0xFFA09D96)
-        : const Color(0xFF6C6A64);
-    final textColor = isDark
-        ? const Color(0xFFFAF9F5)
-        : const Color(0xFF141413);
-    final codeBackground = isDark
-        ? const Color(0xFF1F1E1B)
-        : const Color(0xFFEFE9DE);
     const coral = Color(0xFFCC785C);
 
     final showContent = message.content.trim().isNotEmpty;
@@ -1793,109 +1789,7 @@ class _AiMessage extends StatelessWidget {
             ),
           // Editorial AI content — no box, flows on canvas
           if (showContent)
-            MarkdownBody(
-              data: message.content,
-              selectable: true,
-              styleSheet: MarkdownStyleSheet(
-                p: GoogleFonts.inter(
-                  fontSize: 15,
-                  height: 1.65,
-                  color: textColor,
-                ),
-                pPadding: const EdgeInsets.only(bottom: 8),
-                h1: GoogleFonts.playfairDisplay(
-                  fontSize: 22,
-                  fontWeight: FontWeight.w400,
-                  height: 1.25,
-                  letterSpacing: -0.3,
-                  color: textColor,
-                ),
-                h1Padding: const EdgeInsets.only(top: 4, bottom: 4),
-                h2: GoogleFonts.playfairDisplay(
-                  fontSize: 18,
-                  fontWeight: FontWeight.w400,
-                  height: 1.3,
-                  letterSpacing: -0.2,
-                  color: textColor,
-                ),
-                h2Padding: const EdgeInsets.only(top: 4, bottom: 4),
-                h3: GoogleFonts.inter(
-                  fontSize: 15,
-                  fontWeight: FontWeight.w600,
-                  height: 1.4,
-                  color: textColor,
-                ),
-                h3Padding: const EdgeInsets.only(top: 2, bottom: 2),
-                strong: GoogleFonts.inter(
-                  fontSize: 15,
-                  fontWeight: FontWeight.w600,
-                  color: textColor,
-                ),
-                em: GoogleFonts.inter(
-                  fontSize: 15,
-                  fontStyle: FontStyle.italic,
-                  color: textColor,
-                ),
-                code: GoogleFonts.jetBrainsMono(
-                  fontSize: 13,
-                  height: 1.5,
-                  color: isDark
-                      ? const Color(0xFFE8A55A)
-                      : const Color(0xFFA9583E),
-                  backgroundColor: codeBackground,
-                ),
-                codeblockDecoration: BoxDecoration(
-                  color: codeBackground,
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(
-                    color: isDark
-                        ? const Color(0xFF2E2C28)
-                        : const Color(0xFFE6DFD8),
-                  ),
-                ),
-                codeblockPadding: const EdgeInsets.all(14),
-                blockquoteDecoration: BoxDecoration(
-                  border: Border(left: BorderSide(color: coral, width: 3)),
-                ),
-                blockquotePadding: const EdgeInsets.only(
-                  left: 14,
-                  top: 4,
-                  bottom: 4,
-                ),
-                blockquote: GoogleFonts.inter(
-                  fontSize: 14,
-                  fontStyle: FontStyle.italic,
-                  color: bodyColor,
-                  height: 1.6,
-                ),
-                listBullet: GoogleFonts.inter(fontSize: 15, color: coral),
-                tableHead: GoogleFonts.inter(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
-                  color: textColor,
-                ),
-                tableBody: GoogleFonts.inter(
-                  fontSize: 13,
-                  color: textColor,
-                  height: 1.5,
-                ),
-                tableBorder: TableBorder.all(
-                  color: isDark
-                      ? const Color(0xFF2E2C28)
-                      : const Color(0xFFE6DFD8),
-                  width: 1,
-                ),
-                horizontalRuleDecoration: BoxDecoration(
-                  border: Border(
-                    top: BorderSide(
-                      color: isDark
-                          ? const Color(0xFF2E2C28)
-                          : const Color(0xFFE6DFD8),
-                    ),
-                  ),
-                ),
-              ),
-            )
+            RichAnswerView(content: message.content, isDark: isDark)
           else if (isStreaming)
             _DotsIndicator(color: coral),
           // Action bar
@@ -3017,17 +2911,9 @@ class _FullscreenResponseScreen extends StatelessWidget {
       body: Scrollbar(
         child: SingleChildScrollView(
           padding: const EdgeInsets.fromLTRB(20, 12, 20, 32),
-          child: MarkdownBody(
-            data: content,
-            selectable: true,
-            styleSheet: MarkdownStyleSheet.fromTheme(theme).copyWith(
-              p: const TextStyle(fontSize: 15, height: 1.6),
-              code: TextStyle(
-                fontSize: 13,
-                fontFamily: 'monospace',
-                backgroundColor: theme.colorScheme.surfaceContainerLowest,
-              ),
-            ),
+          child: RichAnswerView(
+            content: content,
+            isDark: theme.brightness == Brightness.dark,
           ),
         ),
       ),

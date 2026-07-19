@@ -33,7 +33,6 @@ class SettingsRepository {
 
 // Well-known setting keys
 class SettingKeys {
-  static const String openAiApiKey = 'openai_api_key';
   static const String defaultLanguage = 'default_language';
   static const String defaultGradeLevel = 'default_grade_level';
   static const String defaultTone = 'default_tone';

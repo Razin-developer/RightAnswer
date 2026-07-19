@@ -145,63 +145,40 @@ class ChatAIService {
       'messages': messages,
       'temperature': _temperature(reasoningLevel),
       'max_tokens': 4096,
-      'stream': true,
-      'stream_options': {'include_usage': true},
+      'contexts': sourceChunks,
+      'subjectName': subjectName,
+      'chapterIds': chapterIds,
+      'responseLength': responseLength,
+      'reasoningLevel': reasoningLevel,
+      'responseLanguage': responseLanguage,
+      'richAnswer': true,
+      'answerFormat': 'rich',
     };
 
     final promptEstimate = _estimateTokens(jsonEncode(messages));
-    final buffer = StringBuffer();
-    Map<String, dynamic>? usage;
-    AIStreamSession? session;
 
     try {
-      session = await AIBackendService.startChatCompletionsStream(
+      final resp = await AIBackendService.postChatCompletions(
         payload: payload,
-        timeout: const Duration(seconds: 30),
+        timeout: const Duration(seconds: 120),
       );
-
-      final lines = session.response.stream
-          .transform(utf8.decoder)
-          .transform(const LineSplitter())
-          .timeout(const Duration(seconds: 120));
-
-      await for (final line in lines) {
-        if (!line.startsWith('data:')) {
-          continue;
-        }
-
-        final payloadLine = line.substring(5).trim();
-        if (payloadLine.isEmpty) {
-          continue;
-        }
-        if (payloadLine == '[DONE]') {
-          break;
-        }
-
-        final decoded = jsonDecode(payloadLine) as Map<String, dynamic>;
-        final usageBlock = decoded['usage'] as Map<String, dynamic>?;
-        if (usageBlock != null) {
-          usage = usageBlock;
-        }
-
-        final choices = decoded['choices'] as List<dynamic>?;
-        if (choices == null || choices.isEmpty) {
-          continue;
-        }
-
-        final delta = choices.first['delta'] as Map<String, dynamic>?;
-        final piece = delta?['content'];
-        if (piece is String && piece.isNotEmpty) {
-          buffer.write(piece);
-          yield ChatAIStreamEvent(content: buffer.toString());
-        }
+      if (resp.statusCode != 200) {
+        throw _buildException(resp);
       }
 
-      final content = buffer.toString().trim();
+      final data = jsonDecode(resp.body) as Map<String, dynamic>;
+      final content =
+          (data['choices'][0]['message']['content'] as String).trim();
+      final usage = data['usage'] as Map<String, dynamic>?;
       final inputTokens = (usage?['prompt_tokens'] as int?) ?? promptEstimate;
       final outputTokens =
           (usage?['completion_tokens'] as int?) ?? _estimateTokens(content);
       final cost = await _calculateCost(inputTokens, outputTokens);
+      final backendSourceChunks = data['sourceChunks'] is List
+          ? List<String>.from(
+              (data['sourceChunks'] as List).map((value) => value.toString()),
+            )
+          : const <String>[];
 
       await _usageRepo.insert(
         UsageLog(
@@ -220,11 +197,8 @@ class ChatAIService {
         inputTokens: inputTokens,
         outputTokens: outputTokens,
         cost: cost,
-        sourceChunks: sourceChunks,
-      );
-    } on AIHttpException catch (error) {
-      throw _buildException(
-        http.Response(error.responseBody, error.statusCode),
+        sourceChunks:
+            backendSourceChunks.isEmpty ? sourceChunks : backendSourceChunks,
       );
     } on TimeoutException {
       throw AppException.network(
@@ -234,10 +208,8 @@ class ChatAIService {
       throw AppException.network('No internet connection.');
     } on http.ClientException {
       throw AppException.network(
-        'Could not reach the AI provider. Please try again shortly.',
+        'Could not reach the backend. Please try again shortly.',
       );
-    } finally {
-      session?.client.close();
     }
   }
 
@@ -375,7 +347,7 @@ class ChatAIService {
       RetrievalService(_chunkRepo).estimateTokens(text);
 
   AppException _buildException(http.Response response) {
-    var message = 'Unexpected error from the AI provider.';
+    var message = 'Unexpected error from the backend.';
     try {
       final decoded = jsonDecode(response.body) as Map<String, dynamic>;
       message = decoded['error']?['message'] as String? ?? message;
@@ -384,14 +356,14 @@ class ChatAIService {
     }
 
     if (response.statusCode == 401 || response.statusCode == 403) {
-      return AppException.authentication('Invalid API key.');
+      return AppException.authentication('Sign in again and retry.');
     }
     if (response.statusCode == 429) {
       return AppException.rateLimit(message);
     }
     if (response.statusCode >= 500) {
       return AppException.service(
-        'The AI provider is having trouble right now. Please try again soon.',
+        'The backend is having trouble right now. Please try again soon.',
       );
     }
     return AppException.service(message);

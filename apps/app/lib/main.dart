@@ -2,8 +2,8 @@ import 'package:flutter/material.dart';
 
 import 'app/app_router.dart';
 import 'repositories/settings_repository.dart';
-import 'screens/login_screen.dart';
 import 'screens/main_screen.dart';
+import 'screens/onboarding_screen.dart';
 import 'screens/queue_screen.dart';
 import 'screens/saved_outputs_screen.dart';
 import 'services/app_link_service.dart';
@@ -18,8 +18,6 @@ void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   final settingsRepo = SettingsRepository();
-  await settingsRepo.delete(SettingKeys.openAiApiKey);
-
   final savedTheme = await settingsRepo.get(SettingKeys.themeMode);
   if (savedTheme != null) {
     themeNotifier.setFromString(savedTheme);
@@ -33,6 +31,7 @@ void main() async {
 
   await QueueService.instance.initialize();
 
+  await ConnectivityService.instance.initialize();
   await AuthService.instance.init();
   await AppLinkService.instance.initialize();
 
@@ -45,7 +44,6 @@ void main() async {
     }
     await QueueService.instance.processQueue();
   });
-  await ConnectivityService.instance.initialize();
 
   final settings = await settingsRepo.getAll();
   if (settings[SettingKeys.dailyReminderEnabled] == 'true') {
@@ -59,7 +57,9 @@ void main() async {
     );
   }
 
-  runApp(const RightAnswerApp());
+  final seenOnboarding = await hasSeenOnboarding();
+
+  runApp(RightAnswerApp(showOnboarding: !seenOnboarding));
 }
 
 void _handleNotificationTap(String? payload) {
@@ -80,13 +80,17 @@ void _handleNotificationTap(String? payload) {
 }
 
 class RightAnswerApp extends StatefulWidget {
-  const RightAnswerApp({super.key});
+  final bool showOnboarding;
+
+  const RightAnswerApp({super.key, required this.showOnboarding});
 
   @override
   State<RightAnswerApp> createState() => _RightAnswerAppState();
 }
 
 class _RightAnswerAppState extends State<RightAnswerApp> {
+  late bool _showOnboarding = widget.showOnboarding;
+
   @override
   void initState() {
     super.initState();
@@ -111,9 +115,11 @@ class _RightAnswerAppState extends State<RightAnswerApp> {
       theme: lightTheme(),
       darkTheme: darkTheme(),
       themeMode: themeNotifier.mode,
-      home: AuthService.instance.isLoggedIn
-          ? const MainScreen()
-          : const LoginScreen(),
+      home: _showOnboarding
+          ? OnboardingScreen(
+              onDone: () => setState(() => _showOnboarding = false),
+            )
+          : const MainScreen(),
     );
   }
 }

@@ -21,7 +21,7 @@ import '../services/cloud_sync_service.dart';
 import '../services/connectivity_service.dart';
 import '../services/import_export_service.dart';
 import '../services/notification_service.dart';
-import '../services/openai_service.dart';
+import '../services/backend_generation_service.dart';
 import '../services/queue_service.dart';
 import '../services/pdf_import_service.dart';
 import '../services/retrieval_service.dart';
@@ -48,7 +48,7 @@ class _ChapterScreenState extends State<ChapterScreen> {
   final _chapterRepo = ChapterRepository();
   final _settingsRepo = SettingsRepository();
   late final RetrievalService _retrieval;
-  late final OpenAIService _openAI;
+  late final BackendGenerationService _backendGeneration;
 
   final _contentCtrl = TextEditingController();
   final _questionCtrl = TextEditingController();
@@ -70,7 +70,11 @@ class _ChapterScreenState extends State<ChapterScreen> {
     super.initState();
     _chapter = widget.chapter;
     _retrieval = RetrievalService(_chunkRepo);
-    _openAI = OpenAIService(_settingsRepo, UsageLogRepository(), _retrieval);
+    _backendGeneration = BackendGenerationService(
+      _settingsRepo,
+      UsageLogRepository(),
+      _retrieval,
+    );
     _contentCtrl.text = _chapter.rawContent;
     _loadChunks();
   }
@@ -141,11 +145,11 @@ class _ChapterScreenState extends State<ChapterScreen> {
       AppFeedback.showToast(context, 'Add at least one textbook photo first');
       return;
     }
-    if (!AppConfig.hasAnyAiApiKey) {
+    if (!AppConfig.hasApiUrl) {
       await AppFeedback.showErrorDialog(
         context,
         AppException.configuration(
-          'Build is missing an AI API key. Add OPENAI_API_KEY or HACKCLUB_API_KEY.',
+          'Build is missing the backend API URL. Add API_URL when building the app.',
         ),
       );
       return;
@@ -164,7 +168,7 @@ class _ChapterScreenState extends State<ChapterScreen> {
     });
 
     try {
-      final extracted = await _openAI.extractChapterTextFromImages(
+      final extracted = await _backendGeneration.extractChapterTextFromImages(
         imagePaths: _sourceImagePaths,
         chapterTitle: _chapter.title,
         subjectName: widget.subject.name,
@@ -418,17 +422,17 @@ class _ChapterScreenState extends State<ChapterScreen> {
         _statusMessage = '${chunks.length} chunks ready';
       });
 
-      if (!AppConfig.hasAnyAiApiKey) {
+      if (!AppConfig.hasApiUrl) {
         setState(
           () => _statusMessage =
-              '${chunks.length} chunks ready - add OPENAI_API_KEY or HACKCLUB_API_KEY to enable embeddings',
+              '${chunks.length} chunks ready - add API_URL to enable embeddings',
         );
         return;
       }
 
       setState(() => _statusMessage = 'Creating embeddings…');
       try {
-        final embeddings = await _openAI.generateEmbeddings(
+        final embeddings = await _backendGeneration.generateEmbeddings(
           chunks.map((c) => c.text).toList(),
         );
         for (int i = 0; i < chunks.length; i++) {
@@ -504,11 +508,11 @@ class _ChapterScreenState extends State<ChapterScreen> {
       AppFeedback.showToast(context, 'Process the chapter content first');
       return;
     }
-    if (!AppConfig.hasAnyAiApiKey) {
+    if (!AppConfig.hasApiUrl) {
       await AppFeedback.showErrorDialog(
         context,
         AppException.configuration(
-          'Build is missing an AI API key. Add OPENAI_API_KEY or HACKCLUB_API_KEY.',
+          'Build is missing the backend API URL. Add API_URL when building the app.',
         ),
       );
       return;
@@ -575,7 +579,7 @@ class _ChapterScreenState extends State<ChapterScreen> {
       final language =
           await _settingsRepo.get(SettingKeys.defaultLanguage) ?? 'English';
 
-      final result = await _openAI.generateFromContext(
+      final result = await _backendGeneration.generateFromContext(
         toolType: toolType,
         question: question.isEmpty ? null : question,
         contextChunks: relevantChunks.map((c) => c.text).toList(),
@@ -628,11 +632,11 @@ class _ChapterScreenState extends State<ChapterScreen> {
       AppFeedback.showToast(context, 'Process the chapter content first');
       return;
     }
-    if (!AppConfig.hasAnyAiApiKey) {
+    if (!AppConfig.hasApiUrl) {
       await AppFeedback.showErrorDialog(
         context,
         AppException.configuration(
-          'Build is missing an AI API key. Add OPENAI_API_KEY or HACKCLUB_API_KEY.',
+          'Build is missing the backend API URL. Add API_URL when building the app.',
         ),
       );
       return;
@@ -690,7 +694,7 @@ class _ChapterScreenState extends State<ChapterScreen> {
       final language =
           await _settingsRepo.get(SettingKeys.defaultLanguage) ?? 'English';
 
-      final result = await _openAI.generateFromContext(
+      final result = await _backendGeneration.generateFromContext(
         toolType: toolType,
         question: null,
         contextChunks: relevantChunks.map((c) => c.text).toList(),

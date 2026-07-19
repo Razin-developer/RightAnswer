@@ -30,6 +30,15 @@ services:
       timeout: 5s
       retries: 10
 
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: right-answer-qdrant
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+
   api:
     build:
       context: .
@@ -40,18 +49,26 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      qdrant:
+        condition: service_started
     environment:
       DATABASE_URL: postgresql://postgres:postgres@postgres:5432/right_answer
       REDIS_URL: redis://redis:6379
       JWT_SECRET: right-answer-dev-secret
-      NEXT_PUBLIC_API_URL: http://localhost:4000/api/v1
+      PORT: 4000
+      APP_URL: http://localhost:3000
+      QDRANT_URL: http://qdrant:6333
+      QDRANT_COLLECTION: right_answer_textbook_chunks
+      AI_METHOD: ${AI_METHOD:-openrouter}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      HACKAI_API_KEY: ${HACKAI_API_KEY:-}
+      AI_SIMPLE_MODEL: ${AI_SIMPLE_MODEL:-google/gemma-3-12b-it}
+      AI_REASONING_MODEL: ${AI_REASONING_MODEL:-google/gemma-4-31b-it}
+      AI_EMBEDDING_MODEL: ${AI_EMBEDDING_MODEL:-perplexity/pplx-embed-v1-0.6b}
+      AI_RERANK_MODEL: ${AI_RERANK_MODEL:-nvidia/llama-nemotron-rerank-vl-1b-v2:free}
       GROQ_API_KEY: ${GROQ_API_KEY:-}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-    command: >
-      sh -lc "pnpm --filter @right-answer/database prisma db push &&
-      pnpm db:seed &&
-      pnpm --filter @right-answer/api start"
     ports:
       - "4000:4000"
 
@@ -64,9 +81,9 @@ services:
       api:
         condition: service_started
     environment:
-      NEXT_PUBLIC_API_URL: http://localhost:4000/api/v1
+      VITE_API_URL: http://localhost:4000/api
     ports:
-      - "3000:3000"
+      - "3000:80"
 
   workers:
     build:
@@ -89,3 +106,4 @@ services:
 volumes:
   postgres_data:
   redis_data:
+  qdrant_data:

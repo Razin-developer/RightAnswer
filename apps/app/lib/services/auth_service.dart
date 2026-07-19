@@ -39,7 +39,7 @@ class AuthService {
       final data = await ApiService.instance.get('/api/auth/me');
       _currentUser = AuthUser.fromJson(data['user'] as Map<String, dynamic>);
     } catch (_) {
-      await _storage.delete(key: _tokenKey);
+      _currentUser = await _readCachedUser();
     }
   }
 
@@ -103,5 +103,13 @@ class AuthService {
     await _storage.write(key: _userNameKey, value: user.name);
     _currentUser = user;
     return user;
+  }
+
+  Future<AuthUser?> _readCachedUser() async {
+    final id = await _storage.read(key: _userIdKey);
+    final email = await _storage.read(key: _userEmailKey);
+    if (id == null || email == null) return null;
+    final name = await _storage.read(key: _userNameKey) ?? '';
+    return AuthUser(id: id, email: email, name: name);
   }
 }

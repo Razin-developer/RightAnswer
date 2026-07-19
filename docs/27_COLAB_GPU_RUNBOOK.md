@@ -13,15 +13,9 @@ This runbook is for running the full SSLC textbook ingestion and embedding batch
 
 ## Recommended Embedding Settings
 
-- Model: `Qwen/Qwen3-Embedding-4B`
-- Dimensions: `1024` for the current production-safe path
+- Model: `perplexity-ai/pplx-embed-v1-0.6b`
+- Dimensions: `1024`
 - Device: `cuda`
-
-Why `1024` instead of full `2560`:
-
-- The code default model is now `Qwen/Qwen3-Embedding-4B`
-- The runtime lets you raise dimensions through `.env`
-- The current database/vector path is safest at `1024` until a deliberate higher-dimension migration is introduced
 
 ## One-Cell Colab Commands
 
@@ -36,7 +30,7 @@ cd rightanswer-2
 chmod +x scripts/colab/*.sh
 
 export RIGHT_ANSWER_WORKDIR=/content/rightanswer-2
-export RIGHT_ANSWER_EMBEDDING_MODEL=Qwen/Qwen3-Embedding-4B
+export RIGHT_ANSWER_EMBEDDING_MODEL=perplexity-ai/pplx-embed-v1-0.6b
 export RIGHT_ANSWER_EMBEDDING_DIMENSIONS=1024
 export RIGHT_ANSWER_EMBEDDING_DEVICE=cuda
 export RIGHT_ANSWER_CHAPTER_WORKERS=8
@@ -57,7 +51,7 @@ set -euo pipefail
 
 cd /content/rightanswer-2
 export RIGHT_ANSWER_WORKDIR=/content/rightanswer-2
-export RIGHT_ANSWER_EMBEDDING_MODEL=Qwen/Qwen3-Embedding-4B
+export RIGHT_ANSWER_EMBEDDING_MODEL=perplexity-ai/pplx-embed-v1-0.6b
 export RIGHT_ANSWER_EMBEDDING_DIMENSIONS=1024
 export RIGHT_ANSWER_EMBEDDING_DEVICE=cuda
 export RIGHT_ANSWER_CHAPTER_WORKERS=8
@@ -65,7 +59,7 @@ export RIGHT_ANSWER_OCR_WORKERS=8
 export RIGHT_ANSWER_BATCH_PARALLEL=1
 export RIGHT_ANSWER_BATCH_ATTEMPTS=3
 
-bash scripts/colab/run-right-answer-batch.sh ingest.csv colab-qwen4b-full-run
+bash scripts/colab/run-right-answer-batch.sh ingest.csv colab-pplx06b-full-run
 ```
 
 Zip the storage folder:
@@ -98,7 +92,7 @@ cd /content/rightanswer-2
 chmod +x scripts/colab/*.sh
 
 export RIGHT_ANSWER_WORKDIR=/content/rightanswer-2
-export RIGHT_ANSWER_EMBEDDING_MODEL=Qwen/Qwen3-Embedding-4B
+export RIGHT_ANSWER_EMBEDDING_MODEL=perplexity-ai/pplx-embed-v1-0.6b
 export RIGHT_ANSWER_EMBEDDING_DIMENSIONS=1024
 export RIGHT_ANSWER_EMBEDDING_DEVICE=cuda
 export RIGHT_ANSWER_CHAPTER_WORKERS=8
@@ -107,7 +101,7 @@ export RIGHT_ANSWER_OCR_WORKERS=8
 bash scripts/colab/all-in-one.sh \
   https://github.com/Razin-developer/rightanswer-2.git \
   ingest.csv \
-  colab-qwen4b-full-run \
+  colab-pplx06b-full-run \
   right-answer-storage.zip
 ```
 

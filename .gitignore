@@ -1,4 +1,5 @@
 node_modules
+apps/api/target/
 .turbo
 .next
 dist
@@ -9,3 +10,5 @@ storage
 *.log
 .venv-qwen-embeddings
 temp-*.mts
+__pycache__/
+*.py[cod]

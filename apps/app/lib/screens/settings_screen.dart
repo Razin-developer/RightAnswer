@@ -62,7 +62,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _load() async {
-    await _settingsRepo.delete(SettingKeys.openAiApiKey);
     final all = await _settingsRepo.getAll();
     final usage = await _usageRepo.getSummary();
     if (!mounted) return;

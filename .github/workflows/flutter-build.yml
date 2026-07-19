@@ -1,0 +1,57 @@
+name: Flutter build
+
+on:
+  workflow_dispatch:
+    inputs:
+      api_url:
+        description: Backend API URL
+        required: false
+        type: string
+  push:
+    branches:
+      - main
+      - master
+
+jobs:
+  build-android:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/app
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Resolve API URL
+        id: config
+        shell: bash
+        run: |
+          API_URL="${{ inputs.api_url }}"
+          if [ -z "$API_URL" ]; then API_URL="${{ vars.API_URL }}"; fi
+          if [ -z "$API_URL" ]; then API_URL="${{ secrets.API_URL }}"; fi
+          if [ -z "$API_URL" ]; then
+            echo "API_URL must be supplied as workflow input, repo variable, or secret." >&2
+            exit 1
+          fi
+          echo "api_url=$API_URL" >> "$GITHUB_OUTPUT"
+
+      - name: Get dependencies
+        run: flutter pub get
+
+      - name: Analyze
+        run: flutter analyze
+
+      - name: Test
+        run: flutter test
+
+      - name: Build APK
+        run: flutter build apk --release --dart-define=API_URL="${{ steps.config.outputs.api_url }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: right-answer-apk
+          path: apps/app/build/app/outputs/flutter-apk/app-release.apk

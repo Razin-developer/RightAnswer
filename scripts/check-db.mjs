@@ -34,8 +34,8 @@ try {
         },
         embedding: {
           backend: process.env.RIGHT_ANSWER_EMBEDDING_BACKEND ?? "hf-transformers",
-          model: process.env.RIGHT_ANSWER_EMBEDDING_MODEL ?? "Qwen/Qwen3-Embedding-4B",
-          dimensions: Number(process.env.RIGHT_ANSWER_EMBEDDING_DIMENSIONS ?? "2560"),
+          model: process.env.RIGHT_ANSWER_EMBEDDING_MODEL ?? "perplexity-ai/pplx-embed-v1-0.6b",
+          dimensions: Number(process.env.RIGHT_ANSWER_EMBEDDING_DIMENSIONS ?? "1024"),
         },
       },
       null,

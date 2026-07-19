@@ -72,7 +72,7 @@ class RetrievalService {
     final hasEmbeddings = allChunks.any((c) => c.embedding != null);
 
     if (hasEmbeddings && query.isNotEmpty) {
-      // Cosine similarity requires a query embedding — handled by OpenAIService
+      // Cosine similarity requires a query embedding from the backend.
       // For now fall through to keyword scoring
     }
 

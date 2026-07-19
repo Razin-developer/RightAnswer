@@ -52,6 +52,7 @@ class StudyPlanAIService {
 
   static const _defaultInputPrice = 0.0005;
   static const _defaultOutputPrice = 0.0015;
+  static const _creationHarnessPasses = 4;
 
   static const _dayNames = {
     1: 'Monday',
@@ -157,7 +158,12 @@ Return ONLY valid JSON — no markdown, no explanation:
 
     final data = jsonDecode(resp.body) as Map<String, dynamic>;
     await _logUsage(data, 'study_plan_generate');
-    return _parse(data['choices'][0]['message']['content'] as String);
+    final draft = _parse(data['choices'][0]['message']['content'] as String);
+    return _runCreationHarness(
+      draft: draft,
+      originalConstraints: system,
+      model: model,
+    );
   }
 
   Future<StudyPlanDraft> refinePlan({
@@ -202,6 +208,56 @@ ${_draftToJson(current)}''';
   }
 
   // ── Helpers ────────────────────────────────────────────────────────────────
+
+  Future<StudyPlanDraft> _runCreationHarness({
+    required StudyPlanDraft draft,
+    required String originalConstraints,
+    required String model,
+  }) async {
+    var current = draft;
+
+    for (var pass = 2; pass <= _creationHarnessPasses; pass++) {
+      try {
+        final system =
+            '''You are pass $pass in a study-plan creation harness.
+Validate the current draft against the original constraints, fix gaps, improve balance, and make tasks more specific.
+Return ONLY the COMPLETE updated JSON in the same schema.
+
+ORIGINAL CONSTRAINTS:
+$originalConstraints
+
+CURRENT DRAFT:
+${_draftToJson(current)}''';
+
+        final resp = await AIBackendService.postChatCompletions(
+          payload: {
+            'model': model,
+            'messages': [
+              {'role': 'system', 'content': system},
+              {
+                'role': 'user',
+                'content':
+                    'Create the next improved complete study-plan draft.',
+              },
+            ],
+            'temperature': 0.35,
+            'max_tokens': 6000,
+            'response_format': {'type': 'json_object'},
+          },
+          timeout: const Duration(seconds: 120),
+        );
+        if (resp.statusCode != 200) break;
+
+        final data = jsonDecode(resp.body) as Map<String, dynamic>;
+        await _logUsage(data, 'study_plan_harness');
+        current = _parse(data['choices'][0]['message']['content'] as String);
+      } catch (_) {
+        break;
+      }
+    }
+
+    return current;
+  }
 
   StudyPlanDraft _parse(String raw) {
     Map<String, dynamic> json;
@@ -302,13 +358,13 @@ ${_draftToJson(current)}''';
   }
 
   AppException _buildException(http.Response r) {
-    var msg = 'Unexpected error from the AI provider.';
+    var msg = 'Unexpected error from the backend.';
     try {
       final d = jsonDecode(r.body) as Map<String, dynamic>;
       msg = d['error']?['message'] as String? ?? msg;
     } catch (_) {}
     if (r.statusCode == 401 || r.statusCode == 403) {
-      return AppException.authentication('Invalid API key.');
+      return AppException.authentication('Sign in again and retry.');
     }
     if (r.statusCode == 429) return AppException.rateLimit(msg);
     return AppException.service(msg);

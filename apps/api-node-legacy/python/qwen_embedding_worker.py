@@ -21,7 +21,15 @@ def last_token_pool(last_hidden_states: Tensor, attention_mask: Tensor) -> Tenso
     ]
 
 
-MODEL_ID = os.environ.get("RIGHT_ANSWER_EMBEDDING_MODEL", "Qwen/Qwen3-Embedding-4B")
+def mean_pool(last_hidden_states: Tensor, attention_mask: Tensor) -> Tensor:
+    mask = attention_mask.unsqueeze(-1).to(last_hidden_states.dtype)
+    masked = last_hidden_states * mask
+    summed = masked.sum(dim=1)
+    counts = mask.sum(dim=1).clamp(min=1)
+    return summed / counts
+
+
+MODEL_ID = os.environ.get("RIGHT_ANSWER_EMBEDDING_MODEL", "perplexity-ai/pplx-embed-v1-0.6b")
 MAX_LENGTH = int(os.environ.get("RIGHT_ANSWER_EMBEDDING_MAX_LENGTH", "2048"))
 CPU_THREADS = int(os.environ.get("RIGHT_ANSWER_EMBEDDING_THREADS", "8"))
 QUERY_INSTRUCTION = os.environ.get(
@@ -31,6 +39,10 @@ QUERY_INSTRUCTION = os.environ.get(
 
 
 def infer_default_dimensions(model_id: str) -> int:
+    if "pplx-embed-v1-4b" in model_id or "pplx-embed-context-v1-4b" in model_id:
+        return 2560
+    if "pplx-embed-v1-0.6b" in model_id or "pplx-embed-context-v1-0.6b" in model_id:
+        return 1024
     if "Qwen3-Embedding-8B" in model_id:
         return 4096
     if "Qwen3-Embedding-4B" in model_id:
@@ -41,6 +53,18 @@ def infer_default_dimensions(model_id: str) -> int:
 OUTPUT_DIMENSIONS = int(
     os.environ.get("RIGHT_ANSWER_EMBEDDING_DIMENSIONS", str(infer_default_dimensions(MODEL_ID)))
 )
+
+
+def infer_model_family(model_id: str) -> str:
+    normalized = model_id.lower()
+    if "pplx-embed" in normalized or "perplexity-ai/" in normalized:
+        return "pplx"
+    if "qwen3-embedding" in normalized:
+        return "qwen"
+    return "generic"
+
+
+MODEL_FAMILY = infer_model_family(MODEL_ID)
 
 requested_device = os.environ.get("RIGHT_ANSWER_EMBEDDING_DEVICE", "").strip().lower()
 if requested_device:
@@ -57,16 +81,14 @@ if not DEVICE.startswith("cuda"):
         pass
 
 tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, padding_side="left", use_fast=False)
-model = AutoModel.from_pretrained(
-    MODEL_ID,
-    dtype=torch_dtype,
-    trust_remote_code=True,
-)
+model = AutoModel.from_pretrained(MODEL_ID, dtype=torch_dtype, trust_remote_code=True)
 model.to(DEVICE)
 model.eval()
 
 
 def format_query(text: str) -> str:
+    if MODEL_FAMILY == "pplx":
+        return text
     return f"Instruct: {QUERY_INSTRUCTION}\nQuery: {text}"
 
 
@@ -110,7 +132,10 @@ def run_model(input_texts: list[str]) -> list[list[float]]:
 
     with torch.inference_mode():
         outputs = model(**batch)
-        embeddings = last_token_pool(outputs.last_hidden_state, batch["attention_mask"])
+        if MODEL_FAMILY == "qwen":
+            embeddings = last_token_pool(outputs.last_hidden_state, batch["attention_mask"])
+        else:
+            embeddings = mean_pool(outputs.last_hidden_state, batch["attention_mask"])
         embeddings = F.normalize(embeddings, p=2, dim=1)
         if 0 < OUTPUT_DIMENSIONS < embeddings.shape[1]:
             embeddings = embeddings[:, :OUTPUT_DIMENSIONS]
