@@ -193,6 +193,8 @@ async function main() {
   );
   await write(stream, "-- RightAnswer textbook production seed\n");
   await write(stream, "-- Generated from local PostgreSQL. Do not edit manually.\n\n");
+  await write(stream, "DROP SCHEMA IF EXISTS public CASCADE;\n");
+  await write(stream, "CREATE SCHEMA public;\n\n");
   await write(stream, `${migration}\n\n`);
   await write(stream, "BEGIN;\n");
   await write(stream, "SET session_replication_role = replica;\n");
