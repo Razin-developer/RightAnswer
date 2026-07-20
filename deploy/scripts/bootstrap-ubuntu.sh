@@ -15,8 +15,18 @@ curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/doc
 chmod a+r /etc/apt/keyrings/docker.asc
 
 . /etc/os-release
+case "${ID}" in
+  ubuntu|debian)
+    docker_repo="${ID}"
+    ;;
+  *)
+    echo "Unsupported distribution: ${PRETTY_NAME:-${ID}}"
+    exit 1
+    ;;
+esac
+
 echo \
-  "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu ${VERSION_CODENAME} stable" \
+  "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/${docker_repo} ${VERSION_CODENAME} stable" \
   > /etc/apt/sources.list.d/docker.list
 
 apt-get update

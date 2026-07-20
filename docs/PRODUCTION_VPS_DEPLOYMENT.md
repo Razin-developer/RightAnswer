@@ -19,7 +19,7 @@ Do not expose Postgres, Redis, or Qdrant to the public internet.
 
 ## 1. Buy And Open The Server
 
-Choose Ubuntu 24.04 LTS or Ubuntu 22.04 LTS.
+Choose Ubuntu 24.04 LTS, Ubuntu 22.04 LTS, or Debian 13.
 
 From your computer:
 
