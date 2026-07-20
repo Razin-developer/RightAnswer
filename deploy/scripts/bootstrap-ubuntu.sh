@@ -7,7 +7,8 @@ if [[ "${EUID}" -ne 0 ]]; then
 fi
 
 apt-get update
-apt-get install -y ca-certificates curl git gnupg nginx ufw certbot python3-certbot-nginx
+apt-get install -y ca-certificates curl git git-lfs gnupg nginx ufw certbot python3-certbot-nginx
+git lfs install --system || git lfs install
 
 install -m 0755 -d /etc/apt/keyrings
 curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc

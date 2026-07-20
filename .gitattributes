@@ -1,0 +1,5 @@
+storage/imports/** filter=lfs diff=lfs merge=lfs -text
+storage/textbooks/** filter=lfs diff=lfs merge=lfs -text
+storage/exports/** filter=lfs diff=lfs merge=lfs -text
+storage/logs/** filter=lfs diff=lfs merge=lfs -text
+storage/seeds/** filter=lfs diff=lfs merge=lfs -text

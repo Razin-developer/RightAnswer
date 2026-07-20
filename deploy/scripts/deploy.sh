@@ -9,6 +9,7 @@ if [[ ! -f .env.production ]]; then
 fi
 
 git pull --ff-only
+git lfs pull --include="storage/**"
 $COMPOSE build
 $COMPOSE up -d postgres redis qdrant
 $COMPOSE up -d api web

@@ -1,9 +1,9 @@
 # Production VPS Deployment
 
-This guide assumes a small Ubuntu VPS with 2 CPU cores, 2 GB RAM, and at least
-16 GB storage. That size is enough for the current RightAnswer build and about
-33k textbook vectors, but it is tight. Add swap, keep only required services
-running, and monitor disk space.
+This guide assumes a small Ubuntu VPS with 2 CPU cores, 2 GB RAM, and 40 GB
+storage. The app can run in less space, but the production textbook PDFs,
+extracted page assets, PostgreSQL seed, and Qdrant seed need the larger disk.
+Add swap, keep only required services running, and monitor disk space.
 
 ## What Will Run
 
@@ -53,8 +53,8 @@ cd /opt/right-answer
 bash deploy/scripts/bootstrap-ubuntu.sh
 ```
 
-This installs Docker, Docker Compose, Nginx, Certbot, firewall rules, and a 2 GB
-swap file.
+This installs Docker, Docker Compose, Git LFS, Nginx, Certbot, firewall rules,
+and a 2 GB swap file.
 
 ## 4. Create Production Environment
 
@@ -151,6 +151,14 @@ certbot renew --dry-run
 ```
 
 ## 8. Migrate Textbook Vectors To Qdrant
+
+If the repository includes production seeds, restore them first. The deploy
+script runs `git lfs pull --include="storage/**"` so the VPS receives the real
+textbook files and seed archives instead of Git LFS pointer files.
+
+```bash
+bash deploy/scripts/restore-seed.sh
+```
 
 After Postgres contains textbook embeddings:
 

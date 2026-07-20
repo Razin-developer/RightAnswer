@@ -110,6 +110,13 @@ pnpm textbook:run-all -- --pdf ... --subject biology --medium en --version 2026-
 Those scripts run through `apps/api-node-legacy` until the ingestion pipeline is
 ported to Rust.
 
+Production seed data is tracked with Git LFS under `storage/`. To refresh the
+PostgreSQL textbook seed after local ingestion:
+
+```bash
+pnpm seed:export-postgres
+```
+
 ## Deployment
 
 The VPS target is:
