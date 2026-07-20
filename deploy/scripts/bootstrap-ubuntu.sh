@@ -41,14 +41,25 @@ if ! swapon --show | grep -q /swapfile; then
   fallocate -l 2G /swapfile || dd if=/dev/zero of=/swapfile bs=1M count=2048
   chmod 600 /swapfile
   mkswap /swapfile
-  if ! swapon /swapfile; then
+  swap_enabled=0
+  if swapon /swapfile; then
+    swap_enabled=1
+  else
     rm -f /swapfile
     dd if=/dev/zero of=/swapfile bs=1M count=2048
     chmod 600 /swapfile
     mkswap /swapfile
-    swapon /swapfile
+    if swapon /swapfile; then
+      swap_enabled=1
+    fi
   fi
-  echo '/swapfile none swap sw 0 0' >> /etc/fstab
+
+  if [[ "${swap_enabled}" -eq 1 ]]; then
+    echo '/swapfile none swap sw 0 0' >> /etc/fstab
+  else
+    rm -f /swapfile
+    echo "Warning: swapfile could not be enabled on this filesystem. Continuing without swap."
+  fi
 fi
 
 ufw allow OpenSSH
