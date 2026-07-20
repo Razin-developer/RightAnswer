@@ -37,10 +37,17 @@ systemctl enable --now docker
 systemctl enable --now nginx
 
 if ! swapon --show | grep -q /swapfile; then
+  rm -f /swapfile
   fallocate -l 2G /swapfile || dd if=/dev/zero of=/swapfile bs=1M count=2048
   chmod 600 /swapfile
   mkswap /swapfile
-  swapon /swapfile
+  if ! swapon /swapfile; then
+    rm -f /swapfile
+    dd if=/dev/zero of=/swapfile bs=1M count=2048
+    chmod 600 /swapfile
+    mkswap /swapfile
+    swapon /swapfile
+  fi
   echo '/swapfile none swap sw 0 0' >> /etc/fstab
 fi
 
