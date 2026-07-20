@@ -28,6 +28,16 @@
     "db:deploy": "pnpm --filter @right-answer/database prisma migrate deploy",
     "db:seed": "pnpm --filter @right-answer/database seed"
   },
+  "pnpm": {
+    "ignoredBuiltDependencies": [
+      "@embedded-postgres/linux-x64",
+      "@embedded-postgres/linux-arm64",
+      "@embedded-postgres/linux-arm",
+      "@embedded-postgres/darwin-x64",
+      "@embedded-postgres/darwin-arm64",
+      "esbuild"
+    ]
+  },
   "devDependencies": {
     "@types/node": "^24.0.0",
     "concurrently": "^9.2.1",
