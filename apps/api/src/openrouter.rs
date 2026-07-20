@@ -219,7 +219,10 @@ impl AiGateway {
             return keyword_rerank(question, documents);
         };
 
-        let passages: Vec<Value> = documents.iter().map(|text| json!({ "text": text })).collect();
+        let passages: Vec<Value> = documents
+            .iter()
+            .map(|text| json!({ "text": text }))
+            .collect();
         let response = self
             .client
             .post("https://integrate.api.nvidia.com/v1/retrieval/reranking")

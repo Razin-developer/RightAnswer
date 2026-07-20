@@ -6,10 +6,10 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+use governor::middleware::NoOpMiddleware;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
-use governor::middleware::NoOpMiddleware;
 use tower_governor::{
     governor::GovernorConfigBuilder, key_extractor::PeerIpKeyExtractor, GovernorLayer,
 };
@@ -206,7 +206,15 @@ async fn ai_chat(
     if let Some(cached) = state.db.lookup_exact_cache(&exact_key).await? {
         let context_meta = cache_context_meta(&cached);
         let answer = cached_answer(cached, "exact-cache");
-        persist_ai_chat(&state, user.as_ref(), &body, question, &answer, &context_meta).await?;
+        persist_ai_chat(
+            &state,
+            user.as_ref(),
+            &body,
+            question,
+            &answer,
+            &context_meta,
+        )
+        .await?;
         return Ok(ok(json!({
             "answer": answer,
             "content": answer.content,
@@ -235,7 +243,15 @@ async fn ai_chat(
     {
         let context_meta = cache_context_meta(&cached);
         let answer = cached_answer(cached, "semantic-cache");
-        persist_ai_chat(&state, user.as_ref(), &body, question, &answer, &context_meta).await?;
+        persist_ai_chat(
+            &state,
+            user.as_ref(),
+            &body,
+            question,
+            &answer,
+            &context_meta,
+        )
+        .await?;
         return Ok(ok(json!({
             "answer": answer,
             "content": answer.content,

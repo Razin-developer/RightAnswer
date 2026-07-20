@@ -63,7 +63,13 @@ async fn main() -> anyhow::Result<()> {
             .collect::<Vec<_>>();
         CorsLayer::new()
             .allow_origin(origins)
-            .allow_methods([Method::GET, Method::POST, Method::PUT, Method::PATCH, Method::DELETE])
+            .allow_methods([
+                Method::GET,
+                Method::POST,
+                Method::PUT,
+                Method::PATCH,
+                Method::DELETE,
+            ])
             .allow_headers(tower_http::cors::Any)
     };
 

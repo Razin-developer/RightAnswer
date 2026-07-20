@@ -37,8 +37,8 @@ async fn main() -> ExitCode {
         env::var("AI_SIMPLE_MODEL").unwrap_or_else(|_| "google/gemma-3-12b-it".into());
     let reasoning_model =
         env::var("AI_REASONING_MODEL").unwrap_or_else(|_| "google/gemma-4-31b-it".into());
-    let embedding_model = env::var("AI_EMBEDDING_MODEL")
-        .unwrap_or_else(|_| "perplexity/pplx-embed-v1-0.6b".into());
+    let embedding_model =
+        env::var("AI_EMBEDDING_MODEL").unwrap_or_else(|_| "perplexity/pplx-embed-v1-0.6b".into());
     let rerank_model =
         env::var("AI_RERANK_MODEL").unwrap_or_else(|_| "nvidia/rerank-qa-mistral-4b".into());
     let nvidia_api_key = env::var("NVIDIA_API_KEY").ok();
@@ -64,7 +64,10 @@ async fn main() -> ExitCode {
     })
     .await;
 
-    match nvidia_api_key.as_deref().filter(|key| !key.trim().is_empty()) {
+    match nvidia_api_key
+        .as_deref()
+        .filter(|key| !key.trim().is_empty())
+    {
         Some(nvidia_key) => {
             all_ok &= run_check("rerank", &rerank_model, || {
                 rerank_check(&client, nvidia_key, &rerank_model)
