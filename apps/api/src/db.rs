@@ -25,6 +25,54 @@ impl Database {
         Ok(())
     }
 
+    /// Subject/chapter catalog for the app's optional chapter picker. Reads
+    /// from the Prisma-managed textbook schema (not this crate's own
+    /// migrations) — only the currently active textbook version per subject
+    /// is included.
+    pub async fn list_catalog(&self) -> Result<Vec<CatalogSubject>, sqlx::Error> {
+        let rows = sqlx::query_as::<_, CatalogRow>(
+            r#"
+            SELECT
+              s.id::text AS subject_id,
+              s.name AS subject_name,
+              s.code AS subject_code,
+              ch.id::text AS chapter_id,
+              ch.chapter_number,
+              ch.title AS chapter_title
+            FROM "Subject" s
+            JOIN "Textbook" t ON t.subject_id = s.id
+            JOIN "TextbookVersion" tv ON tv.textbook_id = t.id AND tv.is_active = true
+            JOIN "Chapter" ch ON ch.textbook_version_id = tv.id
+            WHERE s.active = true
+            ORDER BY s.name, ch.chapter_number
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut subjects: Vec<CatalogSubject> = Vec::new();
+        for row in rows {
+            let subject = match subjects.last_mut() {
+                Some(existing) if existing.id == row.subject_id => existing,
+                _ => {
+                    subjects.push(CatalogSubject {
+                        id: row.subject_id.clone(),
+                        name: row.subject_name.clone(),
+                        code: row.subject_code.clone(),
+                        chapters: Vec::new(),
+                    });
+                    subjects.last_mut().unwrap()
+                }
+            };
+            subject.chapters.push(CatalogChapter {
+                id: row.chapter_id,
+                number: row.chapter_number,
+                title: row.chapter_title,
+            });
+        }
+        Ok(subjects)
+    }
+
     pub async fn create_user(
         &self,
         email: &str,
@@ -188,7 +236,7 @@ impl Database {
             UPDATE answer_cache
             SET hit_count = hit_count + 1, updated_at = now()
             WHERE exact_key = $1
-            RETURNING answer, model, provider, source_chunks
+            RETURNING answer, model, provider, source_chunks, subject_id, subject_name, chapter_ids
             "#,
         )
         .bind(exact_key)
@@ -213,7 +261,7 @@ impl Database {
 
         let candidates = sqlx::query_as::<_, CacheCandidate>(
             r#"
-            SELECT id, answer, model, provider, source_chunks, embedding
+            SELECT id, answer, model, provider, source_chunks, embedding, subject_id, subject_name, chapter_ids
             FROM answer_cache
             WHERE cardinality(embedding) = $1
               AND ($2::text IS NULL OR language = $2)
@@ -256,6 +304,9 @@ impl Database {
             model: candidate.model,
             provider: candidate.provider,
             source_chunks: candidate.source_chunks,
+            subject_id: candidate.subject_id,
+            subject_name: candidate.subject_name,
+            chapter_ids: candidate.chapter_ids,
         }))
     }
 
@@ -324,6 +375,31 @@ impl Database {
 }
 
 #[derive(sqlx::FromRow)]
+struct CatalogRow {
+    subject_id: String,
+    subject_name: String,
+    subject_code: String,
+    chapter_id: String,
+    chapter_number: i32,
+    chapter_title: String,
+}
+
+#[derive(serde::Serialize)]
+pub struct CatalogChapter {
+    pub id: String,
+    pub number: i32,
+    pub title: String,
+}
+
+#[derive(serde::Serialize)]
+pub struct CatalogSubject {
+    pub id: String,
+    pub name: String,
+    pub code: String,
+    pub chapters: Vec<CatalogChapter>,
+}
+
+#[derive(sqlx::FromRow)]
 struct CacheCandidate {
     id: Uuid,
     answer: String,
@@ -331,6 +407,9 @@ struct CacheCandidate {
     provider: String,
     source_chunks: Vec<String>,
     embedding: Vec<f64>,
+    subject_id: Option<String>,
+    subject_name: Option<String>,
+    chapter_ids: Vec<String>,
 }
 
 fn estimate_cost(model: &str, input_tokens: i32, output_tokens: i32) -> f64 {

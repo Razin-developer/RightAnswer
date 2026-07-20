@@ -18,6 +18,10 @@ pub struct RetrievedChunk {
     pub page_number: Option<i32>,
     pub image_url: Option<String>,
     pub content_type: Option<String>,
+    pub subject_id: Option<String>,
+    pub subject_name: Option<String>,
+    pub chapter_id: Option<String>,
+    pub chapter_name: Option<String>,
 }
 
 impl QdrantGateway {
@@ -95,6 +99,22 @@ impl QdrantGateway {
                         .map(ToString::to_string),
                     content_type: payload
                         .get("content_type")
+                        .and_then(|value| value.as_str())
+                        .map(ToString::to_string),
+                    subject_id: payload
+                        .get("subject_id")
+                        .and_then(|value| value.as_str())
+                        .map(ToString::to_string),
+                    subject_name: payload
+                        .get("subject_name")
+                        .and_then(|value| value.as_str())
+                        .map(ToString::to_string),
+                    chapter_id: payload
+                        .get("chapter_id")
+                        .and_then(|value| value.as_str())
+                        .map(ToString::to_string),
+                    chapter_name: payload
+                        .get("chapter_name")
                         .and_then(|value| value.as_str())
                         .map(ToString::to_string),
                 })

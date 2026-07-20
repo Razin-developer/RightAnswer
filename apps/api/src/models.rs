@@ -72,7 +72,7 @@ pub struct ChatPromptMessage {
     pub content: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AiChatRequest {
     pub question: Option<String>,
@@ -119,4 +119,7 @@ pub struct CachedAnswer {
     pub model: String,
     pub provider: String,
     pub source_chunks: Vec<String>,
+    pub subject_id: Option<String>,
+    pub subject_name: Option<String>,
+    pub chapter_ids: Vec<String>,
 }

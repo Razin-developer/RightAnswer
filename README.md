@@ -1,130 +1,42 @@
-# RightAnswer
+# Right Answer
 
-RightAnswer is a local-first AI study partner for textbook-grounded learning.
-The app reads local SQLite data offline, uses a compiled Rust backend when
-online, retrieves textbook context from PostgreSQL/Qdrant, and renders rich AI
-answers with Markdown, LaTeX, tables, charts, diagrams, images, sources, and
-clean text-to-speech.
+Right Answer is an AI study partner for Kerala SSLC students. Students ask
+questions in chat and get answers grounded in their official textbook content
+(no generic web answers), can generate practice exams and important-question
+sets from a chapter or subject, and get study plans that break syllabus
+coverage into a schedule they can actually follow.
 
-## Current Stack
+Answers are retrieved from the textbook (RAG: embed the question, search
+Qdrant for the matching textbook passages, rerank the best few) and rendered
+as rich content — Markdown, LaTeX, tables, charts, diagrams, and images —
+plus clean text-to-speech, with sources cited back to the textbook.
 
-- `apps/app`: Flutter mobile app with SQLite local storage.
-- `apps/api`: Rust backend using Axum, Tokio, SQLx, Reqwest, Tower, Tracing, and
-  Qdrant.
-- `apps/web`: React/Vite landing, documentation, features, and admin UI.
-- `packages/database`: existing Prisma/PostgreSQL textbook schema.
-- `apps/workers`: legacy Node workers still used for background jobs.
-- `apps/api-node-legacy`: preserved Node/Nest/Hono backend.
-- `apps/web-next-legacy`: preserved Next.js app.
+## What's in the app
 
-## AI Flow
+- **Chat-based Q&A** — ask a question, get a textbook-grounded answer with
+  cited sources.
+- **Exam generation** — generate practice exams and important-question sets
+  per chapter or subject.
+- **Study plans** — turn syllabus coverage into a schedule.
+- **Rich answers** — math, tables, charts, diagrams, and images render
+  natively in the app, with text-to-speech that reads the answer cleanly
+  instead of raw Markdown/LaTeX symbols.
 
-1. Query is embedded.
-2. Qdrant retrieves textbook vector candidates.
-3. OpenRouter/HackAI rerank selects the best 3 to 5 contexts.
-4. The chat model receives the selected context and rich-answer instructions.
-5. The app renders typed answer blocks and stores the answer locally.
-6. Text-to-speech reads `speechText`, not Markdown symbols or raw LaTeX.
+## Product
 
-## Quick Start
+- **Mobile app** (`apps/app`) — the primary way students use Right Answer,
+  built with Flutter.
+- **Web** (`apps/web`) — landing page, feature overview, and admin
+  dashboard.
 
-Copy env:
+## How it's built
 
-```bash
-copy .env.example .env
-```
+Right Answer runs as a deployed service: a Flutter mobile app talking to a
+Rust API backend (Axum), with PostgreSQL as the relational source of truth,
+Qdrant for textbook vector retrieval, and Redis supporting background
+workers. It's deployed on a VPS behind Nginx.
 
-Start infrastructure:
+---
 
-```bash
-docker compose up -d postgres qdrant redis
-```
-
-Without Docker Desktop, run the local embedded-style helpers in separate
-terminals:
-
-```bash
-node scripts/start-local-postgres.mjs
-node scripts/start-local-qdrant.mjs
-```
-
-Run the Rust API:
-
-```bash
-cargo run --manifest-path apps/api/Cargo.toml
-```
-
-Run the web app:
-
-```bash
-pnpm --filter @right-answer/web dev
-```
-
-Open:
-
-- Web: [http://localhost:3000](http://localhost:3000)
-- API health: [http://localhost:4000/api/health](http://localhost:4000/api/health)
-
-## Qdrant Migration
-
-PostgreSQL remains the source of truth. Qdrant stores vector copies for fast
-retrieval.
-
-Run:
-
-```bash
-cargo run --manifest-path apps/api/Cargo.toml --bin migrate_qdrant
-```
-
-The migration stops if PostgreSQL embeddings are empty, any vector is empty,
-Qdrant writes fail, or the final Qdrant point count is lower than the migrated
-PostgreSQL embedding count. It reads `Embedding.embedding_vector` when the
-pgvector column exists, and falls back to `Embedding.embedding_values` for older
-local databases that only have the JSON backup values.
-
-## Documentation
-
-- [System Documentation](docs/SYSTEM_DOCUMENTATION.md)
-- [Rust Backend Migration](docs/RUST_BACKEND_MIGRATION.md)
-- [Production VPS Deployment](docs/PRODUCTION_VPS_DEPLOYMENT.md)
-- [Flutter App Overview](apps/app/docs/APP_OVERVIEW.md)
-- [Flutter Architecture](apps/app/docs/ARCHITECTURE.md)
-
-## Commands
-
-```bash
-pnpm dev
-pnpm dev:api
-pnpm dev:web
-pnpm dev:qdrant
-cargo check --manifest-path apps/api/Cargo.toml
-pnpm --filter @right-answer/web build
-```
-
-Legacy textbook ingestion is still available:
-
-```bash
-pnpm textbook:run-all -- --pdf ... --subject biology --medium en --version 2026-v1
-```
-
-Those scripts run through `apps/api-node-legacy` until the ingestion pipeline is
-ported to Rust.
-
-Production seed data is tracked with Git LFS under `storage/`. To refresh the
-PostgreSQL textbook seed after local ingestion:
-
-```bash
-pnpm seed:export-postgres
-```
-
-## Deployment
-
-The VPS target is:
-
-- Rust API on port `4000`.
-- React static web app served by Nginx on port `3000` or behind a reverse proxy.
-- Self-hosted PostgreSQL.
-- Self-hosted Qdrant.
-- Optional Redis/workers while legacy background jobs remain.
-
-See `docker-compose.yml` for the current container layout.
+Contributing or setting up a local development environment: see
+[`docs/development.md`](docs/development.md).

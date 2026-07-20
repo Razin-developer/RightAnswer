@@ -50,6 +50,10 @@ async fn main() -> anyhow::Result<()> {
     });
 
     let cors = if config.cors_origins.is_empty() {
+        tracing::warn!(
+            "CORS_ORIGINS is not set; falling back to a permissive (allow-any-origin) CORS policy. \
+             Set CORS_ORIGINS in production."
+        );
         CorsLayer::permissive()
     } else {
         let origins = config
@@ -77,9 +81,12 @@ async fn main() -> anyhow::Result<()> {
     let addr = SocketAddr::from(([0, 0, 0, 0], config.port));
     tracing::info!(%addr, "right-answer rust api listening");
     let listener = TcpListener::bind(addr).await?;
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal())
+    .await?;
     Ok(())
 }
 

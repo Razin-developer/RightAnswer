@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use axum::{
     extract::State,
@@ -9,6 +9,10 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
+use governor::middleware::NoOpMiddleware;
+use tower_governor::{
+    governor::GovernorConfigBuilder, key_extractor::PeerIpKeyExtractor, GovernorLayer,
+};
 use uuid::Uuid;
 
 use crate::{
@@ -37,19 +41,63 @@ pub struct ApiResponse<T> {
     data: T,
 }
 
+/// Rate limits brute-forceable / cost-bearing endpoints (auth and AI calls) by
+/// peer IP. Keeps credential stuffing and anonymous AI-cost abuse bounded
+/// without touching the rest of the router.
+fn governed_layer(
+    per_second: u64,
+    burst_size: u32,
+) -> GovernorLayer<PeerIpKeyExtractor, NoOpMiddleware, axum::body::Body> {
+    let config = Arc::new(
+        GovernorConfigBuilder::default()
+            .per_second(per_second)
+            .burst_size(burst_size)
+            .finish()
+            .expect("valid governor config"),
+    );
+
+    // The governor keeps per-key state forever unless it is periodically
+    // swept; spawn a background task to evict stale entries.
+    let cleanup_config = config.clone();
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(Duration::from_secs(60)).await;
+            cleanup_config.limiter().retain_recent();
+        }
+    });
+
+    GovernorLayer::new(config)
+}
+
 pub fn api_router(state: Arc<AppState>) -> Router {
-    Router::new()
-        .route("/health", get(health))
+    let auth_routes = Router::new()
         .route("/auth/register", post(register))
         .route("/auth/signup", post(register))
         .route("/auth/login", post(login))
-        .route("/auth/me", get(me))
+        .layer(governed_layer(1, 5));
+
+    let ai_routes = Router::new()
         .route("/ai/chat", post(ai_chat))
         .route("/ai/embeddings", post(embeddings))
         .route("/ai/rerank", post(rerank))
+        .layer(governed_layer(1, 10));
+
+    Router::new()
+        .route("/health", get(health))
+        .route("/catalog", get(catalog))
+        .route("/auth/me", get(me))
         .route("/chats", get(list_chats).post(upsert_chat))
         .route("/admin/metrics", get(admin::metrics))
+        .merge(auth_routes)
+        .merge(ai_routes)
         .with_state(state)
+}
+
+async fn catalog(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<ApiResponse<serde_json::Value>>, ApiError> {
+    let subjects = state.db.list_catalog().await?;
+    Ok(ok(json!({ "subjects": subjects })))
 }
 
 pub async fn health() -> Json<serde_json::Value> {
@@ -156,13 +204,18 @@ async fn ai_chat(
     );
 
     if let Some(cached) = state.db.lookup_exact_cache(&exact_key).await? {
+        let context_meta = cache_context_meta(&cached);
         let answer = cached_answer(cached, "exact-cache");
-        persist_ai_chat(&state, user.as_ref(), &body, question, &answer).await?;
+        persist_ai_chat(&state, user.as_ref(), &body, question, &answer, &context_meta).await?;
         return Ok(ok(json!({
             "answer": answer,
             "content": answer.content,
             "servedFrom": answer.served_from,
-            "sourceChunks": answer.source_chunks
+            "sourceChunks": answer.source_chunks,
+            "subjectId": context_meta.subject_id,
+            "subjectName": context_meta.subject_name,
+            "chapterId": context_meta.chapter_id,
+            "chapterName": context_meta.chapter_name
         })));
     }
 
@@ -180,19 +233,33 @@ async fn ai_chat(
         )
         .await?
     {
+        let context_meta = cache_context_meta(&cached);
         let answer = cached_answer(cached, "semantic-cache");
-        persist_ai_chat(&state, user.as_ref(), &body, question, &answer).await?;
+        persist_ai_chat(&state, user.as_ref(), &body, question, &answer, &context_meta).await?;
         return Ok(ok(json!({
             "answer": answer,
             "content": answer.content,
             "servedFrom": answer.served_from,
-            "sourceChunks": answer.source_chunks
+            "sourceChunks": answer.source_chunks,
+            "subjectId": context_meta.subject_id,
+            "subjectName": context_meta.subject_name,
+            "chapterId": context_meta.chapter_id,
+            "chapterName": context_meta.chapter_name
         })));
     }
 
-    let selected_contexts =
-        select_contexts(&state, &body, question, Some(&question_embedding)).await?;
-    let answer = state.ai.chat(&body, &selected_contexts).await?;
+    let selected = select_contexts(&state, &body, question, Some(&question_embedding)).await?;
+    let answer = state.ai.chat(&body, &selected.texts).await?;
+    let subject_id = selected
+        .primary_meta
+        .subject_id
+        .as_deref()
+        .or(body.subject_id.as_deref());
+    let subject_name = selected
+        .primary_meta
+        .subject_name
+        .as_deref()
+        .or(body.subject_name.as_deref());
     let _ = state
         .db
         .store_answer_cache(
@@ -206,21 +273,33 @@ async fn ai_chat(
             body.response_language.as_deref(),
             response_length,
             reasoning_level,
-            body.subject_id.as_deref(),
-            body.subject_name.as_deref(),
+            subject_id,
+            subject_name,
             &chapter_ids,
             &answer.source_chunks,
             answer.input_tokens,
             answer.output_tokens,
         )
         .await;
-    persist_ai_chat(&state, user.as_ref(), &body, question, &answer).await?;
+    persist_ai_chat(
+        &state,
+        user.as_ref(),
+        &body,
+        question,
+        &answer,
+        &selected.primary_meta,
+    )
+    .await?;
 
     Ok(ok(json!({
         "answer": answer,
         "content": answer.content,
         "servedFrom": answer.served_from,
-        "sourceChunks": answer.source_chunks
+        "sourceChunks": answer.source_chunks,
+        "subjectId": subject_id,
+        "subjectName": subject_name,
+        "chapterId": selected.primary_meta.chapter_id,
+        "chapterName": selected.primary_meta.chapter_name
     })))
 }
 
@@ -230,6 +309,7 @@ async fn persist_ai_chat(
     body: &AiChatRequest,
     question: &str,
     answer: &AiAnswer,
+    context_meta: &crate::rag::ContextMeta,
 ) -> Result<(), ApiError> {
     state
         .db
@@ -250,16 +330,44 @@ async fn persist_ai_chat(
     let Some(local_id) = body.chat_local_id.as_deref() else {
         return Ok(());
     };
+    let subject_id = context_meta
+        .subject_id
+        .as_deref()
+        .or(body.subject_id.as_deref());
+    let subject_name = context_meta
+        .subject_name
+        .as_deref()
+        .or(body.subject_name.as_deref());
+    let chapter_ids: Vec<String> = context_meta
+        .chapter_id
+        .clone()
+        .into_iter()
+        .collect::<Vec<_>>();
+    let chapter_names: Vec<String> = context_meta
+        .chapter_name
+        .clone()
+        .into_iter()
+        .collect::<Vec<_>>();
+    let fallback_chapter_ids = body.chapter_ids.clone().unwrap_or_default();
+    let fallback_chapter_names = body.chapter_names.clone().unwrap_or_default();
     let chat = state
         .db
         .find_or_create_chat(
             user.id,
             local_id,
             body.chat_name.as_deref().unwrap_or("New Chat"),
-            body.subject_id.as_deref(),
-            body.subject_name.as_deref(),
-            &body.chapter_ids.clone().unwrap_or_default(),
-            &body.chapter_names.clone().unwrap_or_default(),
+            subject_id,
+            subject_name,
+            if chapter_ids.is_empty() {
+                &fallback_chapter_ids
+            } else {
+                &chapter_ids
+            },
+            if chapter_names.is_empty() {
+                &fallback_chapter_names
+            } else {
+                &chapter_names
+            },
         )
         .await?;
 
@@ -377,6 +485,15 @@ pub fn ok<T: Serialize>(data: T) -> Json<ApiResponse<T>> {
         success: true,
         data,
     })
+}
+
+fn cache_context_meta(cached: &CachedAnswer) -> crate::rag::ContextMeta {
+    crate::rag::ContextMeta {
+        subject_id: cached.subject_id.clone(),
+        subject_name: cached.subject_name.clone(),
+        chapter_id: cached.chapter_ids.first().cloned(),
+        chapter_name: None,
+    }
 }
 
 fn cached_answer(cached: CachedAnswer, served_from: &str) -> AiAnswer {

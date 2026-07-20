@@ -8,6 +8,10 @@ if [[ ! -f .env.production ]]; then
   exit 1
 fi
 
+# .env.production holds live DB/JWT secrets; keep it owner-read/write only
+# regardless of the umask the file happened to be created with.
+chmod 600 .env.production
+
 git pull --ff-only
 git lfs pull --include="storage/**"
 $COMPOSE build

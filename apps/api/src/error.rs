@@ -38,12 +38,20 @@ impl IntoResponse for ApiError {
             }
         };
 
+        // Internal errors (DB, unexpected failures) can carry raw driver
+        // messages, query fragments, or file paths — never hand those to the
+        // client. Log them server-side and return a generic message instead.
+        let message = match &self {
+            ApiError::Sqlx(_) | ApiError::Anyhow(_) => {
+                tracing::error!(error = %self, "internal error");
+                "An internal error occurred".to_string()
+            }
+            _ => self.to_string(),
+        };
+
         let body = ErrorBody {
             success: false,
-            error: ErrorPayload {
-                code,
-                message: self.to_string(),
-            },
+            error: ErrorPayload { code, message },
         };
         (status, Json(body)).into_response()
     }

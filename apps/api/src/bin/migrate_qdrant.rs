@@ -47,11 +47,18 @@ async fn main() -> anyhow::Result<()> {
           cu.text,
           cu.content_type::text AS content_type,
           cu.chapter_id::text AS chapter_id,
+          ch.title AS chapter_name,
+          s.id::text AS subject_id,
+          s.name AS subject_name,
           p.page_number,
           a.file_path AS image_url
         FROM "Embedding" e
         JOIN "ContentUnit" cu ON cu.id = e.content_unit_id
         JOIN "Page" p ON p.id = cu.page_id
+        JOIN "Chapter" ch ON ch.id = cu.chapter_id
+        JOIN "TextbookVersion" tv ON tv.id = ch.textbook_version_id
+        JOIN "Textbook" t ON t.id = tv.textbook_id
+        JOIN "Subject" s ON s.id = t.subject_id
         LEFT JOIN LATERAL (
           SELECT file_path
           FROM "TextbookAsset"
@@ -104,6 +111,9 @@ async fn main() -> anyhow::Result<()> {
                     "text": row.get::<String, _>("text"),
                     "content_type": row.get::<String, _>("content_type"),
                     "chapter_id": row.get::<String, _>("chapter_id"),
+                    "chapter_name": row.get::<String, _>("chapter_name"),
+                    "subject_id": row.get::<String, _>("subject_id"),
+                    "subject_name": row.get::<String, _>("subject_name"),
                     "page_number": row.get::<i32, _>("page_number"),
                     "image_url": row.try_get::<String, _>("image_url").ok(),
                     "embedding_model": row.get::<String, _>("embedding_model"),

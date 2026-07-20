@@ -51,7 +51,9 @@ impl Config {
         Ok(Self {
             port: read("PORT").and_then(|v| v.parse().ok()).unwrap_or(4000),
             database_url: read("DATABASE_URL").context("DATABASE_URL is required")?,
-            jwt_secret: read("JWT_SECRET").unwrap_or_else(|| "right-answer-dev-secret".into()),
+            jwt_secret: read("JWT_SECRET").context(
+                "JWT_SECRET is required (no insecure default is provided; set a long random value)",
+            )?,
             app_url: read("APP_URL")
                 .or_else(|| read("NEXT_PUBLIC_APP_URL"))
                 .unwrap_or_else(|| "http://localhost:3000".into()),
