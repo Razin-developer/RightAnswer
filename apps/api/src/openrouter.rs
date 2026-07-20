@@ -225,11 +225,11 @@ impl AiGateway {
             .collect();
         let response = self
             .client
-            .post("https://integrate.api.nvidia.com/v1/retrieval/reranking")
+            .post("https://ai.api.nvidia.com/v1/retrieval/nvidia/reranking")
             .header(reqwest::header::AUTHORIZATION, format!("Bearer {api_key}"))
             .json(&json!({
                 "model": self.config.rerank_model,
-                "query": question,
+                "query": { "text": question },
                 "passages": passages,
             }))
             .send()

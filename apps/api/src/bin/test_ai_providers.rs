@@ -214,11 +214,11 @@ async fn rerank_check(client: &Client, api_key: &str, model: &str) -> Result<Str
         json!({"text": "Newton's second law relates force, mass, and acceleration."}),
     ];
     let response = client
-        .post("https://integrate.api.nvidia.com/v1/retrieval/reranking")
+        .post("https://ai.api.nvidia.com/v1/retrieval/nvidia/reranking")
         .header(reqwest::header::AUTHORIZATION, format!("Bearer {api_key}"))
         .json(&json!({
             "model": model,
-            "query": "What is Newton's second law?",
+            "query": { "text": "What is Newton's second law?" },
             "passages": passages,
         }))
         .send()
