@@ -17,6 +17,20 @@ set +a
 
 $COMPOSE up -d postgres redis qdrant
 
+echo "[restore] waiting for PostgreSQL"
+for _ in {1..60}; do
+  if $COMPOSE exec -T postgres pg_isready \
+    -U "${POSTGRES_USER:-right_answer}" \
+    -d "${POSTGRES_DB:-right_answer}" >/dev/null 2>&1; then
+    break
+  fi
+  sleep 2
+done
+
+$COMPOSE exec -T postgres pg_isready \
+  -U "${POSTGRES_USER:-right_answer}" \
+  -d "${POSTGRES_DB:-right_answer}"
+
 echo "[restore] loading PostgreSQL textbook seed"
 $COMPOSE exec -T postgres psql \
   -v ON_ERROR_STOP=1 \
