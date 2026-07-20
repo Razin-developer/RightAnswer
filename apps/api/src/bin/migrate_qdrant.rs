@@ -35,102 +35,128 @@ async fn main() -> anyhow::Result<()> {
     } else {
         "NULL::text AS embedding_vector"
     };
-    let rows = sqlx::query(&format!(
-        r#"
-        SELECT
-          e.id::text AS embedding_id,
-          {embedding_vector_select},
-          e.embedding_values,
-          e.embedding_model,
-          e.embedding_version,
-          cu.id::text AS content_unit_id,
-          cu.text,
-          cu.content_type::text AS content_type,
-          cu.chapter_id::text AS chapter_id,
-          ch.title AS chapter_name,
-          s.id::text AS subject_id,
-          s.name AS subject_name,
-          p.page_number,
-          a.file_path AS image_url
-        FROM "Embedding" e
-        JOIN "ContentUnit" cu ON cu.id = e.content_unit_id
-        JOIN "Page" p ON p.id = cu.page_id
-        JOIN "Chapter" ch ON ch.id = cu.chapter_id
-        JOIN "TextbookVersion" tv ON tv.id = ch.textbook_version_id
-        JOIN "Textbook" t ON t.id = tv.textbook_id
-        JOIN "Subject" s ON s.id = t.subject_id
-        LEFT JOIN LATERAL (
-          SELECT file_path
-          FROM "TextbookAsset"
-          WHERE content_unit_id = cu.id
-          ORDER BY created_at ASC
-          LIMIT 1
-        ) a ON true
-        ORDER BY e.created_at ASC
-        "#
-    ))
-    .fetch_all(&pool)
-    .await?;
 
-    if rows.is_empty() {
+    // Stream in pages rather than fetch_all: this binary runs inside a
+    // memory-capped container (384MB), and loading every embedding vector
+    // (1024 floats each) plus text/payload for ~30k+ rows at once was
+    // getting OOM-killed. A page of 200 keeps peak memory well under limit.
+    const PAGE_SIZE: i64 = 200;
+    let mut offset: i64 = 0;
+    let mut migrated = 0usize;
+    let mut collection_ready = false;
+
+    loop {
+        let rows = sqlx::query(&format!(
+            r#"
+            SELECT
+              e.id::text AS embedding_id,
+              {embedding_vector_select},
+              e.embedding_values,
+              e.embedding_model,
+              e.embedding_version,
+              cu.id::text AS content_unit_id,
+              cu.text,
+              cu.content_type::text AS content_type,
+              cu.chapter_id::text AS chapter_id,
+              ch.title AS chapter_name,
+              s.id::text AS subject_id,
+              s.name AS subject_name,
+              p.page_number,
+              a.file_path AS image_url
+            FROM "Embedding" e
+            JOIN "ContentUnit" cu ON cu.id = e.content_unit_id
+            JOIN "Page" p ON p.id = cu.page_id
+            JOIN "Chapter" ch ON ch.id = cu.chapter_id
+            JOIN "TextbookVersion" tv ON tv.id = ch.textbook_version_id
+            JOIN "Textbook" t ON t.id = tv.textbook_id
+            JOIN "Subject" s ON s.id = t.subject_id
+            LEFT JOIN LATERAL (
+              SELECT file_path
+              FROM "TextbookAsset"
+              WHERE content_unit_id = cu.id
+              ORDER BY created_at ASC
+              LIMIT 1
+            ) a ON true
+            ORDER BY e.created_at ASC
+            LIMIT {PAGE_SIZE} OFFSET {offset}
+            "#
+        ))
+        .fetch_all(&pool)
+        .await?;
+
+        if rows.is_empty() {
+            break;
+        }
+
+        if !collection_ready {
+            let first_vector = vector_from_row(&rows[0])?;
+            if first_vector.is_empty() {
+                return Err(anyhow!("First embedding vector is empty. Stop."));
+            }
+            create_collection(
+                &client,
+                &qdrant_url,
+                &qdrant_collection,
+                qdrant_api_key.as_deref(),
+                first_vector.len(),
+            )
+            .await?;
+            collection_ready = true;
+        }
+
+        for batch in rows.chunks(64) {
+            let mut points = Vec::with_capacity(batch.len());
+            for row in batch {
+                let vector = vector_from_row(row)?;
+                if vector.is_empty() {
+                    return Err(anyhow!(
+                        "Embedding {} has an empty vector. Stop.",
+                        row.get::<String, _>("embedding_id")
+                    ));
+                }
+                points.push(json!({
+                    "id": row.get::<String, _>("embedding_id"),
+                    "vector": vector,
+                    "payload": {
+                        "content_unit_id": row.get::<String, _>("content_unit_id"),
+                        "text": row.get::<String, _>("text"),
+                        "content_type": row.get::<String, _>("content_type"),
+                        "chapter_id": row.get::<String, _>("chapter_id"),
+                        "chapter_name": row.get::<String, _>("chapter_name"),
+                        "subject_id": row.get::<String, _>("subject_id"),
+                        "subject_name": row.get::<String, _>("subject_name"),
+                        "page_number": row.get::<i32, _>("page_number"),
+                        "image_url": row.try_get::<String, _>("image_url").ok(),
+                        "embedding_model": row.get::<String, _>("embedding_model"),
+                        "embedding_version": row.get::<String, _>("embedding_version")
+                    }
+                }));
+            }
+
+            upsert_points(
+                &client,
+                &qdrant_url,
+                &qdrant_collection,
+                qdrant_api_key.as_deref(),
+                points,
+            )
+            .await?;
+            migrated += batch.len();
+        }
+
+        let page_len = rows.len();
+        drop(rows);
+        println!("Migrated {migrated} embeddings so far...");
+        if (page_len as i64) < PAGE_SIZE {
+            break;
+        }
+        offset += PAGE_SIZE;
+    }
+
+    if migrated == 0 {
         return Err(anyhow!(
             "No PostgreSQL embeddings found. Stop: Qdrant migration would lose data."
         ));
-    }
-
-    let first_vector = vector_from_row(&rows[0])?;
-    if first_vector.is_empty() {
-        return Err(anyhow!("First embedding vector is empty. Stop."));
-    }
-
-    create_collection(
-        &client,
-        &qdrant_url,
-        &qdrant_collection,
-        qdrant_api_key.as_deref(),
-        first_vector.len(),
-    )
-    .await?;
-
-    let mut migrated = 0usize;
-    for batch in rows.chunks(64) {
-        let mut points = Vec::with_capacity(batch.len());
-        for row in batch {
-            let vector = vector_from_row(row)?;
-            if vector.is_empty() {
-                return Err(anyhow!(
-                    "Embedding {} has an empty vector. Stop.",
-                    row.get::<String, _>("embedding_id")
-                ));
-            }
-            points.push(json!({
-                "id": row.get::<String, _>("embedding_id"),
-                "vector": vector,
-                "payload": {
-                    "content_unit_id": row.get::<String, _>("content_unit_id"),
-                    "text": row.get::<String, _>("text"),
-                    "content_type": row.get::<String, _>("content_type"),
-                    "chapter_id": row.get::<String, _>("chapter_id"),
-                    "chapter_name": row.get::<String, _>("chapter_name"),
-                    "subject_id": row.get::<String, _>("subject_id"),
-                    "subject_name": row.get::<String, _>("subject_name"),
-                    "page_number": row.get::<i32, _>("page_number"),
-                    "image_url": row.try_get::<String, _>("image_url").ok(),
-                    "embedding_model": row.get::<String, _>("embedding_model"),
-                    "embedding_version": row.get::<String, _>("embedding_version")
-                }
-            }));
-        }
-
-        upsert_points(
-            &client,
-            &qdrant_url,
-            &qdrant_collection,
-            qdrant_api_key.as_deref(),
-            points,
-        )
-        .await?;
-        migrated += batch.len();
     }
 
     let qdrant_count = count_points(
