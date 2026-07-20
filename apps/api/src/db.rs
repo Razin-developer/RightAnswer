@@ -111,6 +111,7 @@ impl Database {
         .await
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn find_or_create_chat(
         &self,
         owner_id: Uuid,
@@ -157,6 +158,7 @@ impl Database {
         .await
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn insert_message(
         &self,
         owner_id: Uuid,
@@ -196,6 +198,7 @@ impl Database {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn record_usage(
         &self,
         user_id: Option<Uuid>,
@@ -245,6 +248,7 @@ impl Database {
         Ok(answer)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn lookup_semantic_cache(
         &self,
         embedding: &[f32],
