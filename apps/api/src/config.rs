@@ -12,6 +12,7 @@ pub struct Config {
     pub ai_method: AiMethod,
     pub openrouter_api_key: Option<String>,
     pub hackai_api_key: Option<String>,
+    pub nvidia_api_key: Option<String>,
     pub simple_model: String,
     pub reasoning_model: String,
     pub embedding_model: String,
@@ -70,13 +71,14 @@ impl Config {
             ai_method,
             openrouter_api_key: read("OPENROUTER_API_KEY").or_else(|| read("openrouter_api_key")),
             hackai_api_key: read("HACKAI_API_KEY").or_else(|| read("hackai_api_key")),
+            nvidia_api_key: read("NVIDIA_API_KEY"),
             simple_model: read("AI_SIMPLE_MODEL").unwrap_or_else(|| "google/gemma-3-12b-it".into()),
             reasoning_model: read("AI_REASONING_MODEL")
                 .unwrap_or_else(|| "google/gemma-4-31b-it".into()),
             embedding_model: read("AI_EMBEDDING_MODEL")
                 .unwrap_or_else(|| "perplexity/pplx-embed-v1-0.6b".into()),
             rerank_model: read("AI_RERANK_MODEL")
-                .unwrap_or_else(|| "nvidia/llama-nemotron-rerank-vl-1b-v2:free".into()),
+                .unwrap_or_else(|| "nvidia/rerank-qa-mistral-4b".into()),
             qdrant_url: read("QDRANT_URL").unwrap_or_else(|| "http://localhost:6333".into()),
             qdrant_api_key: read("QDRANT_API_KEY"),
             qdrant_collection: read("QDRANT_COLLECTION")

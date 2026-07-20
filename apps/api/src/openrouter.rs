@@ -48,13 +48,13 @@ struct EmbeddingItem {
 
 #[derive(Debug, Deserialize)]
 struct RerankResponse {
-    results: Option<Vec<RerankItem>>,
+    rankings: Option<Vec<RerankItem>>,
 }
 
 #[derive(Debug, Deserialize)]
 struct RerankItem {
     index: usize,
-    relevance_score: Option<f32>,
+    logit: Option<f32>,
 }
 
 #[derive(Debug, Serialize)]
@@ -207,21 +207,27 @@ impl AiGateway {
             .unwrap_or_default())
     }
 
+    /// Reranking always goes through NVIDIA's dedicated reranking API,
+    /// independent of AI_METHOD (which only governs chat/embeddings). Falls
+    /// back to a local keyword heuristic if the key is missing or the call
+    /// fails, so retrieval quality degrades gracefully rather than erroring.
     pub async fn rerank(&self, question: &str, documents: &[String]) -> Vec<String> {
         if documents.len() <= 1 {
             return documents.to_vec();
         }
-        let Ok(provider) = self.config.provider() else {
+        let Some(api_key) = self.config.nvidia_api_key.as_deref() else {
             return keyword_rerank(question, documents);
         };
+
+        let passages: Vec<Value> = documents.iter().map(|text| json!({ "text": text })).collect();
         let response = self
             .client
-            .post(format!("{}/rerank", provider.base_url))
-            .headers(provider_headers(&provider.api_key, &self.config.app_url))
+            .post("https://integrate.api.nvidia.com/v1/retrieval/reranking")
+            .header(reqwest::header::AUTHORIZATION, format!("Bearer {api_key}"))
             .json(&json!({
                 "model": self.config.rerank_model,
                 "query": question,
-                "documents": documents,
+                "passages": passages,
             }))
             .send()
             .await;
@@ -235,12 +241,8 @@ impl AiGateway {
         let Ok(data) = response.json::<RerankResponse>().await else {
             return keyword_rerank(question, documents);
         };
-        let mut ranked = data.results.unwrap_or_default();
-        ranked.sort_by(|a, b| {
-            b.relevance_score
-                .unwrap_or(0.0)
-                .total_cmp(&a.relevance_score.unwrap_or(0.0))
-        });
+        let mut ranked = data.rankings.unwrap_or_default();
+        ranked.sort_by(|a, b| b.logit.unwrap_or(0.0).total_cmp(&a.logit.unwrap_or(0.0)));
         let output: Vec<String> = ranked
             .into_iter()
             .filter_map(|item| documents.get(item.index).cloned())

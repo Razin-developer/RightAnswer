@@ -84,10 +84,11 @@ services:
       AI_METHOD: ${AI_METHOD:-openrouter}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       HACKAI_API_KEY: ${HACKAI_API_KEY:-}
+      NVIDIA_API_KEY: ${NVIDIA_API_KEY:-}
       AI_SIMPLE_MODEL: ${AI_SIMPLE_MODEL:-google/gemma-3-12b-it}
       AI_REASONING_MODEL: ${AI_REASONING_MODEL:-google/gemma-4-31b-it}
       AI_EMBEDDING_MODEL: ${AI_EMBEDDING_MODEL:-perplexity/pplx-embed-v1-0.6b}
-      AI_RERANK_MODEL: ${AI_RERANK_MODEL:-nvidia/llama-nemotron-rerank-vl-1b-v2:free}
+      AI_RERANK_MODEL: ${AI_RERANK_MODEL:-nvidia/rerank-qa-mistral-4b}
       SEMANTIC_CACHE_THRESHOLD: ${SEMANTIC_CACHE_THRESHOLD:-0.9}
       RUST_LOG: ${RUST_LOG:-right_answer_api=info,tower_http=info}
     ports:

@@ -39,8 +39,9 @@ async fn main() -> ExitCode {
         env::var("AI_REASONING_MODEL").unwrap_or_else(|_| "google/gemma-4-31b-it".into());
     let embedding_model = env::var("AI_EMBEDDING_MODEL")
         .unwrap_or_else(|_| "perplexity/pplx-embed-v1-0.6b".into());
-    let rerank_model = env::var("AI_RERANK_MODEL")
-        .unwrap_or_else(|_| "nvidia/llama-nemotron-rerank-vl-1b-v2:free".into());
+    let rerank_model =
+        env::var("AI_RERANK_MODEL").unwrap_or_else(|_| "nvidia/rerank-qa-mistral-4b".into());
+    let nvidia_api_key = env::var("NVIDIA_API_KEY").ok();
     let app_url = env::var("APP_URL").unwrap_or_else(|_| "https://razin.hackclub.app".into());
 
     println!("Testing provider={provider_name} base_url={base_url}");
@@ -63,10 +64,21 @@ async fn main() -> ExitCode {
     })
     .await;
 
-    all_ok &= run_check("rerank", &rerank_model, || {
-        rerank_check(&client, base_url, &api_key, &app_url, &rerank_model)
-    })
-    .await;
+    match nvidia_api_key.as_deref().filter(|key| !key.trim().is_empty()) {
+        Some(nvidia_key) => {
+            all_ok &= run_check("rerank", &rerank_model, || {
+                rerank_check(&client, nvidia_key, &rerank_model)
+            })
+            .await;
+        }
+        None => {
+            eprintln!(
+                "FAIL  {:<15} model={rerank_model:<40} NVIDIA_API_KEY is not set — reranking will silently fall back to keyword search",
+                "rerank"
+            );
+            all_ok = false;
+        }
+    }
 
     if all_ok {
         println!("\nAll AI provider checks passed.");
@@ -192,25 +204,19 @@ async fn embed_check(
     Ok(format!("dims={dims}"))
 }
 
-async fn rerank_check(
-    client: &Client,
-    base_url: &str,
-    api_key: &str,
-    app_url: &str,
-    model: &str,
-) -> Result<String, String> {
-    let documents = [
-        "Photosynthesis converts light energy into chemical energy.",
-        "The Kerala backwaters are a network of lagoons and lakes.",
-        "Newton's second law relates force, mass, and acceleration.",
+async fn rerank_check(client: &Client, api_key: &str, model: &str) -> Result<String, String> {
+    let passages = [
+        json!({"text": "Photosynthesis converts light energy into chemical energy."}),
+        json!({"text": "The Kerala backwaters are a network of lagoons and lakes."}),
+        json!({"text": "Newton's second law relates force, mass, and acceleration."}),
     ];
     let response = client
-        .post(format!("{base_url}/rerank"))
-        .headers(headers(api_key, app_url))
+        .post("https://integrate.api.nvidia.com/v1/retrieval/reranking")
+        .header(reqwest::header::AUTHORIZATION, format!("Bearer {api_key}"))
         .json(&json!({
             "model": model,
             "query": "What is Newton's second law?",
-            "documents": documents,
+            "passages": passages,
         }))
         .send()
         .await
@@ -226,12 +232,12 @@ async fn rerank_check(
         return Err(format!("status={status} body={body}"));
     }
 
-    let results = body["results"]
+    let results = body["rankings"]
         .as_array()
         .map(|values| values.len())
         .unwrap_or(0);
     if results == 0 {
-        return Err(format!("status={status} no results, body={body}"));
+        return Err(format!("status={status} no rankings, body={body}"));
     }
     Ok(format!("ranked={results}"))
 }
