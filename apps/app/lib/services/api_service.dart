@@ -35,10 +35,18 @@ class ApiService {
   Map<String, dynamic> _parse(http.Response resp) {
     final body = jsonDecode(resp.body) as Map<String, dynamic>;
     if (resp.statusCode >= 400) {
-      throw ApiException(
-        resp.statusCode,
-        (body['error'] as String?) ?? 'Request failed (${resp.statusCode})',
-      );
+      final error = body['error'];
+      final message = error is String
+          ? error
+          : (error is Map ? error['message'] as String? : null) ??
+                'Request failed (${resp.statusCode})';
+      throw ApiException(resp.statusCode, message);
+    }
+    // The Rust API wraps every response as { success, data }. Unwrap so
+    // callers work with the actual payload instead of the envelope.
+    final data = body['data'];
+    if (body.containsKey('success') && data is Map<String, dynamic>) {
+      return data;
     }
     return body;
   }
@@ -72,14 +80,6 @@ class ApiService {
       Uri.parse('$_base$path'),
       headers: await _headers(),
       body: jsonEncode(body),
-    );
-    return _parse(resp);
-  }
-
-  Future<Map<String, dynamic>> delete(String path) async {
-    final resp = await http.delete(
-      Uri.parse('$_base$path'),
-      headers: await _headers(),
     );
     return _parse(resp);
   }

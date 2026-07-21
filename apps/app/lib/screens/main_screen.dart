@@ -3,14 +3,11 @@ import 'package:flutter/material.dart';
 import '../services/app_link_service.dart';
 import 'chat_screen.dart';
 import 'exam_screen.dart';
-import 'home_screen.dart';
 import 'study_plan_screen.dart';
 
 class MainScreen extends StatefulWidget {
   final int initialTabIndex;
   final String? initialChatId;
-  final String? initialSubjectId;
-  final String? initialChapterId;
   final String? initialStudyPlanId;
   final String? initialExamId;
 
@@ -18,8 +15,6 @@ class MainScreen extends StatefulWidget {
     super.key,
     this.initialTabIndex = 0,
     this.initialChatId,
-    this.initialSubjectId,
-    this.initialChapterId,
     this.initialStudyPlanId,
     this.initialExamId,
   });
@@ -34,7 +29,7 @@ class _MainScreenState extends State<MainScreen> {
   @override
   void initState() {
     super.initState();
-    _selectedIndex = widget.initialTabIndex.clamp(0, 3);
+    _selectedIndex = widget.initialTabIndex.clamp(0, 2);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       AppLinkService.instance.retryPendingLinkIfPossible();
     });
@@ -49,10 +44,6 @@ class _MainScreenState extends State<MainScreen> {
           ChatScreen(initialChatId: widget.initialChatId),
           ExamScreen(initialExamId: widget.initialExamId),
           StudyPlanScreen(initialPlanId: widget.initialStudyPlanId),
-          HomeScreen(
-            initialSubjectId: widget.initialSubjectId,
-            initialChapterId: widget.initialChapterId,
-          ),
         ],
       ),
       bottomNavigationBar: NavigationBar(
@@ -73,12 +64,7 @@ class _MainScreenState extends State<MainScreen> {
           NavigationDestination(
             icon: Icon(Icons.calendar_today_outlined),
             selectedIcon: Icon(Icons.calendar_today_rounded),
-            label: 'Study',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.library_books_outlined),
-            selectedIcon: Icon(Icons.library_books),
-            label: 'Subjects',
+            label: 'Study Plans',
           ),
         ],
       ),

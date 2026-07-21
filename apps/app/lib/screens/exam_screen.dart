@@ -111,32 +111,18 @@ class _ExamScreenState extends State<ExamScreen> {
   }
 
   Future<void> _deleteExam(Exam exam) async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(
-          'Delete "${exam.name}"?',
-          style: GoogleFonts.playfairDisplay(fontSize: 18),
-        ),
-        content: const Text(
-          'This will permanently delete the exam and all its attempts.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            style: FilledButton.styleFrom(
-              backgroundColor: const Color(0xFFC64545),
-            ),
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Delete'),
-          ),
-        ],
+    final confirmed = await AppFeedback.confirmDelete(
+      context,
+      title: Text(
+        'Delete "${exam.name}"?',
+        style: GoogleFonts.playfairDisplay(fontSize: 18),
       ),
+      content: const Text(
+        'This will permanently delete the exam and all its attempts.',
+      ),
+      accentColor: const Color(0xFFC64545),
     );
-    if (confirmed != true) return;
+    if (!confirmed) return;
     await _attemptRepo.deleteByExam(exam.id);
     await _messageRepo.deleteByExam(exam.id);
     await _questionRepo.deleteByExam(exam.id);

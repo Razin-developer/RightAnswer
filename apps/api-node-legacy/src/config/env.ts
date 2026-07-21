@@ -18,13 +18,31 @@ const rawAiMethod = readEnv(
 ).toLowerCase();
 const aiMethod: AiMethod = rawAiMethod === "hackai" ? "hackai" : "openrouter";
 
+const nodeEnv = process.env.NODE_ENV ?? "development";
+
+const resolveJwtSecret = () => {
+  const configured = readEnv("JWT_SECRET");
+  if (configured) {
+    return configured;
+  }
+  if (nodeEnv === "production") {
+    // Never fall back to a shared hardcoded secret in production: anyone
+    // who reads this source (it's a public/legacy repo) could forge tokens
+    // for any user, including admins.
+    throw new Error(
+      "JWT_SECRET environment variable is required in production",
+    );
+  }
+  return "right-answer-dev-secret";
+};
+
 export const env = {
-  nodeEnv: process.env.NODE_ENV ?? "development",
+  nodeEnv,
   port: Number(process.env.PORT ?? 4000),
   mongoUri:
     readEnv("MONGODB_URI", "MONGO_URI") ||
     "mongodb://127.0.0.1:27017/right-answer",
-  jwtSecret: readEnv("JWT_SECRET") || "right-answer-dev-secret",
+  jwtSecret: resolveJwtSecret(),
   jwtExpiresIn: readEnv("JWT_EXPIRES_IN") || "30d",
   appUrl: readEnv("APP_URL", "PUBLIC_APP_URL") || "",
   corsOrigins: readEnv("CORS_ORIGINS")

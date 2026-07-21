@@ -48,21 +48,4 @@ class ExamAttempt {
     totalMarks: (m['totalMarks'] as num?)?.toDouble() ?? 0,
     isPassed: (m['isPassed'] as int?) == 1,
   );
-
-  ExamAttempt copyWith({
-    DateTime? completedAt,
-    Map<String, String>? answers,
-    double? score,
-    double? totalMarks,
-    bool? isPassed,
-  }) => ExamAttempt(
-    id: id,
-    examId: examId,
-    startedAt: startedAt,
-    completedAt: completedAt ?? this.completedAt,
-    answers: answers ?? this.answers,
-    score: score ?? this.score,
-    totalMarks: totalMarks ?? this.totalMarks,
-    isPassed: isPassed ?? this.isPassed,
-  );
 }

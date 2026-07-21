@@ -103,32 +103,18 @@ class _StudyPlanScreenState extends State<StudyPlanScreen> {
   }
 
   Future<void> _deletePlan(StudyPlan plan) async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(
-          'Delete "${plan.name}"?',
-          style: GoogleFonts.playfairDisplay(fontSize: 18),
-        ),
-        content: const Text(
-          'This will permanently delete the plan and all its tasks.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            style: FilledButton.styleFrom(
-              backgroundColor: const Color(0xFFC64545),
-            ),
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Delete'),
-          ),
-        ],
+    final confirmed = await AppFeedback.confirmDelete(
+      context,
+      title: Text(
+        'Delete "${plan.name}"?',
+        style: GoogleFonts.playfairDisplay(fontSize: 18),
       ),
+      content: const Text(
+        'This will permanently delete the plan and all its tasks.',
+      ),
+      accentColor: const Color(0xFFC64545),
     );
-    if (confirmed != true) return;
+    if (!confirmed) return;
     if (plan.hasReminder) {
       await NotificationService.instance.cancelStudyPlanReminder(plan.id);
     }

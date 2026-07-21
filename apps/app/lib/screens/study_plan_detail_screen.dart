@@ -134,26 +134,14 @@ class _StudyPlanDetailScreenState extends State<StudyPlanDetailScreen> {
   }
 
   Future<void> _deletePlan() async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text('Delete "${_plan?.name}"?',
-            style: GoogleFonts.playfairDisplay(fontSize: 18)),
-        content: const Text('This permanently deletes the plan and all tasks.'),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Cancel')),
-          FilledButton(
-            style: FilledButton.styleFrom(
-                backgroundColor: const Color(0xFFC64545)),
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Delete'),
-          ),
-        ],
-      ),
+    final confirmed = await AppFeedback.confirmDelete(
+      context,
+      title: Text('Delete "${_plan?.name}"?',
+          style: GoogleFonts.playfairDisplay(fontSize: 18)),
+      content: const Text('This permanently deletes the plan and all tasks.'),
+      accentColor: const Color(0xFFC64545),
     );
-    if (confirmed != true || !mounted) return;
+    if (!confirmed || !mounted) return;
     final nav = Navigator.of(context);
     await _taskRepo.deleteByPlan(widget.planId);
     await _dayRepo.deleteByPlan(widget.planId);

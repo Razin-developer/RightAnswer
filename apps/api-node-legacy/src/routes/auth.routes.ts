@@ -22,7 +22,11 @@ const registerSchema = z.object({
   email: z.string().email(),
   password: z.string().min(6),
   name: z.string().min(1).default("Student"),
-  role: z.enum(["student", "teacher", "admin"]).optional(),
+  // "admin" is intentionally excluded: this field is caller-controlled at
+  // signup time, so allowing "admin" here let any anonymous caller mint an
+  // admin account. Admin role must be granted out-of-band (e.g. directly in
+  // the database) by a trusted operator, never via self-registration.
+  role: z.enum(["student", "teacher"]).optional(),
 });
 
 const loginSchema = z.object({

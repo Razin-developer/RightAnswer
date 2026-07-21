@@ -33,23 +33,6 @@ class QueuedRequest {
     this.subjectName,
   });
 
-  QueuedRequest copyWith({String? status, String? errorMessage}) => QueuedRequest(
-        id: id,
-        chapterId: chapterId,
-        subjectId: subjectId,
-        toolType: toolType,
-        question: question,
-        language: language,
-        gradeLevel: gradeLevel,
-        tone: tone,
-        outputLength: outputLength,
-        status: status ?? this.status,
-        errorMessage: errorMessage ?? this.errorMessage,
-        createdAt: createdAt,
-        chapterTitle: chapterTitle,
-        subjectName: subjectName,
-      );
-
   Map<String, dynamic> toMap() => {
         'id': id,
         'chapterId': chapterId,

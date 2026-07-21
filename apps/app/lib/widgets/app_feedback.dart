@@ -54,6 +54,36 @@ class AppFeedback {
     );
   }
 
+  /// Shows a Cancel/Delete confirmation dialog and returns true if the user
+  /// tapped Delete. [title] and [content] let each call site keep its own
+  /// wording and styling; [accentColor] controls the Delete button color.
+  static Future<bool> confirmDelete(
+    BuildContext context, {
+    required Widget title,
+    required Widget content,
+    Color accentColor = Colors.red,
+  }) async {
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: title,
+        content: content,
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: accentColor),
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    return result == true;
+  }
+
   static Future<void> showErrorDialog(
     BuildContext context,
     Object error, {

@@ -17,7 +17,7 @@ class DatabaseHelper {
     final path = join(dbPath, 'right_answer.db');
     return openDatabase(
       path,
-      version: 10,
+      version: 11,
       onCreate: _onCreate,
       onUpgrade: _onUpgrade,
     );
@@ -68,6 +68,11 @@ class DatabaseHelper {
     if (oldVersion < 10) {
       await _createStudyPlanTables(db);
     }
+    if (oldVersion < 11) {
+      await db.execute(
+        'ALTER TABLE chapters ADD COLUMN number INTEGER NOT NULL DEFAULT 0',
+      );
+    }
   }
 
   Future<void> _createCoreTablesV1(Database db) async {
@@ -86,6 +91,7 @@ class DatabaseHelper {
         title TEXT NOT NULL,
         className TEXT NOT NULL,
         rawContent TEXT NOT NULL DEFAULT '',
+        number INTEGER NOT NULL DEFAULT 0,
         createdAt TEXT NOT NULL,
         FOREIGN KEY (subjectId) REFERENCES subjects(id) ON DELETE CASCADE
       )

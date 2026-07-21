@@ -77,7 +77,4 @@ class BackgroundService {
     );
   }
 
-  static Future<void> cancelAll() async {
-    await Workmanager().cancelAll();
-  }
 }

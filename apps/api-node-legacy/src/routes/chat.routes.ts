@@ -75,10 +75,20 @@ const findOwnedChatByLocalId = async (ownerId: string, localId: string) => {
   return chat as ChatDocument;
 };
 
-chatRoutes.get("/:chatId/messages", optionalAuth, async (c) => {
+chatRoutes.get("/:chatId/messages", requireAuth, async (c) => {
+  const user = c.get("user");
   const chatId = c.req.param("chatId");
   if (!Types.ObjectId.isValid(chatId)) {
     throw new AppError(400, "Invalid chat id", "VALIDATION_ERROR");
+  }
+
+  // Ownership check: without this, any authenticated caller could read any
+  // other user's chat transcript just by guessing/enumerating a 24-hex-char
+  // Mongo ObjectId (IDOR). Sharing has its own dedicated token-based flow
+  // (see shareRoutes below) and must not be bypassed via this endpoint.
+  const chat = await ChatModel.findOne({ _id: chatId, ownerId: user.id });
+  if (!chat) {
+    throw new AppError(404, "Chat not found", "CHAT_NOT_FOUND");
   }
 
   const messages = await ChatMessageModel.find({ chatId }).sort({
@@ -264,12 +274,25 @@ shareRoutes.get("/:token", optionalAuth, async (c) => {
   });
 });
 
+// MongoDB's hard document-size ceiling is 16MB; the whole file is embedded
+// as a `bytes` field on the document, so anything close to that limit would
+// fail with an opaque Mongo error. Cap well under that and fail fast with a
+// clear error instead of buffering unbounded request bodies into memory.
+const MAX_CONTENT_SHARE_BYTES = 10 * 1024 * 1024;
+
 contentRoutes.post("/", requireAuth, async (c) => {
   const user = c.get("user");
   const form = await c.req.raw.formData();
   const file = form.get("file");
   if (!(file instanceof File)) {
     throw new AppError(400, "file is required", "VALIDATION_ERROR");
+  }
+  if (file.size > MAX_CONTENT_SHARE_BYTES) {
+    throw new AppError(
+      413,
+      `file exceeds the ${MAX_CONTENT_SHARE_BYTES / (1024 * 1024)}MB limit`,
+      "FILE_TOO_LARGE",
+    );
   }
 
   const metadataRaw = form.get("metadata");

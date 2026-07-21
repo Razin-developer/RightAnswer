@@ -70,10 +70,11 @@ class StudyPlanAIService {
     required DateTime startDate,
     required List<int> freeDays,
     required double hoursPerDay,
-    required List<String> chapterIds,
-    required List<String> chapterNames,
-    String? subjectName,
-    String? additionalNotes,
+    String? topic,
+    // Optional — only set when the user picked a chapter via the chapter
+    // picker. Scopes backend Qdrant retrieval to just this chapter; null or
+    // empty preserves the existing global-search behavior.
+    List<String>? chapterIds,
   }) async {
     AIBackendService.requireChatApiKey();
     final model =
@@ -83,17 +84,6 @@ class StudyPlanAIService {
         .map((d) => _dayNames[d] ?? '')
         .where((s) => s.isNotEmpty)
         .join(', ');
-
-    final chaptersText = chapterNames.isEmpty
-        ? 'No specific chapters — create a general study plan'
-        : chapterNames
-              .asMap()
-              .entries
-              .map((e) {
-                final id = chapterIds.length > e.key ? chapterIds[e.key] : '';
-                return '${e.key + 1}. ${e.value}${id.isNotEmpty ? ' (id: $id)' : ''}';
-              })
-              .join('\n');
 
     final startStr = _fmt(startDate);
     final examStr = _fmt(examDate);
@@ -108,19 +98,15 @@ CONSTRAINTS:
 - Study period: $startStr to $examStr (exclusive — last study day is the day BEFORE the exam)
 - Free days (skip entirely): ${freeDayNames.isEmpty ? 'none' : freeDayNames}
 - Study time per day: $hoursLabel
-- Subject: ${subjectName ?? 'General'}
-- Chapters / Topics to cover:
-$chaptersText
-${additionalNotes != null && additionalNotes.isNotEmpty ? '\nExtra instructions: $additionalNotes' : ''}
+- What to study: ${topic != null && topic.trim().isNotEmpty ? topic.trim() : 'General — infer reasonable topics from the plan name "$planName"'}
 
 RULES:
 - Only include actual study days (not free days, not the exam day itself)
 - Each task must have a clear, specific title (what to study)
 - Task durations must be in 30-minute increments (30, 60, 90, 120)
 - Sum of durations in a day ≈ available study time
-- Spread chapters/topics evenly; don't front-load or back-load
+- Spread topics evenly; don't front-load or back-load
 - Last 20 % of days: include revision/review tasks
-- If a chapterId is given, include the exact id string in the relevant task
 
 Return ONLY valid JSON — no markdown, no explanation:
 {
@@ -132,8 +118,7 @@ Return ONLY valid JSON — no markdown, no explanation:
         {
           "title": "Task title",
           "description": "What to focus on and key goals",
-          "chapterId": "chapter-id or null",
-          "chapterName": "Chapter or topic name",
+          "chapterName": "Topic name",
           "durationMinutes": 60
         }
       ]
@@ -151,6 +136,8 @@ Return ONLY valid JSON — no markdown, no explanation:
         'temperature': 0.4,
         'max_tokens': 6000,
         'response_format': {'type': 'json_object'},
+        if (chapterIds != null && chapterIds.isNotEmpty)
+          'chapterIds': chapterIds,
       },
       timeout: const Duration(seconds: 120),
     );
@@ -163,13 +150,13 @@ Return ONLY valid JSON — no markdown, no explanation:
       draft: draft,
       originalConstraints: system,
       model: model,
+      chapterIds: chapterIds,
     );
   }
 
   Future<StudyPlanDraft> refinePlan({
     required StudyPlanDraft current,
     required String instruction,
-    String? subjectName,
   }) async {
     AIBackendService.requireChatApiKey();
     final model =
@@ -213,6 +200,7 @@ ${_draftToJson(current)}''';
     required StudyPlanDraft draft,
     required String originalConstraints,
     required String model,
+    List<String>? chapterIds,
   }) async {
     var current = draft;
 
@@ -243,6 +231,8 @@ ${_draftToJson(current)}''';
             'temperature': 0.35,
             'max_tokens': 6000,
             'response_format': {'type': 'json_object'},
+            if (chapterIds != null && chapterIds.isNotEmpty)
+              'chapterIds': chapterIds,
           },
           timeout: const Duration(seconds: 120),
         );

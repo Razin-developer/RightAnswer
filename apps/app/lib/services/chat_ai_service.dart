@@ -15,22 +15,6 @@ import '../repositories/usage_log_repository.dart';
 import 'ai_backend_service.dart';
 import 'retrieval_service.dart';
 
-class ChatAIResult {
-  final String content;
-  final int inputTokens;
-  final int outputTokens;
-  final double cost;
-  final List<String> sourceChunks;
-
-  const ChatAIResult({
-    required this.content,
-    required this.inputTokens,
-    required this.outputTokens,
-    required this.cost,
-    this.sourceChunks = const [],
-  });
-}
-
 class ChatAIStreamEvent {
   final String content;
   final bool isDone;
@@ -38,6 +22,12 @@ class ChatAIStreamEvent {
   final int outputTokens;
   final double cost;
   final List<String> sourceChunks;
+  // Server-driven classification of which subject/chapter this answer's
+  // sources came from — the client no longer picks these up front.
+  final String? subjectId;
+  final String? subjectName;
+  final String? chapterId;
+  final String? chapterName;
 
   const ChatAIStreamEvent({
     required this.content,
@@ -46,6 +36,10 @@ class ChatAIStreamEvent {
     this.outputTokens = 0,
     this.cost = 0,
     this.sourceChunks = const [],
+    this.subjectId,
+    this.subjectName,
+    this.chapterId,
+    this.chapterName,
   });
 }
 
@@ -60,58 +54,17 @@ class ChatAIService {
   static const double _defaultInputPrice = 0.0005;
   static const double _defaultOutputPrice = 0.0015;
 
-  Future<ChatAIResult> sendMessage({
-    required String userContent,
-    String? imagePath,
-    required String responseLength,
-    required String reasoningLevel,
-    String? responseLanguage,
-    String? subjectName,
-    List<String> chapterIds = const [],
-    List<ChatMessage> history = const [],
-  }) async {
-    ChatAIResult? result;
-    await for (final event in streamMessage(
-      userContent: userContent,
-      imagePath: imagePath,
-      responseLength: responseLength,
-      reasoningLevel: reasoningLevel,
-      responseLanguage: responseLanguage,
-      subjectName: subjectName,
-      chapterIds: chapterIds,
-      history: history,
-    )) {
-      if (event.isDone) {
-        result = ChatAIResult(
-          content: event.content,
-          inputTokens: event.inputTokens,
-          outputTokens: event.outputTokens,
-          cost: event.cost,
-          sourceChunks: event.sourceChunks,
-        );
-      }
-    }
-
-    if (result != null) {
-      return result;
-    }
-    return const ChatAIResult(
-      content: '',
-      inputTokens: 0,
-      outputTokens: 0,
-      cost: 0,
-    );
-  }
-
   Stream<ChatAIStreamEvent> streamMessage({
     required String userContent,
     String? imagePath,
     required String responseLength,
     required String reasoningLevel,
     String? responseLanguage,
-    String? subjectName,
-    List<String> chapterIds = const [],
     List<ChatMessage> history = const [],
+    // Optional — only set when the user picked a chapter via the chapter
+    // picker. Scopes backend Qdrant retrieval to just this chapter; null or
+    // empty preserves the existing global-search behavior.
+    List<String>? chapterIds,
   }) async* {
     AIBackendService.requireChatApiKey();
     final model =
@@ -119,13 +72,9 @@ class ChatAIService {
 
     await _checkDailyLimit();
 
-    final (contextBlock, sourceChunks) = await _buildContextBlock(
-      chapterIds,
-      userContent,
-    );
     final systemPrompt = AppPrompts.buildChatSystemPrompt(
-      subjectName: subjectName,
-      contextBlock: contextBlock,
+      subjectName: null,
+      contextBlock: '',
       reasoningLevel: reasoningLevel,
       responseLanguage: responseLanguage,
       responseLength: responseLength,
@@ -140,19 +89,21 @@ class ChatAIService {
       _buildUserMsg(userContent, imagePath),
     ];
 
+    // The backend now embeds the question, searches Qdrant globally, and
+    // reranks — the client just sends the question and lets the server
+    // decide which subject/chapter context applies.
     final payload = {
       'model': model,
       'messages': messages,
       'temperature': _temperature(reasoningLevel),
       'max_tokens': 4096,
-      'contexts': sourceChunks,
-      'subjectName': subjectName,
-      'chapterIds': chapterIds,
       'responseLength': responseLength,
       'reasoningLevel': reasoningLevel,
       'responseLanguage': responseLanguage,
       'richAnswer': true,
       'answerFormat': 'rich',
+      if (chapterIds != null && chapterIds.isNotEmpty)
+        'chapterIds': chapterIds,
     };
 
     final promptEstimate = _estimateTokens(jsonEncode(messages));
@@ -197,8 +148,11 @@ class ChatAIService {
         inputTokens: inputTokens,
         outputTokens: outputTokens,
         cost: cost,
-        sourceChunks:
-            backendSourceChunks.isEmpty ? sourceChunks : backendSourceChunks,
+        sourceChunks: backendSourceChunks,
+        subjectId: data['subjectId'] as String?,
+        subjectName: data['subjectName'] as String?,
+        chapterId: data['chapterId'] as String?,
+        chapterName: data['chapterName'] as String?,
       );
     } on TimeoutException {
       throw AppException.network(
@@ -255,33 +209,6 @@ class ChatAIService {
         'Daily token limit of $limit tokens reached. Increase it in Settings -> Usage.',
       );
     }
-  }
-
-  Future<(String, List<String>)> _buildContextBlock(
-    List<String> chapterIds,
-    String userContent,
-  ) async {
-    if (chapterIds.isEmpty) {
-      return ('', <String>[]);
-    }
-
-    final retrieval = RetrievalService(_chunkRepo);
-    final chunks = <String>[];
-    for (final chapterId in chapterIds) {
-      final found = await retrieval.searchChapter(
-        chapterId,
-        userContent.isEmpty ? 'overview' : userContent,
-      );
-      chunks.addAll(found.map((chunk) => chunk.text));
-    }
-
-    if (chunks.isEmpty) {
-      return ('', <String>[]);
-    }
-
-    final taken = chunks.take(6).toList();
-    final joined = taken.join('\n\n');
-    return ('\n\nSTUDY MATERIAL:\n$joined', taken);
   }
 
   Map<String, dynamic> _buildUserMsg(String content, String? imagePath) {

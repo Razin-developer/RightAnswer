@@ -15,8 +15,6 @@ class UsageLog {
     required this.createdAt,
   });
 
-  int get totalTokens => inputTokensEstimate + outputTokensEstimate;
-
   Map<String, dynamic> toMap() => {
     'id': id,
     'toolType': toolType,

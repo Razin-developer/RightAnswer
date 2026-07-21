@@ -6,13 +6,20 @@ class AuthUser {
   final String id;
   final String email;
   final String name;
+  final String role;
 
-  const AuthUser({required this.id, required this.email, required this.name});
+  const AuthUser({
+    required this.id,
+    required this.email,
+    required this.name,
+    this.role = 'user',
+  });
 
   factory AuthUser.fromJson(Map<String, dynamic> j) => AuthUser(
-        id: j['_id'] as String? ?? j['id'] as String,
+        id: j['id'] as String? ?? j['_id'] as String,
         email: j['email'] as String,
         name: j['name'] as String? ?? '',
+        role: j['role'] as String? ?? 'user',
       );
 }
 
@@ -75,24 +82,10 @@ class AuthService {
     _currentUser = null;
   }
 
-  Future<void> requestPasswordReset(String email) async {
-    await ApiService.instance.post(
-      '/api/auth/reset-password/request',
-      {'email': email},
-      auth: false,
-    );
-  }
-
-  Future<void> confirmPasswordReset({
-    required String token,
-    required String newPassword,
-  }) async {
-    await ApiService.instance.post(
-      '/api/auth/reset-password/confirm',
-      {'token': token, 'newPassword': newPassword},
-      auth: false,
-    );
-  }
+  // NOTE: The backend has no password-reset endpoints yet (no SMTP
+  // configured). Do not add calls here until `/api/auth/reset-password/*`
+  // actually exists server-side — see ForgotPasswordScreen for the honest
+  // "not available yet" messaging shown to users instead.
 
   Future<AuthUser> _saveSession(Map<String, dynamic> data) async {
     final token = data['token'] as String;

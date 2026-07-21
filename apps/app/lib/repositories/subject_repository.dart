@@ -1,3 +1,5 @@
+import 'package:sqflite/sqflite.dart';
+
 import '../database/database_helper.dart';
 import '../models/subject.dart';
 
@@ -6,7 +8,7 @@ class SubjectRepository {
 
   Future<List<Subject>> getAll() async {
     final db = await _db.database;
-    final rows = await db.query('subjects', orderBy: 'createdAt DESC');
+    final rows = await db.query('subjects', orderBy: 'name ASC');
     return rows.map(Subject.fromMap).toList();
   }
 
@@ -22,9 +24,22 @@ class SubjectRepository {
     await db.insert('subjects', subject.toMap());
   }
 
-  Future<void> update(Subject subject) async {
+  /// Insert-or-replace a batch of subjects in one transaction. Used by the
+  /// background catalog sync (GET /api/catalog) to mirror the server's
+  /// subject list locally — subjects may be renamed/added over time, so this
+  /// replaces existing rows with matching ids rather than skipping them.
+  Future<void> upsertAll(List<Subject> subjects) async {
+    if (subjects.isEmpty) return;
     final db = await _db.database;
-    await db.update('subjects', subject.toMap(), where: 'id = ?', whereArgs: [subject.id]);
+    final batch = db.batch();
+    for (final subject in subjects) {
+      batch.insert(
+        'subjects',
+        subject.toMap(),
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+    }
+    await batch.commit(noResult: true);
   }
 
   Future<void> delete(String id) async {

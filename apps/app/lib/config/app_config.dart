@@ -22,4 +22,8 @@ class AppConfig {
   }
 
   static bool get hasApiUrl => apiUrl.trim().isNotEmpty;
+
+  /// Contact address shown wherever we need a human fallback (e.g. password
+  /// reset, which the backend does not support yet — no SMTP configured).
+  static const String supportEmail = 'support@rightanswer.app';
 }

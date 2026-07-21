@@ -60,7 +60,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
       appBar: AppBar(title: const Text('Create Account')),
       body: SafeArea(
         child: SingleChildScrollView(
-          padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 24),
+          padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 32),
           child: Form(
             key: _formKey,
             child: Column(
@@ -69,17 +69,17 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 Text(
                   'Join RightAnswer',
                   style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                        fontWeight: FontWeight.w700,
+                        fontWeight: FontWeight.w500,
                       ),
                 ),
-                const SizedBox(height: 6),
+                const SizedBox(height: 8),
                 Text(
                   'Create your account to sync chats and share content.',
                   style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                         color: cs.onSurface.withValues(alpha: 0.55),
                       ),
                 ),
-                const SizedBox(height: 28),
+                const SizedBox(height: 36),
 
                 // Error banner
                 if (_error != null) ...[

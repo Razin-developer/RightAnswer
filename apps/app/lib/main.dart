@@ -1,7 +1,10 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import 'app/app_router.dart';
 import 'repositories/settings_repository.dart';
+import 'screens/login_screen.dart';
 import 'screens/main_screen.dart';
 import 'screens/onboarding_screen.dart';
 import 'screens/queue_screen.dart';
@@ -9,6 +12,7 @@ import 'screens/saved_outputs_screen.dart';
 import 'services/app_link_service.dart';
 import 'services/auth_service.dart';
 import 'services/background_service.dart';
+import 'services/catalog_sync_service.dart';
 import 'services/connectivity_service.dart';
 import 'services/notification_service.dart';
 import 'services/queue_service.dart';
@@ -59,7 +63,26 @@ void main() async {
 
   final seenOnboarding = await hasSeenOnboarding();
 
-  runApp(RightAnswerApp(showOnboarding: !seenOnboarding));
+  // Auth gate: if we're online and there's no valid session, the user must
+  // log in. If we're offline, skip straight into the app in restricted mode
+  // (local data only, AI generation blocked — see AIBackendService). If
+  // we're online and already have a valid session (AuthService.init() above
+  // already validated it against /api/auth/me), skip straight to the app.
+  final requiresLogin =
+      ConnectivityService.instance.isOnline && !AuthService.instance.isLoggedIn;
+
+  runApp(
+    RightAnswerApp(
+      showOnboarding: !seenOnboarding,
+      requiresLogin: requiresLogin,
+    ),
+  );
+
+  // Low-priority background refresh of the subject/chapter catalog used by
+  // the optional chapter picker (chat "+" menu, exam/study-plan creation).
+  // Deliberately not awaited — must never delay first frame, and silently
+  // no-ops when offline (retries on next launch). See CatalogSyncService.
+  unawaited(CatalogSyncService.instance.syncInBackground());
 }
 
 void _handleNotificationTap(String? payload) {
@@ -81,8 +104,13 @@ void _handleNotificationTap(String? payload) {
 
 class RightAnswerApp extends StatefulWidget {
   final bool showOnboarding;
+  final bool requiresLogin;
 
-  const RightAnswerApp({super.key, required this.showOnboarding});
+  const RightAnswerApp({
+    super.key,
+    required this.showOnboarding,
+    required this.requiresLogin,
+  });
 
   @override
   State<RightAnswerApp> createState() => _RightAnswerAppState();
@@ -106,6 +134,18 @@ class _RightAnswerAppState extends State<RightAnswerApp> {
     super.dispose();
   }
 
+  Widget _home() {
+    if (_showOnboarding) {
+      return OnboardingScreen(
+        onDone: () => setState(() => _showOnboarding = false),
+      );
+    }
+    if (widget.requiresLogin) {
+      return const LoginScreen();
+    }
+    return const MainScreen();
+  }
+
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
@@ -115,11 +155,7 @@ class _RightAnswerAppState extends State<RightAnswerApp> {
       theme: lightTheme(),
       darkTheme: darkTheme(),
       themeMode: themeNotifier.mode,
-      home: _showOnboarding
-          ? OnboardingScreen(
-              onDone: () => setState(() => _showOnboarding = false),
-            )
-          : const MainScreen(),
+      home: _home(),
     );
   }
 }

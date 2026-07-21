@@ -40,20 +40,6 @@ class CloudSyncService {
 
   // ── Chats ─────────────────────────────────────────────────────────────────
 
-  Future<List<Map<String, dynamic>>> fetchChats() async {
-    final data = await ApiService.instance.get('/api/chats');
-    return (data['chats'] as List).cast<Map<String, dynamic>>();
-  }
-
-  Future<Map<String, dynamic>?> syncChat(Chat chat) async {
-    if (!_ready) return null;
-    try {
-      return await _syncChatStrict(chat);
-    } catch (_) {
-      return null;
-    }
-  }
-
   Future<Map<String, dynamic>> _syncChatStrict(Chat chat) {
     return ApiService.instance.post('/api/chats', {
       'localId': chat.id,
@@ -71,20 +57,6 @@ class CloudSyncService {
     if (!_ready) return;
     try {
       await ApiService.instance.put('/api/chats/by-local/$localId', fields);
-    } catch (_) {}
-  }
-
-  Future<void> deleteChat(String localId) async {
-    if (!_ready) return;
-    try {
-      await ApiService.instance.delete('/api/chats/by-local/$localId');
-    } catch (_) {}
-  }
-
-  Future<void> syncMessage(String chatLocalId, ChatMessage msg) async {
-    if (!_ready) return;
-    try {
-      await _syncMessageStrict(chatLocalId, msg);
     } catch (_) {}
   }
 

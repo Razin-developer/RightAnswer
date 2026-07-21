@@ -42,11 +42,6 @@ class StudyTaskRepository {
     await db.delete('study_tasks', where: 'planId = ?', whereArgs: [planId]);
   }
 
-  Future<void> delete(String id) async {
-    final db = await _db.database;
-    await db.delete('study_tasks', where: 'id = ?', whereArgs: [id]);
-  }
-
   Future<int> countCompleted(String planId) async {
     final db = await _db.database;
     final r = await db.rawQuery(

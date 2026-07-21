@@ -27,16 +27,6 @@ class ExamRepository {
     await db.update('exams', exam.toMap(), where: 'id = ?', whereArgs: [exam.id]);
   }
 
-  Future<void> updateName(String id, String name) async {
-    final db = await _db.database;
-    await db.update(
-      'exams',
-      {'name': name, 'updatedAt': DateTime.now().toIso8601String()},
-      where: 'id = ?',
-      whereArgs: [id],
-    );
-  }
-
   Future<void> touchUpdatedAt(String id) async {
     final db = await _db.database;
     await db.update(

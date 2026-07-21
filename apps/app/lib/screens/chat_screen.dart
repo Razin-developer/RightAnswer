@@ -9,12 +9,8 @@ import 'package:uuid/uuid.dart';
 import '../constants/app_languages.dart';
 import '../models/chat.dart';
 import '../models/chat_message.dart';
-import '../models/subject.dart';
-import '../models/chapter.dart';
 import '../repositories/chat_message_repository.dart';
 import '../repositories/chat_repository.dart';
-import '../repositories/chapter_repository.dart';
-import '../repositories/subject_repository.dart';
 import '../services/auth_service.dart';
 import '../services/chat_ai_service.dart';
 import '../services/cloud_sync_service.dart';
@@ -23,9 +19,12 @@ import '../services/tts_service.dart';
 import '../models/app_exception.dart';
 import '../widgets/app_feedback.dart';
 import '../widgets/app_logo.dart';
+import '../widgets/chapter_picker.dart';
 import '../widgets/language_picker_sheet.dart';
 import '../widgets/rich_answer_view.dart';
 import '../widgets/voice_input_sheet.dart';
+import 'queue_screen.dart';
+import 'saved_outputs_screen.dart';
 import 'settings_screen.dart';
 
 class ChatScreen extends StatefulWidget {
@@ -60,10 +59,17 @@ class _ChatScreenState extends State<ChatScreen> {
   String? _streamingMessageId;
   String _responseLength = 'normal';
   String _reasoningLevel = 'mid';
-  String? _contextSubjectId;
+  // Classification the AI backend attaches to a chat's answers — the client
+  // no longer picks a subject/chapter, this is purely informational and is
+  // filled in after the first response comes back.
   String? _contextSubjectName;
-  List<String> _contextChapterIds = [];
-  List<String> _contextChapterNames = [];
+  String? _contextChapterName;
+
+  // User-picked chapter scoping (via the "+" menu's chapter picker). This is
+  // purely optional and additive — when null, retrieval stays global exactly
+  // as before. When set, it's sent as `chapterIds: [id]` on the next send.
+  String? _selectedChapterId;
+  String? _selectedChapterLabel;
 
   @override
   void initState() {
@@ -107,10 +113,14 @@ class _ChatScreenState extends State<ChatScreen> {
       _currentChat = chat;
       _messages = messages;
       _isTemporary = chat.isTemporary;
-      _contextSubjectId = chat.subjectId;
       _contextSubjectName = chat.subjectName;
-      _contextChapterIds = List.from(chat.chapterIds);
-      _contextChapterNames = List.from(chat.chapterNames);
+      _contextChapterName = chat.chapterNames.isNotEmpty
+          ? chat.chapterNames.first
+          : null;
+      // Manual chapter scoping is a per-compose choice, not saved with the
+      // chat — reset it when switching chats.
+      _selectedChapterId = null;
+      _selectedChapterLabel = null;
     });
     _scrollToBottom();
   }
@@ -125,10 +135,10 @@ class _ChatScreenState extends State<ChatScreen> {
       _isTemporary = temporary;
       _inputCtrl.clear();
       _selectedImagePath = null;
-      _contextSubjectId = null;
       _contextSubjectName = null;
-      _contextChapterIds = [];
-      _contextChapterNames = [];
+      _contextChapterName = null;
+      _selectedChapterId = null;
+      _selectedChapterLabel = null;
     });
   }
 
@@ -162,10 +172,8 @@ class _ChatScreenState extends State<ChatScreen> {
       final newChat = Chat(
         id: const Uuid().v4(),
         name: 'New Chat',
-        subjectId: _contextSubjectId,
-        subjectName: _contextSubjectName,
-        chapterIds: _contextChapterIds,
-        chapterNames: _contextChapterNames,
+        chapterIds: const [],
+        chapterNames: const [],
         isTemporary: _isTemporary,
         createdAt: now,
         updatedAt: now,
@@ -219,15 +227,19 @@ class _ChatScreenState extends State<ChatScreen> {
     if (!_isTemporary) await _messageRepo.insert(userMsg);
 
     try {
+      String? classifiedSubjectId;
+      String? classifiedSubjectName;
+      String? classifiedChapterId;
+      String? classifiedChapterName;
+
       await for (final event in ChatAIService.instance.streamMessage(
         userContent: text,
         imagePath: imagePathCopy,
         responseLength: _responseLength,
         reasoningLevel: _reasoningLevel,
         responseLanguage: chosenLanguage,
-        subjectName: _contextSubjectName,
-        chapterIds: _contextChapterIds,
         history: historyBeforeSend,
+        chapterIds: _selectedChapterId != null ? [_selectedChapterId!] : null,
       )) {
         if (!mounted) return;
         setState(() {
@@ -246,6 +258,10 @@ class _ChatScreenState extends State<ChatScreen> {
           if (event.isDone) {
             _isGenerating = false;
             _streamingMessageId = null;
+            classifiedSubjectId = event.subjectId;
+            classifiedSubjectName = event.subjectName;
+            classifiedChapterId = event.chapterId;
+            classifiedChapterName = event.chapterName;
           }
         });
         _scrollToBottom();
@@ -263,6 +279,33 @@ class _ChatScreenState extends State<ChatScreen> {
       if (!_isTemporary) {
         await _messageRepo.insert(finalAssistant);
         await _chatRepo.touchUpdatedAt(chatId);
+        if (classifiedSubjectName != null) {
+          await _chatRepo.updateClassification(
+            chatId,
+            subjectId: classifiedSubjectId,
+            subjectName: classifiedSubjectName,
+            chapterId: classifiedChapterId,
+            chapterName: classifiedChapterName,
+          );
+          if (mounted) {
+            setState(() {
+              _contextSubjectName = classifiedSubjectName;
+              _contextChapterName = classifiedChapterName;
+              if (_currentChat?.id == chatId) {
+                _currentChat = _currentChat!.copyWith(
+                  subjectId: classifiedSubjectId,
+                  subjectName: classifiedSubjectName,
+                  chapterIds: classifiedChapterId == null
+                      ? const []
+                      : [classifiedChapterId!],
+                  chapterNames: classifiedChapterName == null
+                      ? const []
+                      : [classifiedChapterName!],
+                );
+              }
+            });
+          }
+        }
         await _loadAllChats();
 
         final userCount = _messages.where((m) => m.isUser).length;
@@ -325,8 +368,6 @@ class _ChatScreenState extends State<ChatScreen> {
         responseLength: userMsg.responseLength,
         reasoningLevel: userMsg.reasoningLevel,
         responseLanguage: userMsg.responseLanguage,
-        subjectName: _contextSubjectName,
-        chapterIds: _contextChapterIds,
         history: withoutOld.take(idx - 1).toList(),
       )) {
         if (!mounted) return;
@@ -670,26 +711,6 @@ class _ChatScreenState extends State<ChatScreen> {
 
   Future<void> _toggleVoice() async => _openVoiceComposer();
 
-  Future<void> _openContextSelector() async {
-    await showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (_) => _ContextSelectorSheet(
-        initialSubjectId: _contextSubjectId,
-        initialChapterIds: _contextChapterIds,
-        onSelected: (sId, sName, cIds, cNames) {
-          setState(() {
-            _contextSubjectId = sId;
-            _contextSubjectName = sName;
-            _contextChapterIds = cIds;
-            _contextChapterNames = cNames;
-          });
-        },
-      ),
-    );
-  }
-
   void _scrollToBottom() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (_scrollCtrl.hasClients) {
@@ -716,6 +737,23 @@ class _ChatScreenState extends State<ChatScreen> {
     AppFeedback.showToast(context, 'Copied to clipboard');
   }
 
+  Future<void> _openChapterPicker() async {
+    Navigator.pop(context); // close the plus menu first
+    final result = await showChapterPickerSheet(context);
+    if (result == null || !mounted) return;
+    setState(() {
+      _selectedChapterId = result.chapterId;
+      _selectedChapterLabel = result.chapterLabel;
+    });
+  }
+
+  void _clearSelectedChapter() {
+    setState(() {
+      _selectedChapterId = null;
+      _selectedChapterLabel = null;
+    });
+  }
+
   void _openPlusMenu() {
     showModalBottomSheet(
       context: context,
@@ -727,6 +765,7 @@ class _ChatScreenState extends State<ChatScreen> {
         selectedResponseLanguage:
             effectiveResponseLanguage(_selectedResponseLanguage) ??
             autoResponseLanguageLabel,
+        selectedChapterLabel: _selectedChapterLabel,
         onLengthChanged: (v) => setState(() => _responseLength = v),
         onReasoningChanged: (v) => setState(() => _reasoningLevel = v),
         onLanguageChanged: (value) {
@@ -735,6 +774,11 @@ class _ChatScreenState extends State<ChatScreen> {
                 ? null
                 : value;
           });
+        },
+        onPickChapter: _openChapterPicker,
+        onClearChapter: () {
+          Navigator.pop(context);
+          _clearSelectedChapter();
         },
         onCamera: () {
           Navigator.pop(context);
@@ -807,6 +851,20 @@ class _ChatScreenState extends State<ChatScreen> {
         onTempChat: () => _startNewChat(temporary: true),
         onDeleteChat: _deleteChat,
         onTogglePin: _togglePin,
+        onSavedOutputs: () {
+          Navigator.pop(context);
+          Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => const SavedOutputsScreen()),
+          );
+        },
+        onQueue: () {
+          Navigator.pop(context);
+          Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => const QueueScreen()),
+          );
+        },
         onSettings: () {
           Navigator.pop(context);
           Navigator.push(
@@ -907,23 +965,14 @@ class _ChatScreenState extends State<ChatScreen> {
                 ],
               ),
             ),
-          _ContextBar(
-            subjectName: _contextSubjectName,
-            chapterNames: _contextChapterNames,
-            onTap: _openContextSelector,
-            onClear: () => setState(() {
-              _contextSubjectId = null;
-              _contextSubjectName = null;
-              _contextChapterIds = [];
-              _contextChapterNames = [];
-            }),
-          ),
+          if (_contextSubjectName != null)
+            _ContextBar(
+              subjectName: _contextSubjectName,
+              chapterName: _contextChapterName,
+            ),
           Expanded(
             child: _messages.isEmpty && !_isGenerating
-                ? _EmptyState(
-                    hasContext: _contextSubjectName != null,
-                    onSelectContext: _openContextSelector,
-                  )
+                ? const _EmptyState()
                 : ListView.builder(
                     controller: _scrollCtrl,
                     padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
@@ -974,11 +1023,13 @@ class _ChatScreenState extends State<ChatScreen> {
             selectedResponseLanguage: effectiveResponseLanguage(
               _selectedResponseLanguage,
             ),
+            selectedChapterLabel: _selectedChapterLabel,
             onSend: _sendMessage,
             onVoice: _toggleVoice,
             onRemoveImage: () => setState(() => _selectedImagePath = null),
             onClearLanguage: () =>
                 setState(() => _selectedResponseLanguage = null),
+            onClearChapter: _clearSelectedChapter,
             onOpenPlus: _openPlusMenu,
             onFullscreen: _openFullscreen,
           ),
@@ -998,6 +1049,8 @@ class _ChatDrawer extends StatefulWidget {
   final VoidCallback onTempChat;
   final void Function(String) onDeleteChat;
   final void Function(String, bool) onTogglePin;
+  final VoidCallback onSavedOutputs;
+  final VoidCallback onQueue;
   final VoidCallback onSettings;
 
   const _ChatDrawer({
@@ -1008,6 +1061,8 @@ class _ChatDrawer extends StatefulWidget {
     required this.onTempChat,
     required this.onDeleteChat,
     required this.onTogglePin,
+    required this.onSavedOutputs,
+    required this.onQueue,
     required this.onSettings,
   });
 
@@ -1103,29 +1158,14 @@ class _ChatDrawerState extends State<_ChatDrawer> {
               title: const Text('Delete', style: TextStyle(color: Colors.red)),
               onTap: () async {
                 Navigator.pop(ctx);
-                final ok = await showDialog<bool>(
-                  context: context,
-                  builder: (dlgCtx) => AlertDialog(
-                    title: const Text('Delete Chat'),
-                    content: Text(
-                      'Delete "${chat.name}"? This cannot be undone.',
-                    ),
-                    actions: [
-                      TextButton(
-                        onPressed: () => Navigator.pop(dlgCtx, false),
-                        child: const Text('Cancel'),
-                      ),
-                      FilledButton(
-                        style: FilledButton.styleFrom(
-                          backgroundColor: Colors.red,
-                        ),
-                        onPressed: () => Navigator.pop(dlgCtx, true),
-                        child: const Text('Delete'),
-                      ),
-                    ],
+                final ok = await AppFeedback.confirmDelete(
+                  context,
+                  title: const Text('Delete Chat'),
+                  content: Text(
+                    'Delete "${chat.name}"? This cannot be undone.',
                   ),
                 );
-                if (ok == true) widget.onDeleteChat(chat.id);
+                if (ok) widget.onDeleteChat(chat.id);
               },
             ),
             const SizedBox(height: 8),
@@ -1399,36 +1439,27 @@ class _ChatDrawerState extends State<_ChatDrawer> {
               ),
             ],
 
-            // ── Settings ───────────────────────────────────────────────────
+            // ── Utility links ─────────────────────────────────────────────
             Divider(height: 1, color: theme.dividerColor),
-            InkWell(
-              onTap: widget.onSettings,
-              child: Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 16,
-                  vertical: 13,
-                ),
-                child: Row(
-                  children: [
-                    Icon(
-                      Icons.settings_outlined,
-                      size: 18,
-                      color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
-                    ),
-                    const SizedBox(width: 12),
-                    Text(
-                      'Settings',
-                      style: TextStyle(
-                        fontSize: 14,
-                        color: theme.colorScheme.onSurface.withValues(
-                          alpha: 0.85,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
+            _actionRow(
+              theme,
+              Icons.bookmark_outline,
+              'Saved Outputs',
+              widget.onSavedOutputs,
             ),
+            _actionRow(
+              theme,
+              Icons.sync_outlined,
+              'Generation Queue',
+              widget.onQueue,
+            ),
+            _actionRow(
+              theme,
+              Icons.settings_outlined,
+              'Settings',
+              widget.onSettings,
+            ),
+            const SizedBox(height: 4),
           ],
         ),
       ),
@@ -1526,99 +1557,49 @@ class _ChatTile extends StatelessWidget {
 
 // ── Context Bar ───────────────────────────────────────────────────────────────
 
+/// Passive display of which subject/chapter the AI backend classified this
+/// chat under — the client no longer lets the user pick this up front, it's
+/// purely informational once the server tells us after an answer.
 class _ContextBar extends StatelessWidget {
   final String? subjectName;
-  final List<String> chapterNames;
-  final VoidCallback onTap;
-  final VoidCallback onClear;
+  final String? chapterName;
 
-  const _ContextBar({
-    required this.subjectName,
-    required this.chapterNames,
-    required this.onTap,
-    required this.onClear,
-  });
+  const _ContextBar({required this.subjectName, required this.chapterName});
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final hasContext = subjectName != null;
 
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        width: double.infinity,
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
-        decoration: BoxDecoration(
-          color: hasContext
-              ? theme.colorScheme.primary.withValues(alpha: 0.07)
-              : theme.colorScheme.surfaceContainerLowest,
-          border: Border(bottom: BorderSide(color: theme.dividerColor)),
-        ),
-        child: Row(
-          children: [
-            Icon(
-              Icons.menu_book_outlined,
-              size: 16,
-              color: hasContext
-                  ? theme.colorScheme.primary
-                  : theme.colorScheme.onSurface.withValues(alpha: 0.45),
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: hasContext
-                  ? Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          subjectName!,
-                          style: TextStyle(
-                            fontSize: 12,
-                            fontWeight: FontWeight.w700,
-                            color: theme.colorScheme.primary,
-                          ),
-                        ),
-                        if (chapterNames.isNotEmpty)
-                          Text(
-                            chapterNames.join(', '),
-                            style: TextStyle(
-                              fontSize: 11,
-                              color: theme.colorScheme.primary.withValues(
-                                alpha: 0.7,
-                              ),
-                            ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                      ],
-                    )
-                  : Text(
-                      'Select subject & chapters for context',
-                      style: TextStyle(
-                        fontSize: 13,
-                        color: theme.colorScheme.onSurface.withValues(
-                          alpha: 0.45,
-                        ),
-                      ),
-                    ),
-            ),
-            if (hasContext)
-              GestureDetector(
-                onTap: onClear,
-                child: Icon(
-                  Icons.close_rounded,
-                  size: 16,
-                  color: theme.colorScheme.primary.withValues(alpha: 0.5),
-                ),
-              )
-            else
-              Icon(
-                Icons.expand_more_rounded,
-                size: 18,
-                color: theme.colorScheme.onSurface.withValues(alpha: 0.35),
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 9),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.primary.withValues(alpha: 0.06),
+        border: Border(bottom: BorderSide(color: theme.dividerColor)),
+      ),
+      child: Row(
+        children: [
+          Icon(
+            Icons.menu_book_outlined,
+            size: 15,
+            color: theme.colorScheme.primary,
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              chapterName != null && chapterName!.isNotEmpty
+                  ? '$subjectName · $chapterName'
+                  : subjectName ?? '',
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                color: theme.colorScheme.primary,
               ),
-          ],
-        ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -1944,10 +1925,7 @@ class _DotsIndicatorState extends State<_DotsIndicator>
 // ── Empty State ───────────────────────────────────────────────────────────────
 
 class _EmptyState extends StatelessWidget {
-  final bool hasContext;
-  final VoidCallback onSelectContext;
-
-  const _EmptyState({required this.hasContext, required this.onSelectContext});
+  const _EmptyState();
 
   @override
   Widget build(BuildContext context) {
@@ -1992,9 +1970,7 @@ class _EmptyState extends StatelessWidget {
                 ),
                 const SizedBox(height: 12),
                 Text(
-                  hasContext
-                      ? 'Type a question below to get started'
-                      : 'Select a subject and chapters for context-aware answers,\nor just ask anything',
+                  'Type a question below to get started',
                   textAlign: TextAlign.center,
                   style: GoogleFonts.inter(
                     fontSize: 14,
@@ -2002,31 +1978,6 @@ class _EmptyState extends StatelessWidget {
                     height: 1.6,
                   ),
                 ),
-                if (!hasContext) ...[
-                  const SizedBox(height: 24),
-                  OutlinedButton.icon(
-                    onPressed: onSelectContext,
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: coral,
-                      side: const BorderSide(color: Color(0xFFCC785C)),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 20,
-                        vertical: 10,
-                      ),
-                    ),
-                    icon: const Icon(Icons.menu_book_outlined, size: 16),
-                    label: Text(
-                      'Select Study Context',
-                      style: GoogleFonts.inter(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
-                  ),
-                ],
               ],
             ),
           ),
@@ -2044,10 +1995,12 @@ class _InputArea extends StatelessWidget {
   final bool isRecording;
   final String? selectedImagePath;
   final String? selectedResponseLanguage;
+  final String? selectedChapterLabel;
   final VoidCallback onSend;
   final VoidCallback onVoice;
   final VoidCallback onRemoveImage;
   final VoidCallback onClearLanguage;
+  final VoidCallback onClearChapter;
   final VoidCallback onOpenPlus;
   final VoidCallback onFullscreen;
 
@@ -2057,10 +2010,12 @@ class _InputArea extends StatelessWidget {
     required this.isRecording,
     required this.selectedImagePath,
     required this.selectedResponseLanguage,
+    this.selectedChapterLabel,
     required this.onSend,
     required this.onVoice,
     required this.onRemoveImage,
     required this.onClearLanguage,
+    required this.onClearChapter,
     required this.onOpenPlus,
     required this.onFullscreen,
   });
@@ -2159,6 +2114,17 @@ class _InputArea extends StatelessWidget {
                         ),
                       ],
                     ),
+                  ),
+                ),
+              ),
+            if (selectedChapterLabel != null)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(14, 10, 14, 0),
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: SelectedChapterChip(
+                    label: selectedChapterLabel!,
+                    onClear: onClearChapter,
                   ),
                 ),
               ),
@@ -2294,9 +2260,12 @@ class _PlusMenuSheet extends StatefulWidget {
   final String responseLength;
   final String reasoningLevel;
   final String selectedResponseLanguage;
+  final String? selectedChapterLabel;
   final void Function(String) onLengthChanged;
   final void Function(String) onReasoningChanged;
   final void Function(String) onLanguageChanged;
+  final VoidCallback onPickChapter;
+  final VoidCallback onClearChapter;
   final VoidCallback onCamera;
   final VoidCallback onPhotos;
   final VoidCallback onFiles;
@@ -2310,9 +2279,12 @@ class _PlusMenuSheet extends StatefulWidget {
     required this.responseLength,
     required this.reasoningLevel,
     required this.selectedResponseLanguage,
+    this.selectedChapterLabel,
     required this.onLengthChanged,
     required this.onReasoningChanged,
     required this.onLanguageChanged,
+    required this.onPickChapter,
+    required this.onClearChapter,
     required this.onCamera,
     required this.onPhotos,
     required this.onFiles,
@@ -2423,6 +2395,39 @@ class _PlusMenuSheetState extends State<_PlusMenuSheet> {
                   ),
                 ],
               ),
+            ),
+            Divider(
+              height: 1,
+              color: theme.dividerColor,
+              indent: 16,
+              endIndent: 16,
+            ),
+            ListTile(
+              dense: true,
+              leading: Icon(
+                Icons.menu_book_outlined,
+                size: 20,
+                color: theme.colorScheme.primary,
+              ),
+              title: const Text(
+                'Chapter',
+                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+              ),
+              subtitle: Text(
+                widget.selectedChapterLabel ?? 'None — searches globally',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
+                ),
+              ),
+              trailing: widget.selectedChapterLabel != null
+                  ? IconButton(
+                      icon: const Icon(Icons.close_rounded, size: 18),
+                      onPressed: widget.onClearChapter,
+                      tooltip: 'Clear chapter',
+                    )
+                  : const Icon(Icons.chevron_right_rounded, size: 20),
+              onTap: widget.onPickChapter,
             ),
             Divider(
               height: 1,
@@ -3069,364 +3074,3 @@ class _ResourcesSheet extends StatelessWidget {
   }
 }
 
-// ── Context Selector Sheet ────────────────────────────────────────────────────
-
-class _ContextSelectorSheet extends StatefulWidget {
-  final String? initialSubjectId;
-  final List<String> initialChapterIds;
-  final void Function(
-    String? subjectId,
-    String? subjectName,
-    List<String> chapterIds,
-    List<String> chapterNames,
-  )
-  onSelected;
-
-  const _ContextSelectorSheet({
-    required this.initialSubjectId,
-    required this.initialChapterIds,
-    required this.onSelected,
-  });
-
-  @override
-  State<_ContextSelectorSheet> createState() => _ContextSelectorSheetState();
-}
-
-class _ContextSelectorSheetState extends State<_ContextSelectorSheet> {
-  final _subjectRepo = SubjectRepository();
-  final _chapterRepo = ChapterRepository();
-  final _searchCtrl = TextEditingController();
-
-  List<Subject> _subjects = [];
-  Map<String, List<Chapter>> _chapters = {};
-  final Set<String> _expanded = {};
-
-  String? _selectedSubjectId;
-  String? _selectedSubjectName;
-  Set<String> _selectedChapterIds = {};
-  final Map<String, String> _chapterNames = {};
-
-  bool _loading = true;
-  String _query = '';
-
-  @override
-  void initState() {
-    super.initState();
-    _selectedSubjectId = widget.initialSubjectId;
-    _selectedChapterIds = widget.initialChapterIds.toSet();
-    if (widget.initialSubjectId != null) {
-      _expanded.add(widget.initialSubjectId!);
-    }
-    _load();
-    _searchCtrl.addListener(
-      () => setState(() => _query = _searchCtrl.text.toLowerCase()),
-    );
-  }
-
-  @override
-  void dispose() {
-    _searchCtrl.dispose();
-    super.dispose();
-  }
-
-  Future<void> _load() async {
-    final subjects = await _subjectRepo.getAll();
-    final chapters = <String, List<Chapter>>{};
-    for (final s in subjects) {
-      final chs = await _chapterRepo.getBySubject(s.id);
-      chapters[s.id] = chs;
-      for (final c in chs) {
-        _chapterNames[c.id] = c.title;
-      }
-    }
-    if (_selectedSubjectId != null) {
-      final s = subjects.where((x) => x.id == _selectedSubjectId).firstOrNull;
-      _selectedSubjectName = s?.name;
-    }
-    if (mounted) {
-      setState(() {
-        _subjects = subjects;
-        _chapters = chapters;
-        _loading = false;
-      });
-    }
-  }
-
-  List<Subject> get _filteredSubjects {
-    if (_query.isEmpty) return _subjects;
-    return _subjects.where((s) {
-      if (s.name.toLowerCase().contains(_query)) return true;
-      final chs = _chapters[s.id] ?? [];
-      return chs.any(
-        (c) =>
-            c.title.toLowerCase().contains(_query) ||
-            c.className.toLowerCase().contains(_query),
-      );
-    }).toList();
-  }
-
-  List<Chapter> _filteredChapters(String subjectId) {
-    final chs = _chapters[subjectId] ?? [];
-    if (_query.isEmpty) return chs;
-    return chs
-        .where(
-          (c) =>
-              c.title.toLowerCase().contains(_query) ||
-              c.className.toLowerCase().contains(_query),
-        )
-        .toList();
-  }
-
-  void _toggleSubject(Subject s) {
-    setState(() {
-      if (_expanded.contains(s.id)) {
-        _expanded.remove(s.id);
-      } else {
-        _expanded.add(s.id);
-      }
-    });
-  }
-
-  void _selectAllInSubject(Subject s, bool select) {
-    final chs = _chapters[s.id] ?? [];
-    setState(() {
-      _selectedSubjectId = select ? s.id : null;
-      _selectedSubjectName = select ? s.name : null;
-      if (select) {
-        _selectedChapterIds = chs.map((c) => c.id).toSet();
-      } else {
-        _selectedChapterIds = {};
-      }
-    });
-  }
-
-  void _toggleChapter(Subject s, Chapter ch) {
-    setState(() {
-      if (_selectedChapterIds.contains(ch.id)) {
-        _selectedChapterIds.remove(ch.id);
-        if (_selectedChapterIds.isEmpty) {
-          _selectedSubjectId = null;
-          _selectedSubjectName = null;
-        }
-      } else {
-        _selectedSubjectId = s.id;
-        _selectedSubjectName = s.name;
-        _selectedChapterIds.add(ch.id);
-      }
-    });
-  }
-
-  void _confirm() {
-    final names = _selectedChapterIds
-        .map((id) => _chapterNames[id] ?? id)
-        .toList();
-    widget.onSelected(
-      _selectedSubjectId,
-      _selectedSubjectName,
-      _selectedChapterIds.toList(),
-      names,
-    );
-    Navigator.pop(context);
-  }
-
-  void _clear() {
-    setState(() {
-      _selectedSubjectId = null;
-      _selectedSubjectName = null;
-      _selectedChapterIds = {};
-    });
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final filtered = _filteredSubjects;
-
-    return DraggableScrollableSheet(
-      initialChildSize: 0.75,
-      maxChildSize: 0.95,
-      minChildSize: 0.4,
-      builder: (_, scrollCtrl) => Container(
-        decoration: BoxDecoration(
-          color: theme.colorScheme.surface,
-          borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
-        ),
-        child: Column(
-          children: [
-            Container(
-              margin: const EdgeInsets.only(top: 10),
-              width: 36,
-              height: 4,
-              decoration: BoxDecoration(
-                color: theme.dividerColor,
-                borderRadius: BorderRadius.circular(2),
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
-              child: Row(
-                children: [
-                  Text(
-                    'Select Context',
-                    style: theme.textTheme.titleMedium?.copyWith(
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                  const Spacer(),
-                  if (_selectedSubjectId != null)
-                    TextButton(
-                      onPressed: _clear,
-                      style: TextButton.styleFrom(padding: EdgeInsets.zero),
-                      child: const Text('Clear'),
-                    ),
-                ],
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-              child: TextField(
-                controller: _searchCtrl,
-                decoration: InputDecoration(
-                  hintText: 'Search subjects, chapters...',
-                  prefixIcon: const Icon(Icons.search, size: 18),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  contentPadding: const EdgeInsets.symmetric(
-                    vertical: 8,
-                    horizontal: 12,
-                  ),
-                  isDense: true,
-                  suffixIcon: _query.isNotEmpty
-                      ? IconButton(
-                          icon: const Icon(Icons.close, size: 16),
-                          onPressed: () => _searchCtrl.clear(),
-                        )
-                      : null,
-                ),
-              ),
-            ),
-            Expanded(
-              child: _loading
-                  ? const Center(child: CircularProgressIndicator())
-                  : filtered.isEmpty
-                  ? Center(
-                      child: Text(
-                        _subjects.isEmpty
-                            ? 'No subjects yet. Add one in the Subjects tab.'
-                            : 'No results for "$_query"',
-                        style: TextStyle(
-                          color: theme.colorScheme.onSurface.withValues(
-                            alpha: 0.5,
-                          ),
-                          fontSize: 13,
-                        ),
-                        textAlign: TextAlign.center,
-                      ),
-                    )
-                  : ListView.builder(
-                      controller: scrollCtrl,
-                      itemCount: filtered.length,
-                      itemBuilder: (ctx, i) {
-                        final s = filtered[i];
-                        final chs = _filteredChapters(s.id);
-                        final allSelected =
-                            chs.isNotEmpty &&
-                            chs.every(
-                              (c) => _selectedChapterIds.contains(c.id),
-                            );
-                        final someSelected = chs.any(
-                          (c) => _selectedChapterIds.contains(c.id),
-                        );
-                        final isExpanded = _expanded.contains(s.id);
-
-                        return Column(
-                          children: [
-                            ListTile(
-                              dense: true,
-                              leading: Checkbox(
-                                value: allSelected
-                                    ? true
-                                    : someSelected
-                                    ? null
-                                    : false,
-                                tristate: true,
-                                onChanged: (v) =>
-                                    _selectAllInSubject(s, v != false),
-                              ),
-                              title: Text(
-                                s.name,
-                                style: const TextStyle(
-                                  fontWeight: FontWeight.w600,
-                                  fontSize: 14,
-                                ),
-                              ),
-                              subtitle: Text(
-                                '${chs.length} chapter${chs.length != 1 ? 's' : ''}',
-                                style: const TextStyle(fontSize: 12),
-                              ),
-                              trailing: IconButton(
-                                icon: Icon(
-                                  isExpanded
-                                      ? Icons.expand_less
-                                      : Icons.expand_more,
-                                  size: 20,
-                                ),
-                                onPressed: () => _toggleSubject(s),
-                              ),
-                              onTap: () => _toggleSubject(s),
-                            ),
-                            if (isExpanded)
-                              ...chs.map(
-                                (ch) => CheckboxListTile(
-                                  dense: true,
-                                  contentPadding: const EdgeInsets.only(
-                                    left: 40,
-                                    right: 16,
-                                  ),
-                                  value: _selectedChapterIds.contains(ch.id),
-                                  onChanged: (_) => _toggleChapter(s, ch),
-                                  title: Text(
-                                    ch.title,
-                                    style: const TextStyle(fontSize: 13),
-                                  ),
-                                  subtitle: Text(
-                                    ch.className,
-                                    style: const TextStyle(fontSize: 11),
-                                  ),
-                                ),
-                              ),
-                            Divider(height: 1, color: theme.dividerColor),
-                          ],
-                        );
-                      },
-                    ),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
-              child: Row(
-                children: [
-                  if (_selectedSubjectId != null)
-                    Expanded(
-                      child: Text(
-                        '${_selectedChapterIds.length} chapter${_selectedChapterIds.length != 1 ? 's' : ''} selected',
-                        style: TextStyle(
-                          fontSize: 13,
-                          color: theme.colorScheme.primary,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ),
-                  FilledButton(
-                    onPressed: _confirm,
-                    child: const Text('Confirm'),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}

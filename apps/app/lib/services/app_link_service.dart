@@ -124,22 +124,19 @@ class AppLinkService {
       await CloudSyncService.instance.downloadContentZip(target.downloadUrl),
     );
 
+    // Subjects/chapters no longer have a dedicated tab — AI chat retrieval
+    // is fully server-driven now, so land on whichever tab matches the
+    // imported content, defaulting to Chat.
     final initialTab = switch (target.kind) {
       _LinkKind.studyPlan => 2,
       _LinkKind.exam => 1,
       _LinkKind.quiz => 1,
-      _ => 3,
+      _ => 0,
     };
 
     _navigateToRoot(
       MainScreen(
         initialTabIndex: initialTab,
-        initialSubjectId: imported.subjectIds.isNotEmpty
-            ? imported.subjectIds.first
-            : null,
-        initialChapterId: imported.chapterIds.length == 1
-            ? imported.chapterIds.first
-            : null,
         initialStudyPlanId: imported.studyPlanIds.length == 1
             ? imported.studyPlanIds.first
             : null,

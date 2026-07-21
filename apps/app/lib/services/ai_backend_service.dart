@@ -61,6 +61,12 @@ class AIBackendService {
         'model': answerMeta['model'],
         'servedFrom': decoded['servedFrom'] ?? answerMeta['servedFrom'],
         if (sourceChunks is List) 'sourceChunks': sourceChunks,
+        // Server-driven classification of which subject/chapter this
+        // answer's sources came from — the client no longer picks these.
+        'subjectId': decoded['subjectId'],
+        'subjectName': decoded['subjectName'],
+        'chapterId': decoded['chapterId'],
+        'chapterName': decoded['chapterName'],
       }),
       200,
       headers: {'content-type': 'application/json'},
@@ -139,9 +145,6 @@ class AIBackendService {
         'responseFormat': 'json',
       },
       if (payload['contexts'] is List) 'contexts': payload['contexts'],
-      if (payload['subjectName'] != null) 'subjectName': payload['subjectName'],
-      if (payload['chapterIds'] is List) 'chapterIds': payload['chapterIds'],
-      if (payload['chapterNames'] is List) 'chapterNames': payload['chapterNames'],
       if (payload['responseLength'] != null)
         'responseLength': payload['responseLength'],
       if (payload['reasoningLevel'] != null)
@@ -150,6 +153,14 @@ class AIBackendService {
         'responseLanguage': payload['responseLanguage'],
       if (payload['richAnswer'] == true) 'richAnswer': true,
       if (payload['answerFormat'] != null) 'answerFormat': payload['answerFormat'],
+      // Optional retrieval scoping — only present when the user actively
+      // picked a chapter via the chapter picker. Absent/empty means the
+      // backend searches globally, exactly as before.
+      if (payload['chapterIds'] is List &&
+          (payload['chapterIds'] as List).isNotEmpty)
+        'chapterIds': (payload['chapterIds'] as List)
+            .map((e) => e.toString())
+            .toList(),
     };
   }
 
@@ -181,7 +192,7 @@ class AIBackendService {
   ) async {
     if (!ConnectivityService.instance.isOnline) {
       throw AppException.network(
-        'You are offline. Local data is available, but AI generation is paused.',
+        "You're offline — connect to the internet to use AI features.",
       );
     }
 

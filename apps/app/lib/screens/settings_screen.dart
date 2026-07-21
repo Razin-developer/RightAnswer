@@ -4,10 +4,12 @@ import '../constants/app_languages.dart';
 import '../database/database_helper.dart';
 import '../repositories/settings_repository.dart';
 import '../repositories/usage_log_repository.dart';
+import '../services/auth_service.dart';
 import '../services/notification_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/app_feedback.dart';
 import '../widgets/language_picker_sheet.dart';
+import 'login_screen.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -171,6 +173,33 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (mounted) {
       AppFeedback.showToast(context, 'All data cleared');
     }
+  }
+
+  Future<void> _logout() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Log Out'),
+        content: const Text('You\'ll need to sign in again to use RightAnswer.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Log Out'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    await AuthService.instance.logout();
+    if (!mounted) return;
+    Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute(builder: (_) => const LoginScreen()),
+      (_) => false,
+    );
   }
 
   @override
@@ -411,6 +440,70 @@ class _SettingsScreenState extends State<SettingsScreen> {
               _usageGrid(theme),
             ],
           ),
+          if (AuthService.instance.isLoggedIn) ...[
+            const SizedBox(height: 20),
+            _sectionTitle('Account', Icons.person_outline, theme),
+            _card(
+              theme,
+              children: [
+                Row(
+                  children: [
+                    CircleAvatar(
+                      radius: 18,
+                      backgroundColor: theme.colorScheme.primaryContainer,
+                      child: Text(
+                        (AuthService.instance.currentUser?.name.isNotEmpty ==
+                                true
+                            ? AuthService.instance.currentUser!.name[0]
+                            : AuthService.instance.currentUser?.email[0] ??
+                                '?').toUpperCase(),
+                        style: TextStyle(
+                          color: theme.colorScheme.onPrimaryContainer,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            AuthService.instance.currentUser?.name.isNotEmpty ==
+                                    true
+                                ? AuthService.instance.currentUser!.name
+                                : 'Signed in',
+                            style: const TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          Text(
+                            AuthService.instance.currentUser?.email ?? '',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: theme.colorScheme.onSurface.withValues(
+                                alpha: 0.55,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                Divider(color: theme.dividerColor, height: 24),
+                _actionTile(
+                  icon: Icons.logout_rounded,
+                  color: Colors.red,
+                  label: 'Log Out',
+                  subtitle: 'Sign out of this account',
+                  onTap: _logout,
+                  theme: theme,
+                ),
+              ],
+            ),
+          ],
           const SizedBox(height: 20),
           _sectionTitle('Data', Icons.storage_outlined, theme),
           _card(

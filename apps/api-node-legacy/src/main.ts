@@ -19,10 +19,16 @@ app.use(
       if (!origin) {
         return "*";
       }
-      if (!env.corsOrigins.length || env.corsOrigins.includes(origin)) {
+      // With credentials enabled, reflecting any/every origin back
+      // (previously the fallback here when CORS_ORIGINS was unset) is
+      // equivalent to a wildcard-with-credentials CORS policy and lets any
+      // site make authenticated cross-origin requests on behalf of a
+      // logged-in user. Only echo the origin back when it's on the
+      // explicit allowlist; otherwise deny it.
+      if (env.corsOrigins.includes(origin)) {
         return origin;
       }
-      return env.corsOrigins[0] ?? origin;
+      return null;
     },
     credentials: true,
     allowHeaders: ["Content-Type", "Authorization"],

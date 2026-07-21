@@ -4,6 +4,10 @@ class Chapter {
   final String title;
   final String className;
   final String rawContent;
+  // Chapter number within its subject, as reported by the backend catalog
+  // (GET /api/catalog). Defaults to 0 for chapters that predate this field
+  // (e.g. imported archives) or weren't synced from the catalog.
+  final int number;
   final DateTime createdAt;
 
   Chapter({
@@ -12,6 +16,7 @@ class Chapter {
     required this.title,
     required this.className,
     this.rawContent = '',
+    this.number = 0,
     required this.createdAt,
   });
 
@@ -21,6 +26,7 @@ class Chapter {
     'title': title,
     'className': className,
     'rawContent': rawContent,
+    'number': number,
     'createdAt': createdAt.toIso8601String(),
   };
 
@@ -30,15 +36,25 @@ class Chapter {
     title: map['title'] as String,
     className: map['className'] as String,
     rawContent: (map['rawContent'] as String?) ?? '',
+    number: (map['number'] as int?) ?? 0,
     createdAt: DateTime.parse(map['createdAt'] as String),
   );
 
-  Chapter copyWith({String? title, String? className, String? rawContent}) => Chapter(
+  Chapter copyWith({
+    String? title,
+    String? className,
+    String? rawContent,
+    int? number,
+  }) => Chapter(
     id: id,
     subjectId: subjectId,
     title: title ?? this.title,
     className: className ?? this.className,
     rawContent: rawContent ?? this.rawContent,
+    number: number ?? this.number,
     createdAt: createdAt,
   );
+
+  /// Display label used across pickers/chips, e.g. "Chapter 3: Force and Motion".
+  String get displayLabel => number > 0 ? 'Chapter $number: $title' : title;
 }

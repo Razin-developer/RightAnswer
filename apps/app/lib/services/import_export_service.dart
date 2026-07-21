@@ -166,51 +166,7 @@ class ImportExportService {
     return _importArchive(archive);
   }
 
-  // ── Per-subject / per-chapter export to bytes ─────────────────────────────
-
-  Future<List<int>> exportSubjectToBytes(String subjectId) async {
-    final subject = await _subjectRepo.getById(subjectId);
-    if (subject == null) throw const _ExportException('Subject not found');
-
-    final archive = Archive();
-    final chapters = await _chapterRepo.getBySubject(subjectId);
-    final chapterMaps = <Map<String, dynamic>>[];
-
-    for (final chapter in chapters) {
-      chapterMaps.add(chapter.toMap());
-      final chunks = await _chunkRepo.getByChapter(chapter.id);
-      if (chunks.isNotEmpty) {
-        final chunksBytes = utf8.encode(
-          jsonEncode(chunks.map((c) => c.toMap()).toList()),
-        );
-        archive.addFile(
-          ArchiveFile(
-            'chunks/${chapter.id}.json',
-            chunksBytes.length,
-            chunksBytes,
-          ),
-        );
-      }
-    }
-
-    final manifest = {
-      'version': _version,
-      'exportedAt': DateTime.now().toIso8601String(),
-      'subjects': [
-        {...subject.toMap(), 'chapters': chapterMaps},
-      ],
-    };
-    final manifestBytes = utf8.encode(jsonEncode(manifest));
-    archive.addFile(
-      ArchiveFile('manifest.json', manifestBytes.length, manifestBytes),
-    );
-
-    final zipBytes = ZipEncoder().encode(archive);
-    if (zipBytes == null) {
-      throw const _ExportException('Failed to create archive');
-    }
-    return zipBytes;
-  }
+  // ── Per-chapter export to bytes ────────────────────────────────────────────
 
   Future<List<int>> exportChapterToBytes(
     String chapterId,

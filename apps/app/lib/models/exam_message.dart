@@ -15,8 +15,6 @@ class ExamMessage {
     required this.createdAt,
   });
 
-  bool get isUser => role == 'user';
-
   Map<String, dynamic> toMap() => {
     'id': id,
     'examId': examId,

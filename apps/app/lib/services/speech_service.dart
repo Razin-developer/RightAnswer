@@ -11,7 +11,6 @@ class SpeechService {
   void Function(String error)? _errorListener;
 
   bool get isListening => _stt.isListening;
-  bool get isAvailable => _available;
 
   Future<bool> initialize({
     void Function(String status)? onStatus,

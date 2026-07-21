@@ -142,19 +142,6 @@ class RetrievalService {
     return chunks.where((chunk) => chunk.isNotEmpty).toList();
   }
 
-  /// Cosine similarity between two equal-length vectors.
-  double cosineSimilarity(List<double> a, List<double> b) {
-    if (a.length != b.length || a.isEmpty) return 0;
-    double dot = 0, normA = 0, normB = 0;
-    for (int i = 0; i < a.length; i++) {
-      dot += a[i] * b[i];
-      normA += a[i] * a[i];
-      normB += b[i] * b[i];
-    }
-    final denom = sqrt(normA) * sqrt(normB);
-    return denom == 0 ? 0 : dot / denom;
-  }
-
   /// Rough token estimate: ~4 chars per token (GPT tokenizer heuristic).
   int estimateTokens(String text) => (text.length / 4).ceil();
 }

@@ -54,6 +54,30 @@ class ChatRepository {
     );
   }
 
+  /// Persists the subject/chapter classification the AI backend returned
+  /// for this chat's latest answer (server-driven — the client no longer
+  /// picks a subject/chapter up front).
+  Future<void> updateClassification(
+    String id, {
+    String? subjectId,
+    String? subjectName,
+    String? chapterId,
+    String? chapterName,
+  }) async {
+    final db = await _db.database;
+    await db.update(
+      'chats',
+      {
+        'subjectId': subjectId,
+        'subjectName': subjectName,
+        'chapterIds': chapterId == null ? '' : chapterId,
+        'chapterNames': chapterName == null ? '' : chapterName,
+      },
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
+
   Future<void> togglePin(String id, bool pinned) async {
     final db = await _db.database;
     await db.update(

@@ -3,19 +3,16 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:intl/intl.dart';
 import 'package:uuid/uuid.dart';
 
-import '../models/chapter.dart';
 import '../models/study_day.dart';
 import '../models/study_plan.dart';
 import '../models/study_task.dart';
-import '../models/subject.dart';
-import '../repositories/chapter_repository.dart';
 import '../repositories/study_day_repository.dart';
 import '../repositories/study_plan_repository.dart';
 import '../repositories/study_task_repository.dart';
-import '../repositories/subject_repository.dart';
 import '../services/notification_service.dart';
 import '../services/study_plan_ai_service.dart';
 import '../widgets/app_feedback.dart';
+import '../widgets/chapter_picker.dart';
 
 const _coral = Color(0xFFCC785C);
 
@@ -41,6 +38,7 @@ class _StudyPlanCreateScreenState extends State<StudyPlanCreateScreen> {
 
   // ── Config fields ──────────────────────────────────────────────────────────
   final _nameCtrl = TextEditingController();
+  final _topicCtrl = TextEditingController();
   DateTime _examDate = DateTime.now().add(const Duration(days: 30));
   DateTime _startDate = DateTime.now();
   List<int> _freeDays = [6, 7]; // Sat, Sun free by default
@@ -48,11 +46,10 @@ class _StudyPlanCreateScreenState extends State<StudyPlanCreateScreen> {
   bool _reminderEnabled = false;
   TimeOfDay _reminderTime = const TimeOfDay(hour: 8, minute: 0);
 
-  // Subject & chapter selection
-  String? _subjectId;
-  String? _subjectName;
-  final List<String> _chapterIds = [];
-  final List<String> _chapterNames = [];
+  // Optional chapter scoping — picked via the shared chapter picker. Null
+  // means the AI plans across the whole textbook, exactly as before.
+  String? _selectedChapterId;
+  String? _selectedChapterLabel;
 
   // ── Generated plan (draft) ─────────────────────────────────────────────────
   StudyPlanDraft? _draft;
@@ -72,10 +69,9 @@ class _StudyPlanCreateScreenState extends State<StudyPlanCreateScreen> {
       _startDate = p.startDate;
       _freeDays = List.from(p.freeDays);
       _hoursPerDay = p.hoursPerDay;
-      _subjectId = p.subjectId;
-      _subjectName = p.subjectName;
-      _chapterIds.addAll(p.chapterIds);
-      _chapterNames.addAll(p.chapterNames);
+      _topicCtrl.text = p.chapterNames.isNotEmpty
+          ? p.chapterNames.join(', ')
+          : (p.subjectName ?? '');
       if (p.hasReminder) {
         _reminderEnabled = true;
         _reminderTime =
@@ -87,7 +83,26 @@ class _StudyPlanCreateScreenState extends State<StudyPlanCreateScreen> {
   @override
   void dispose() {
     _nameCtrl.dispose();
+    _topicCtrl.dispose();
     super.dispose();
+  }
+
+  // ── Chapter scoping ─────────────────────────────────────────────────────────
+
+  Future<void> _openChapterPicker() async {
+    final result = await showChapterPickerSheet(context);
+    if (result == null || !mounted) return;
+    setState(() {
+      _selectedChapterId = result.chapterId;
+      _selectedChapterLabel = result.chapterLabel;
+    });
+  }
+
+  void _clearSelectedChapter() {
+    setState(() {
+      _selectedChapterId = null;
+      _selectedChapterLabel = null;
+    });
   }
 
   // ── AI generation ──────────────────────────────────────────────────────────
@@ -111,9 +126,8 @@ class _StudyPlanCreateScreenState extends State<StudyPlanCreateScreen> {
         startDate: _startDate,
         freeDays: _freeDays,
         hoursPerDay: _hoursPerDay,
-        chapterIds: _chapterIds,
-        chapterNames: _chapterNames,
-        subjectName: _subjectName,
+        topic: _topicCtrl.text.trim(),
+        chapterIds: _selectedChapterId != null ? [_selectedChapterId!] : null,
       );
       if (draft.suggestedName.isNotEmpty &&
           _nameCtrl.text.trim().isEmpty) {
@@ -170,7 +184,6 @@ class _StudyPlanCreateScreenState extends State<StudyPlanCreateScreen> {
       final refined = await _aiService.refinePlan(
         current: _draft!,
         instruction: instruction,
-        subjectName: _subjectName,
       );
       if (mounted) {
         setState(() {
@@ -204,13 +217,11 @@ class _StudyPlanCreateScreenState extends State<StudyPlanCreateScreen> {
       final now = DateTime.now();
       final planId = _isEdit ? widget.existingPlan!.id : const Uuid().v4();
 
+      final topic = _topicCtrl.text.trim();
       final plan = StudyPlan(
         id: planId,
         name: name.isEmpty ? (_draft!.suggestedName) : name,
-        subjectId: _subjectId,
-        subjectName: _subjectName,
-        chapterIds: List.from(_chapterIds),
-        chapterNames: List.from(_chapterNames),
+        chapterNames: topic.isEmpty ? const [] : [topic],
         examDate: _examDate,
         startDate: _startDate,
         freeDays: List.from(_freeDays),
@@ -388,55 +399,52 @@ class _StudyPlanCreateScreenState extends State<StudyPlanCreateScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              InkWell(
-                onTap: () => _openChapterSheet(),
-                borderRadius: BorderRadius.circular(10),
-                child: Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    border: Border.all(color: border),
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: Row(children: [
-                    Icon(Icons.menu_book_outlined, size: 18, color: _coral),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: Text(
-                        _chapterNames.isEmpty
-                            ? 'Select chapters / topics'
-                            : _chapterNames.join(', '),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: _openChapterPicker,
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: _coral,
+                        side: BorderSide(color: border),
+                        padding: const EdgeInsets.symmetric(vertical: 10),
+                      ),
+                      icon: const Icon(Icons.menu_book_outlined, size: 16),
+                      label: Text(
+                        _selectedChapterLabel ??
+                            'Scope to a chapter (optional)',
+                        overflow: TextOverflow.ellipsis,
                         style: GoogleFonts.inter(
                           fontSize: 13,
-                          color: _chapterNames.isEmpty ? muted : null,
+                          fontWeight: FontWeight.w600,
                         ),
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
                       ),
                     ),
-                    Icon(Icons.chevron_right_rounded, color: muted, size: 18),
-                  ]),
+                  ),
+                  if (_selectedChapterLabel != null) ...[
+                    const SizedBox(width: 6),
+                    IconButton(
+                      icon: const Icon(Icons.close_rounded, size: 18),
+                      color: muted,
+                      onPressed: _clearSelectedChapter,
+                      tooltip: 'Clear chapter',
+                    ),
+                  ],
+                ],
+              ),
+              const SizedBox(height: 12),
+              TextFormField(
+                controller: _topicCtrl,
+                minLines: 1,
+                maxLines: 3,
+                decoration: InputDecoration(
+                  labelText: 'What are you studying? (optional)',
+                  hintText: 'e.g. "Photosynthesis, cell division, genetics"',
+                  border:
+                      OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                  prefixIcon: const Icon(Icons.edit_note_rounded),
                 ),
               ),
-              if (_chapterNames.isNotEmpty) ...[
-                const SizedBox(height: 8),
-                Wrap(
-                  spacing: 6,
-                  runSpacing: 4,
-                  children: _chapterNames
-                      .asMap()
-                      .entries
-                      .map((e) => _ChapterChip(
-                            label: e.value,
-                            onRemove: () => setState(() {
-                              _chapterNames.removeAt(e.key);
-                              if (e.key < _chapterIds.length) {
-                                _chapterIds.removeAt(e.key);
-                              }
-                            }),
-                          ))
-                      .toList(),
-                ),
-              ],
             ],
           ),
         ),
@@ -652,34 +660,6 @@ class _StudyPlanCreateScreenState extends State<StudyPlanCreateScreen> {
     );
   }
 
-  // ── Chapter sheet ──────────────────────────────────────────────────────────
-
-  Future<void> _openChapterSheet() async {
-    await showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
-      builder: (ctx) => _ChapterSheet(
-        selectedIds: List.from(_chapterIds),
-        selectedNames: List.from(_chapterNames),
-        subjectId: _subjectId,
-        onDone: (ids, names, sId, sName) {
-          setState(() {
-            _chapterIds
-              ..clear()
-              ..addAll(ids);
-            _chapterNames
-              ..clear()
-              ..addAll(names);
-            _subjectId = sId;
-            _subjectName = sName;
-          });
-        },
-      ),
-    );
-  }
-
   // ── Helpers ────────────────────────────────────────────────────────────────
 
   String _hoursLabel(double h) {
@@ -862,25 +842,6 @@ class _FreeDayPicker extends StatelessWidget {
       }).toList(),
     );
   }
-}
-
-// ── Chapter Chip ──────────────────────────────────────────────────────────────
-
-class _ChapterChip extends StatelessWidget {
-  final String label;
-  final VoidCallback onRemove;
-
-  const _ChapterChip({required this.label, required this.onRemove});
-
-  @override
-  Widget build(BuildContext context) => Chip(
-        label: Text(label, style: GoogleFonts.inter(fontSize: 11)),
-        deleteIcon: const Icon(Icons.close, size: 14),
-        onDeleted: onRemove,
-        padding: const EdgeInsets.symmetric(horizontal: 4),
-        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-        visualDensity: VisualDensity.compact,
-      );
 }
 
 // ── Summary Chip ──────────────────────────────────────────────────────────────
@@ -1227,229 +1188,5 @@ class _TaskDraftTile extends StatelessWidget {
     final h = min ~/ 60;
     final m = min % 60;
     return m == 0 ? '${h}h' : '${h}h ${m}m';
-  }
-}
-
-// ── Chapter Sheet ─────────────────────────────────────────────────────────────
-
-class _ChapterSheet extends StatefulWidget {
-  final List<String> selectedIds;
-  final List<String> selectedNames;
-  final String? subjectId;
-  final void Function(
-      List<String> ids, List<String> names, String? sId, String? sName) onDone;
-
-  const _ChapterSheet({
-    required this.selectedIds,
-    required this.selectedNames,
-    required this.subjectId,
-    required this.onDone,
-  });
-
-  @override
-  State<_ChapterSheet> createState() => _ChapterSheetState();
-}
-
-class _ChapterSheetState extends State<_ChapterSheet> {
-  final _subjectRepo = SubjectRepository();
-  final _chapterRepo = ChapterRepository();
-
-  List<Subject> _subjects = [];
-  List<Chapter> _chapters = [];
-  Subject? _selectedSubject;
-  final Set<String> _selIds = {};
-  final Map<String, String> _selNames = {};
-
-  @override
-  void initState() {
-    super.initState();
-    for (var i = 0; i < widget.selectedIds.length; i++) {
-      _selIds.add(widget.selectedIds[i]);
-      if (i < widget.selectedNames.length) {
-        _selNames[widget.selectedIds[i]] = widget.selectedNames[i];
-      }
-    }
-    _loadSubjects();
-  }
-
-  Future<void> _loadSubjects() async {
-    final subs = await _subjectRepo.getAll();
-    Subject? sel;
-    if (widget.subjectId != null) {
-      try {
-        sel = subs.firstWhere((s) => s.id == widget.subjectId);
-      } catch (_) {}
-    }
-    sel ??= subs.isNotEmpty ? subs.first : null;
-    setState(() => _subjects = subs);
-    if (sel != null) _selectSubject(sel);
-  }
-
-  Future<void> _selectSubject(Subject s) async {
-    setState(() {
-      _selectedSubject = s;
-      _chapters = [];
-    });
-    final chapters = await _chapterRepo.getBySubject(s.id);
-    if (mounted) setState(() => _chapters = chapters);
-  }
-
-  void _done() {
-    final ids = _selIds.toList();
-    final names = ids.map((id) => _selNames[id] ?? id).toList();
-    widget.onDone(ids, names, _selectedSubject?.id, _selectedSubject?.name);
-    Navigator.pop(context);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final bg = isDark ? const Color(0xFF181715) : const Color(0xFFFAF9F5);
-    final cardBg = isDark ? const Color(0xFF1F1E1B) : Colors.white;
-    final border =
-        isDark ? const Color(0xFF2E2C28) : const Color(0xFFE6DFD8);
-    final muted = isDark ? const Color(0xFF8E8B82) : const Color(0xFF6C6A64);
-
-    return DraggableScrollableSheet(
-      initialChildSize: 0.75,
-      minChildSize: 0.5,
-      maxChildSize: 0.92,
-      expand: false,
-      builder: (ctx, scroll) => Container(
-        color: bg,
-        child: Column(children: [
-          // Handle
-          Center(
-            child: Container(
-              margin: const EdgeInsets.symmetric(vertical: 8),
-              width: 36,
-              height: 4,
-              decoration: BoxDecoration(
-                  color: muted.withValues(alpha: 0.4),
-                  borderRadius: BorderRadius.circular(2)),
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
-            child: Row(children: [
-              Text('Select Chapters',
-                  style: GoogleFonts.playfairDisplay(fontSize: 18)),
-              const Spacer(),
-              Text('${_selIds.length} selected',
-                  style: GoogleFonts.inter(fontSize: 12, color: muted)),
-              const SizedBox(width: 12),
-              FilledButton(
-                style: FilledButton.styleFrom(
-                    backgroundColor: _coral,
-                    minimumSize: const Size(0, 34),
-                    padding: const EdgeInsets.symmetric(horizontal: 16)),
-                onPressed: _done,
-                child: Text('Done',
-                    style: GoogleFonts.inter(
-                        fontWeight: FontWeight.w600, fontSize: 13)),
-              ),
-            ]),
-          ),
-          Expanded(
-            child: Row(children: [
-              // Subject list
-              SizedBox(
-                width: 130,
-                child: Container(
-                  decoration:
-                      BoxDecoration(border: Border(right: BorderSide(color: border))),
-                  child: ListView.builder(
-                    itemCount: _subjects.length,
-                    itemBuilder: (_, i) {
-                      final s = _subjects[i];
-                      final selected = s.id == _selectedSubject?.id;
-                      return InkWell(
-                        onTap: () => _selectSubject(s),
-                        child: Container(
-                          padding: const EdgeInsets.fromLTRB(12, 10, 8, 10),
-                          color: selected
-                              ? _coral.withValues(alpha: 0.08)
-                              : null,
-                          child: Text(
-                            s.name,
-                            style: GoogleFonts.inter(
-                              fontSize: 12,
-                              fontWeight: selected
-                                  ? FontWeight.w700
-                                  : FontWeight.w400,
-                              color: selected ? _coral : null,
-                            ),
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                      );
-                    },
-                  ),
-                ),
-              ),
-              // Chapter list
-              Expanded(
-                child: _chapters.isEmpty
-                    ? Center(
-                        child: Text('No chapters',
-                            style:
-                                GoogleFonts.inter(fontSize: 13, color: muted)))
-                    : ListView.builder(
-                        controller: scroll,
-                        padding: const EdgeInsets.all(8),
-                        itemCount: _chapters.length,
-                        itemBuilder: (_, i) {
-                          final c = _chapters[i];
-                          final sel = _selIds.contains(c.id);
-                          return Container(
-                            margin: const EdgeInsets.only(bottom: 6),
-                            decoration: BoxDecoration(
-                              color: sel
-                                  ? _coral.withValues(alpha: 0.08)
-                                  : cardBg,
-                              borderRadius: BorderRadius.circular(8),
-                              border: Border.all(
-                                  color: sel
-                                      ? _coral.withValues(alpha: 0.3)
-                                      : border),
-                            ),
-                            child: CheckboxListTile(
-                              value: sel,
-                              activeColor: _coral,
-                              contentPadding:
-                                  const EdgeInsets.symmetric(horizontal: 10),
-                              title: Text(c.title,
-                                  style: GoogleFonts.inter(
-                                      fontSize: 13,
-                                      fontWeight: sel
-                                          ? FontWeight.w600
-                                          : FontWeight.w400)),
-                              subtitle: c.className.isNotEmpty
-                                  ? Text(c.className,
-                                      style: GoogleFonts.inter(
-                                          fontSize: 11, color: muted))
-                                  : null,
-                              onChanged: (v) {
-                                setState(() {
-                                  if (v == true) {
-                                    _selIds.add(c.id);
-                                    _selNames[c.id] = c.title;
-                                  } else {
-                                    _selIds.remove(c.id);
-                                    _selNames.remove(c.id);
-                                  }
-                                });
-                              },
-                            ),
-                          );
-                        },
-                      ),
-              ),
-            ]),
-          ),
-        ]),
-      ),
-    );
   }
 }

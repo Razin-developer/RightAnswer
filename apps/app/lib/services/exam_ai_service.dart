@@ -8,11 +8,9 @@ import '../models/app_exception.dart';
 import '../models/exam_message.dart';
 import '../models/exam_question.dart';
 import '../models/usage_log.dart';
-import '../repositories/chunk_repository.dart';
 import '../repositories/settings_repository.dart';
 import '../repositories/usage_log_repository.dart';
 import 'ai_backend_service.dart';
-import '../services/retrieval_service.dart';
 
 class ExamGenerationResult {
   final String title;
@@ -27,7 +25,6 @@ class ExamAIService {
 
   final _settingsRepo = SettingsRepository();
   final _usageRepo = UsageLogRepository();
-  final _chunkRepo = ChunkRepository();
 
   static const double _defaultInputPrice = 0.0005;
   static const double _defaultOutputPrice = 0.0015;
@@ -42,24 +39,21 @@ class ExamAIService {
     required String difficulty,
     required int mcqOptionCount,
     int? timeLimit,
-    String? subjectName,
-    List<String> chapterIds = const [],
     String? imagePath,
+    // Optional — only set when the user picked a chapter via the chapter
+    // picker. Scopes backend Qdrant retrieval to just this chapter; null or
+    // empty preserves the existing global-search behavior.
+    List<String>? chapterIds,
   }) async {
     AIBackendService.requireChatApiKey();
     final model =
         await _settingsRepo.get(SettingKeys.openAiModel) ?? 'gpt-4o-mini';
-
-    // Gather context chunks
-    final contextBlock = await _buildContextBlock(chapterIds, prompt);
 
     final systemPrompt = _buildGenerationSystemPrompt(
       type: type,
       questionCount: questionCount,
       difficulty: difficulty,
       mcqOptionCount: mcqOptionCount,
-      subjectName: subjectName,
-      contextBlock: contextBlock,
     );
 
     final userMsg = _buildUserMsg(
@@ -74,10 +68,11 @@ class ExamAIService {
           {'role': 'system', 'content': systemPrompt},
           userMsg,
         ],
-        if (contextBlock.isNotEmpty) 'contexts': [contextBlock],
         'temperature': 0.5,
         'max_tokens': 4000,
         'response_format': {'type': 'json_object'},
+        if (chapterIds != null && chapterIds.isNotEmpty)
+          'chapterIds': chapterIds,
       },
       timeout: const Duration(seconds: 120),
     );
@@ -96,8 +91,7 @@ class ExamAIService {
       questionCount: questionCount,
       difficulty: difficulty,
       mcqOptionCount: mcqOptionCount,
-      subjectName: subjectName,
-      contextBlock: contextBlock,
+      chapterIds: chapterIds,
     );
   }
 
@@ -110,20 +104,15 @@ class ExamAIService {
     required List<ExamQuestion> currentQuestions,
     required List<ExamMessage> history,
     String? imagePath,
-    String? subjectName,
-    List<String> chapterIds = const [],
   }) async {
     AIBackendService.requireChatApiKey();
     final model =
         await _settingsRepo.get(SettingKeys.openAiModel) ?? 'gpt-4o-mini';
 
-    final contextBlock = await _buildContextBlock(chapterIds, editPrompt);
     final currentJson = _questionsToJson(examName, currentQuestions);
 
     final systemPrompt = _buildEditSystemPrompt(
       examType: examType,
-      subjectName: subjectName,
-      contextBlock: contextBlock,
       currentExamJson: currentJson,
     );
 
@@ -149,7 +138,6 @@ class ExamAIService {
       payload: {
         'model': model,
         'messages': messages,
-        if (contextBlock.isNotEmpty) 'contexts': [contextBlock],
         'temperature': 0.4,
         'max_tokens': 4000,
         'response_format': {'type': 'json_object'},
@@ -165,37 +153,6 @@ class ExamAIService {
     return _parseResponse(content, examName, examType);
   }
 
-  // ── Auto-name ────────────────────────────────────────────────────────────
-
-  Future<String> generateExamName(String prompt, String type) async {
-    try {
-      AIBackendService.requireChatApiKey();
-      final model =
-          await _settingsRepo.get(SettingKeys.openAiModel) ?? 'gpt-4o-mini';
-      final typeLabel = _typeLabel(type);
-      final resp = await AIBackendService.postChatCompletions(
-        payload: {
-          'model': model,
-          'messages': [
-            {
-              'role': 'user',
-              'content':
-                  'Create a 3-5 word title for a $typeLabel exam about: "$prompt". Reply with ONLY the title, no quotes.',
-            },
-          ],
-          'max_tokens': 20,
-          'temperature': 0.3,
-        },
-        timeout: const Duration(seconds: 90),
-      );
-      if (resp.statusCode != 200) return '$typeLabel Exam';
-      final data = jsonDecode(resp.body) as Map<String, dynamic>;
-      return (data['choices'][0]['message']['content'] as String).trim();
-    } catch (_) {
-      return '${_typeLabel(type)} Exam';
-    }
-  }
-
   Future<ExamGenerationResult> _runCreationHarness({
     required ExamGenerationResult draft,
     required String model,
@@ -204,8 +161,7 @@ class ExamAIService {
     required int questionCount,
     required String difficulty,
     required int mcqOptionCount,
-    String? subjectName,
-    required String contextBlock,
+    List<String>? chapterIds,
   }) async {
     var current = draft;
 
@@ -213,7 +169,7 @@ class ExamAIService {
       try {
         final currentJson = _questionsToJson(current.title, current.questions);
         final system =
-            '''You are pass $pass in an exam creation harness${subjectName != null ? ' for $subjectName' : ''}.
+            '''You are pass $pass in an exam creation harness.
 Validate and improve the current exam against the original request.
 Return ONLY a valid JSON object with the COMPLETE exam.
 
@@ -222,9 +178,8 @@ REQUIREMENTS:
 - Difficulty: $difficulty
 - ${_typeInstruction(type, mcqOptionCount)}
 - Every question must have a correctAnswer and explanation
-- Use the provided study material as the primary source when available
 
-${contextBlock.isEmpty ? '' : 'STUDY MATERIAL:\n$contextBlock\n\n'}CURRENT EXAM:
+CURRENT EXAM:
 $currentJson''';
 
         final resp = await AIBackendService.postChatCompletions(
@@ -238,10 +193,11 @@ $currentJson''';
                     'Original request: ${prompt.trim().isEmpty ? 'Generate $questionCount questions.' : prompt}\nCreate the next improved complete exam draft.',
               },
             ],
-            if (contextBlock.isNotEmpty) 'contexts': [contextBlock],
             'temperature': 0.35,
             'max_tokens': 5000,
             'response_format': {'type': 'json_object'},
+            if (chapterIds != null && chapterIds.isNotEmpty)
+              'chapterIds': chapterIds,
           },
           timeout: const Duration(seconds: 120),
         );
@@ -266,17 +222,12 @@ $currentJson''';
     required int questionCount,
     required String difficulty,
     required int mcqOptionCount,
-    String? subjectName,
-    String contextBlock = '',
   }) {
     final typeInstruction = _typeInstruction(type, mcqOptionCount);
-    final context = contextBlock.isEmpty
-        ? ''
-        : '\n\nUse this study material as the primary source:\n$contextBlock';
 
-    return '''You are an expert exam creator${subjectName != null ? ' for $subjectName' : ''}.
+    return '''You are an expert exam creator.
 Generate exactly $questionCount questions. Difficulty: $difficulty.
-$typeInstruction$context
+$typeInstruction
 
 CRITICAL: Return ONLY a valid JSON object — no extra text, no markdown, no code block. Use this exact structure:
 {
@@ -302,16 +253,10 @@ Every question MUST have an "explanation" field.''';
 
   String _buildEditSystemPrompt({
     required String examType,
-    String? subjectName,
-    String contextBlock = '',
     required String currentExamJson,
   }) {
-    final context = contextBlock.isEmpty
-        ? ''
-        : '\n\nAdditional study material:\n$contextBlock';
-
-    return '''You are an exam editor${subjectName != null ? ' for $subjectName' : ''}.
-You are helping refine an existing $examType exam.$context
+    return '''You are an exam editor.
+You are helping refine an existing $examType exam.
 
 CRITICAL: Return ONLY a valid JSON object with the COMPLETE updated exam (ALL questions — modified, added, and unchanged). Same format as before:
 {
@@ -341,30 +286,6 @@ $currentExamJson''';
       'Generate a mix of question types (mcq, true_false, fill_blank, short_answer). Vary them throughout. Each question must have its "type" field set correctly.',
     _ => 'Generate questions appropriate for the topic.',
   };
-
-  // ── Context builder ──────────────────────────────────────────────────────
-
-  Future<String> _buildContextBlock(
-    List<String> chapterIds,
-    String query,
-  ) async {
-    if (chapterIds.isEmpty) return '';
-    try {
-      final retrieval = RetrievalService(_chunkRepo);
-      final chunks = <String>[];
-      for (final cid in chapterIds) {
-        final found = await retrieval.searchChapter(
-          cid,
-          query.isEmpty ? 'overview' : query,
-        );
-        chunks.addAll(found.map((c) => c.text));
-      }
-      if (chunks.isEmpty) return '';
-      return chunks.take(8).join('\n\n');
-    } catch (_) {
-      return '';
-    }
-  }
 
   // ── JSON parsing ─────────────────────────────────────────────────────────
 
@@ -499,16 +420,6 @@ $currentExamJson''';
       );
     } catch (_) {}
   }
-
-  String _typeLabel(String type) => switch (type) {
-    'mcq' => 'MCQ',
-    'true_false' => 'True/False',
-    'fill_blank' => 'Fill-in-Blank',
-    'short_answer' => 'Short Answer',
-    'long_answer' => 'Long Answer',
-    'mixed' => 'Mixed',
-    _ => 'Exam',
-  };
 
   AppException _buildException(http.Response r) {
     var msg = 'Unexpected error from the backend.';

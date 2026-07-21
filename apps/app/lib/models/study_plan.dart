@@ -85,39 +85,4 @@ class StudyPlan {
     createdAt: DateTime.parse(m['createdAt'] as String),
     updatedAt: DateTime.parse(m['updatedAt'] as String),
   );
-
-  StudyPlan copyWith({
-    String? id,
-    String? name,
-    String? subjectId,
-    String? subjectName,
-    List<String>? chapterIds,
-    List<String>? chapterNames,
-    DateTime? examDate,
-    DateTime? startDate,
-    List<int>? freeDays,
-    double? hoursPerDay,
-    String? status,
-    int? reminderHour,
-    int? reminderMinute,
-    DateTime? createdAt,
-    DateTime? updatedAt,
-  }) =>
-      StudyPlan(
-        id: id ?? this.id,
-        name: name ?? this.name,
-        subjectId: subjectId ?? this.subjectId,
-        subjectName: subjectName ?? this.subjectName,
-        chapterIds: chapterIds ?? this.chapterIds,
-        chapterNames: chapterNames ?? this.chapterNames,
-        examDate: examDate ?? this.examDate,
-        startDate: startDate ?? this.startDate,
-        freeDays: freeDays ?? this.freeDays,
-        hoursPerDay: hoursPerDay ?? this.hoursPerDay,
-        status: status ?? this.status,
-        reminderHour: reminderHour ?? this.reminderHour,
-        reminderMinute: reminderMinute ?? this.reminderMinute,
-        createdAt: createdAt ?? this.createdAt,
-        updatedAt: updatedAt ?? this.updatedAt,
-      );
 }

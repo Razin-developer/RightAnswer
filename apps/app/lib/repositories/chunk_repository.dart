@@ -11,13 +11,6 @@ class ChunkRepository {
     return rows.map(Chunk.fromMap).toList();
   }
 
-  Future<int> countByChapter(String chapterId) async {
-    final db = await _db.database;
-    final result = await db.rawQuery(
-        'SELECT COUNT(*) as c FROM chunks WHERE chapterId = ?', [chapterId]);
-    return (result.first['c'] as int?) ?? 0;
-  }
-
   Future<Map<String, int>> countsByChapters(List<String> chapterIds) async {
     if (chapterIds.isEmpty) return {};
     final db = await _db.database;

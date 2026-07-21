@@ -4,18 +4,15 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:uuid/uuid.dart';
 
 import '../config/app_config.dart';
-import '../models/chapter.dart';
 import '../models/exam.dart';
 import '../models/exam_question.dart';
-import '../models/subject.dart';
-import '../repositories/chapter_repository.dart';
 import '../repositories/exam_message_repository.dart';
 import '../repositories/exam_question_repository.dart';
 import '../repositories/exam_repository.dart';
-import '../repositories/subject_repository.dart';
 import '../services/exam_ai_service.dart';
 import '../models/app_exception.dart';
 import '../widgets/app_feedback.dart';
+import '../widgets/chapter_picker.dart';
 
 const _coral = Color(0xFFCC785C);
 
@@ -48,10 +45,11 @@ class _ExamCreateScreenState extends State<ExamCreateScreen> {
   String _type = 'mcq';
   String _difficulty = 'medium';
   int _mcqOptionCount = 4;
-  String? _subjectId;
-  String? _subjectName;
-  List<String> _chapterIds = [];
-  List<String> _chapterNames = [];
+
+  // Optional chapter scoping — picked via the shared chapter picker. Null
+  // means the AI searches the whole textbook, exactly as before.
+  String? _selectedChapterId;
+  String? _selectedChapterLabel;
 
   List<ExamQuestion> _questions = [];
   bool _isGenerating = false;
@@ -74,10 +72,6 @@ class _ExamCreateScreenState extends State<ExamCreateScreen> {
       _type = e.type;
       _difficulty = e.difficulty;
       _mcqOptionCount = e.mcqOptionCount;
-      _subjectId = e.subjectId;
-      _subjectName = e.subjectName;
-      _chapterIds = List.from(e.chapterIds);
-      _chapterNames = List.from(e.chapterNames);
       _savedExam = e;
       _settingsExpanded = false;
     }
@@ -118,10 +112,6 @@ class _ExamCreateScreenState extends State<ExamCreateScreen> {
           ? 'Untitled Exam'
           : _nameCtrl.text.trim(),
       type: _type,
-      subjectId: _subjectId,
-      subjectName: _subjectName,
-      chapterIds: _chapterIds,
-      chapterNames: _chapterNames,
       questionCount: _questions.isEmpty ? _qCount : _questions.length,
       timeLimit: _timeLimit,
       difficulty: _difficulty,
@@ -132,6 +122,24 @@ class _ExamCreateScreenState extends State<ExamCreateScreen> {
       createdAt: _savedExam?.createdAt ?? now,
       updatedAt: now,
     );
+  }
+
+  // ── Chapter scoping ──────────────────────────────────────────────────────
+
+  Future<void> _openChapterPicker() async {
+    final result = await showChapterPickerSheet(context);
+    if (result == null || !mounted) return;
+    setState(() {
+      _selectedChapterId = result.chapterId;
+      _selectedChapterLabel = result.chapterLabel;
+    });
+  }
+
+  void _clearSelectedChapter() {
+    setState(() {
+      _selectedChapterId = null;
+      _selectedChapterLabel = null;
+    });
   }
 
   // ── AI Generation ─────────────────────────────────────────────────────────
@@ -157,8 +165,7 @@ class _ExamCreateScreenState extends State<ExamCreateScreen> {
         difficulty: _difficulty,
         mcqOptionCount: _mcqOptionCount,
         timeLimit: _timeLimit,
-        subjectName: _subjectName,
-        chapterIds: _chapterIds,
+        chapterIds: _selectedChapterId != null ? [_selectedChapterId!] : null,
       );
 
       // If name not set, use AI-generated title
@@ -221,8 +228,6 @@ class _ExamCreateScreenState extends State<ExamCreateScreen> {
         examName: _savedExam!.name,
         currentQuestions: _questions,
         history: msgs,
-        subjectName: _subjectName,
-        chapterIds: _chapterIds,
       );
 
       final questions = result.questions
@@ -312,25 +317,6 @@ class _ExamCreateScreenState extends State<ExamCreateScreen> {
 
   void _updateQuestion(int index, ExamQuestion updated) {
     setState(() => _questions[index] = updated);
-  }
-
-  Future<void> _openContextSelector() async {
-    await showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      builder: (_) => _ContextSheet(
-        selectedSubjectId: _subjectId,
-        selectedChapterIds: _chapterIds,
-        onSave: (sid, sname, cids, cnames) {
-          setState(() {
-            _subjectId = sid;
-            _subjectName = sname;
-            _chapterIds = cids;
-            _chapterNames = cnames;
-          });
-        },
-      ),
-    );
   }
 
   @override
@@ -607,27 +593,6 @@ class _ExamCreateScreenState extends State<ExamCreateScreen> {
                           .toList(),
                     ),
                   ],
-                  const SizedBox(height: 14),
-                  // Subject/chapters
-                  OutlinedButton.icon(
-                    onPressed: _openContextSelector,
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: _coral,
-                      side: BorderSide(
-                        color: _chapterIds.isEmpty ? borderColor : _coral,
-                      ),
-                    ),
-                    icon: const Icon(Icons.menu_book_outlined, size: 16),
-                    label: Text(
-                      _chapterIds.isEmpty
-                          ? 'Select Subject / Chapters'
-                          : '${_subjectName ?? ''} · ${_chapterIds.length} chapter${_chapterIds.length != 1 ? 's' : ''}',
-                      style: GoogleFonts.inter(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
-                  ),
                 ],
               ],
             ),
@@ -668,6 +633,39 @@ class _ExamCreateScreenState extends State<ExamCreateScreen> {
                   ],
                 ),
                 const SizedBox(height: 10),
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: _openChapterPicker,
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: _coral,
+                          side: BorderSide(color: borderColor),
+                          padding: const EdgeInsets.symmetric(vertical: 10),
+                        ),
+                        icon: const Icon(Icons.menu_book_outlined, size: 16),
+                        label: Text(
+                          _selectedChapterLabel ?? 'Scope to a chapter (optional)',
+                          overflow: TextOverflow.ellipsis,
+                          style: GoogleFonts.inter(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    ),
+                    if (_selectedChapterLabel != null) ...[
+                      const SizedBox(width: 6),
+                      IconButton(
+                        icon: const Icon(Icons.close_rounded, size: 18),
+                        color: mutedColor,
+                        onPressed: _clearSelectedChapter,
+                        tooltip: 'Clear chapter',
+                      ),
+                    ],
+                  ],
+                ),
+                const SizedBox(height: 10),
                 TextField(
                   controller: _aiPromptCtrl,
                   minLines: 2,
@@ -676,7 +674,7 @@ class _ExamCreateScreenState extends State<ExamCreateScreen> {
                   decoration: _inputDec(
                     _isEditing
                         ? 'Describe how to refine existing questions…'
-                        : 'Topic or instructions (optional — leave blank to use subject context)',
+                        : 'Topic or instructions (e.g. "Photosynthesis, grade 9 level")',
                     isDark,
                   ),
                 ),
@@ -1344,281 +1342,6 @@ class _QuestionCardState extends State<_QuestionCard> {
         borderSide: const BorderSide(color: _coral, width: 2),
       ),
       isDense: true,
-    );
-  }
-}
-
-// ── Context Sheet ─────────────────────────────────────────────────────────────
-
-class _ContextSheet extends StatefulWidget {
-  final String? selectedSubjectId;
-  final List<String> selectedChapterIds;
-  final Function(
-    String? sid,
-    String? sname,
-    List<String> cids,
-    List<String> cnames,
-  )
-  onSave;
-
-  const _ContextSheet({
-    required this.selectedSubjectId,
-    required this.selectedChapterIds,
-    required this.onSave,
-  });
-
-  @override
-  State<_ContextSheet> createState() => _ContextSheetState();
-}
-
-class _ContextSheetState extends State<_ContextSheet> {
-  final _subjectRepo = SubjectRepository();
-  final _chapterRepo = ChapterRepository();
-
-  List<Subject> _subjects = [];
-  Subject? _selectedSubject;
-  List<Chapter> _chapters = [];
-  Set<String> _selectedChapterIds = {};
-
-  @override
-  void initState() {
-    super.initState();
-    _selectedChapterIds = Set.from(widget.selectedChapterIds);
-    _load();
-  }
-
-  Future<void> _load() async {
-    final subjects = await _subjectRepo.getAll();
-    setState(() => _subjects = subjects);
-    if (widget.selectedSubjectId != null) {
-      final s = subjects
-          .where((x) => x.id == widget.selectedSubjectId)
-          .firstOrNull;
-      if (s != null) _selectSubject(s);
-    }
-  }
-
-  Future<void> _selectSubject(Subject s) async {
-    final chapters = await _chapterRepo.getBySubject(s.id);
-    setState(() {
-      _selectedSubject = s;
-      _chapters = chapters;
-    });
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
-    final textColor = isDark
-        ? const Color(0xFFFAF9F5)
-        : const Color(0xFF141413);
-    final mutedColor = isDark
-        ? const Color(0xFF8E8B82)
-        : const Color(0xFF6C6A64);
-    final bg = isDark ? const Color(0xFF1F1E1B) : const Color(0xFFFAF9F5);
-
-    return DraggableScrollableSheet(
-      initialChildSize: 0.7,
-      maxChildSize: 0.95,
-      minChildSize: 0.4,
-      expand: false,
-      builder: (_, ctrl) => Container(
-        decoration: BoxDecoration(
-          color: bg,
-          borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
-        ),
-        child: Column(
-          children: [
-            const SizedBox(height: 8),
-            Container(
-              width: 36,
-              height: 4,
-              decoration: BoxDecoration(
-                color: mutedColor.withValues(alpha: 0.3),
-                borderRadius: BorderRadius.circular(2),
-              ),
-            ),
-            const SizedBox(height: 12),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Row(
-                children: [
-                  Text(
-                    'Study Context',
-                    style: GoogleFonts.playfairDisplay(
-                      fontSize: 18,
-                      color: textColor,
-                    ),
-                  ),
-                  const Spacer(),
-                  TextButton(
-                    onPressed: () {
-                      final names = _chapters
-                          .where((c) => _selectedChapterIds.contains(c.id))
-                          .map((c) => c.title)
-                          .toList();
-                      widget.onSave(
-                        _selectedSubject?.id,
-                        _selectedSubject?.name,
-                        _selectedChapterIds.toList(),
-                        names,
-                      );
-                      Navigator.pop(context);
-                    },
-                    child: Text(
-                      'Done',
-                      style: GoogleFonts.inter(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w600,
-                        color: _coral,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const Divider(),
-            Expanded(
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // Subjects list
-                  SizedBox(
-                    width: 140,
-                    child: ListView(
-                      controller: ctrl,
-                      padding: const EdgeInsets.symmetric(vertical: 4),
-                      children: [
-                        ListTile(
-                          dense: true,
-                          title: Text(
-                            'None',
-                            style: GoogleFonts.inter(
-                              fontSize: 13,
-                              color: mutedColor,
-                            ),
-                          ),
-                          selected: _selectedSubject == null,
-                          selectedColor: _coral,
-                          onTap: () => setState(() {
-                            _selectedSubject = null;
-                            _chapters = [];
-                            _selectedChapterIds = {};
-                          }),
-                        ),
-                        ..._subjects.map(
-                          (s) => ListTile(
-                            dense: true,
-                            title: Text(
-                              s.name,
-                              style: GoogleFonts.inter(
-                                fontSize: 13,
-                                color: textColor,
-                              ),
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                            selected: _selectedSubject?.id == s.id,
-                            selectedColor: _coral,
-                            onTap: () => _selectSubject(s),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  VerticalDivider(width: 1),
-                  // Chapters
-                  Expanded(
-                    child: ListView(
-                      padding: const EdgeInsets.symmetric(vertical: 4),
-                      children: _selectedSubject == null
-                          ? [
-                              Padding(
-                                padding: const EdgeInsets.all(16),
-                                child: Text(
-                                  'Select a subject first',
-                                  style: GoogleFonts.inter(
-                                    fontSize: 13,
-                                    color: mutedColor,
-                                  ),
-                                ),
-                              ),
-                            ]
-                          : _chapters.isEmpty
-                          ? [
-                              Padding(
-                                padding: const EdgeInsets.all(16),
-                                child: Text(
-                                  'No chapters',
-                                  style: GoogleFonts.inter(
-                                    fontSize: 13,
-                                    color: mutedColor,
-                                  ),
-                                ),
-                              ),
-                            ]
-                          : [
-                              CheckboxListTile(
-                                dense: true,
-                                title: Text(
-                                  'All chapters',
-                                  style: GoogleFonts.inter(
-                                    fontSize: 13,
-                                    fontWeight: FontWeight.w600,
-                                    color: textColor,
-                                  ),
-                                ),
-                                value:
-                                    _selectedChapterIds.length ==
-                                    _chapters.length,
-                                tristate: true,
-                                activeColor: _coral,
-                                onChanged: (_) {
-                                  setState(() {
-                                    if (_selectedChapterIds.length ==
-                                        _chapters.length) {
-                                      _selectedChapterIds.clear();
-                                    } else {
-                                      _selectedChapterIds = _chapters
-                                          .map((c) => c.id)
-                                          .toSet();
-                                    }
-                                  });
-                                },
-                              ),
-                              ..._chapters.map(
-                                (c) => CheckboxListTile(
-                                  dense: true,
-                                  title: Text(
-                                    c.title,
-                                    style: GoogleFonts.inter(
-                                      fontSize: 13,
-                                      color: textColor,
-                                    ),
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                  value: _selectedChapterIds.contains(c.id),
-                                  activeColor: _coral,
-                                  onChanged: (v) {
-                                    setState(() {
-                                      if (v == true) {
-                                        _selectedChapterIds.add(c.id);
-                                      } else {
-                                        _selectedChapterIds.remove(c.id);
-                                      }
-                                    });
-                                  },
-                                ),
-                              ),
-                            ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
     );
   }
 }

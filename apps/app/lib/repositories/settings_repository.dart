@@ -19,11 +19,6 @@ class SettingsRepository {
     }, conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
-  Future<void> delete(String key) async {
-    final db = await _db.database;
-    await db.delete('settings', where: 'key = ?', whereArgs: [key]);
-  }
-
   Future<Map<String, String>> getAll() async {
     final db = await _db.database;
     final rows = await db.query('settings');
@@ -38,7 +33,6 @@ class SettingKeys {
   static const String defaultTone = 'default_tone';
   static const String defaultOutputLength = 'default_output_length';
   static const String themeMode = 'theme_mode';
-  static const String accentColor = 'accent_color';
   static const String inputTokenPrice = 'input_token_price';
   static const String outputTokenPrice = 'output_token_price';
   static const String openAiModel = 'openai_model';

@@ -56,24 +56,24 @@ class _LoginScreenState extends State<LoginScreen> {
       body: SafeArea(
         child: Center(
           child: SingleChildScrollView(
-            padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 40),
+            padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 56),
             child: Form(
               key: _formKey,
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   // Logo / brand
-                  Icon(Icons.bolt_rounded, size: 56, color: cs.primary),
-                  const SizedBox(height: 12),
+                  Icon(Icons.bolt_rounded, size: 48, color: cs.primary),
+                  const SizedBox(height: 16),
                   Text(
                     'RightAnswer',
                     textAlign: TextAlign.center,
                     style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                          fontWeight: FontWeight.w800,
+                          fontWeight: FontWeight.w500,
                           letterSpacing: -0.5,
                         ),
                   ),
-                  const SizedBox(height: 6),
+                  const SizedBox(height: 8),
                   Text(
                     'Sign in to continue',
                     textAlign: TextAlign.center,
@@ -81,7 +81,7 @@ class _LoginScreenState extends State<LoginScreen> {
                           color: cs.onSurface.withValues(alpha: 0.55),
                         ),
                   ),
-                  const SizedBox(height: 40),
+                  const SizedBox(height: 48),
 
                   // Error banner
                   if (_error != null) ...[
@@ -137,7 +137,7 @@ class _LoginScreenState extends State<LoginScreen> {
                       return null;
                     },
                   ),
-                  const SizedBox(height: 8),
+                  const SizedBox(height: 10),
 
                   // Forgot password
                   Align(
