@@ -190,10 +190,12 @@ async fn vision_check(
     app_url: &str,
     model: &str,
 ) -> Result<String, String> {
-    // A tiny inline 2x2 solid-red PNG — enough to confirm the provider
+    // A tiny inline 32x32 solid-red PNG — enough to confirm the provider
     // accepts image_url content parts and the model actually looks at
     // pixels, without depending on any external or in-repo file existing.
-    const RED_SQUARE_PNG_DATA_URI: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAFUlEQVR42mP8z8BQz0AEYBxVSF+FABJADveWkH6oAAAAAElFTkSuQmCC";
+    // Must be >10px each side: some vision models (Qwen VL via OpenRouter)
+    // reject anything smaller with a 400, which a 2x2 test image hit.
+    const RED_SQUARE_PNG_DATA_URI: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAIAAAD8GO2jAAAAKklEQVR4nGO4I2JDU8QwasGoBaMWjFowasGoBaMWjFowasGoBaMWDBULADahsD1ndvqVAAAAAElFTkSuQmCC";
 
     let response = client
         .post(format!("{base_url}/chat/completions"))
