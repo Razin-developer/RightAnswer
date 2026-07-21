@@ -42,6 +42,8 @@ async fn main() -> ExitCode {
     let rerank_model =
         env::var("AI_RERANK_MODEL").unwrap_or_else(|_| "nvidia/rerank-qa-mistral-4b".into());
     let nvidia_api_key = env::var("NVIDIA_API_KEY").ok();
+    let vlm_instruct_model =
+        env::var("AI_VLM_INSTRUCT_MODEL").unwrap_or_else(|_| "qwen/qwen3-vl-8b-instruct".into());
     let app_url = env::var("APP_URL").unwrap_or_else(|_| "https://razin.hackclub.app".into());
 
     println!("Testing provider={provider_name} base_url={base_url}");
@@ -61,6 +63,15 @@ async fn main() -> ExitCode {
 
     all_ok &= run_check("embeddings", &embedding_model, || {
         embed_check(&client, base_url, &api_key, &app_url, &embedding_model)
+    })
+    .await;
+
+    // Two-pass answers send a real page image to a vision model when the
+    // text-only pass says it needs one — this confirms the configured
+    // provider actually accepts the OpenAI-style image_url content part
+    // for that model before real users hit a silently-failing second pass.
+    all_ok &= run_check("chat:vision", &vlm_instruct_model, || {
+        vision_check(&client, base_url, &api_key, &app_url, &vlm_instruct_model)
     })
     .await;
 
@@ -146,6 +157,56 @@ async fn chat_check(
                 {"role": "user", "content": "Reply with exactly one word: pong"}
             ],
             "max_tokens": 8,
+            "temperature": 0
+        }))
+        .send()
+        .await
+        .map_err(|error| format!("request failed: {error}"))?;
+
+    let status = response.status();
+    let body: Value = response
+        .json()
+        .await
+        .map_err(|error| format!("status={status} invalid json: {error}"))?;
+
+    if !status.is_success() {
+        return Err(format!("status={status} body={body}"));
+    }
+
+    let content = body["choices"][0]["message"]["content"]
+        .as_str()
+        .unwrap_or_default()
+        .trim();
+    if content.is_empty() {
+        return Err(format!("status={status} empty content, body={body}"));
+    }
+    Ok(format!("reply={content:?}"))
+}
+
+async fn vision_check(
+    client: &Client,
+    base_url: &str,
+    api_key: &str,
+    app_url: &str,
+    model: &str,
+) -> Result<String, String> {
+    // A tiny inline 2x2 solid-red PNG — enough to confirm the provider
+    // accepts image_url content parts and the model actually looks at
+    // pixels, without depending on any external or in-repo file existing.
+    const RED_SQUARE_PNG_DATA_URI: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAFUlEQVR42mP8z8BQz0AEYBxVSF+FABJADveWkH6oAAAAAElFTkSuQmCC";
+
+    let response = client
+        .post(format!("{base_url}/chat/completions"))
+        .headers(headers(api_key, app_url))
+        .json(&json!({
+            "model": model,
+            "messages": [
+                {"role": "user", "content": [
+                    {"type": "text", "text": "What color is this image? Reply with one word."},
+                    {"type": "image_url", "image_url": {"url": RED_SQUARE_PNG_DATA_URI}}
+                ]}
+            ],
+            "max_tokens": 16,
             "temperature": 0
         }))
         .send()

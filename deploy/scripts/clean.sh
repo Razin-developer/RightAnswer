@@ -9,15 +9,24 @@ set -euo pipefail
 #
 # What's NOT touched: .env.production, docker volumes (postgres/qdrant/redis
 # data), docker-compose*.yml, apps/api, apps/web sources needed to rebuild
-# images. apps/app (Flutter) is git-tracked source only — nothing on this
-# server ever builds or runs it (mobile builds happen in GitHub Actions),
-# but it's a few MB of Dart source, not worth special-casing here; this
-# script focuses on the things that actually matter for disk space.
+# images.
 
 cd "$(dirname "$0")/../.."
 
 echo "[clean] before:"
 df -h / | tail -1
+
+# Never built or run on this server: mobile builds happen in GitHub
+# Actions (apps/app), and both of these are superseded/undeployed
+# (apps/api-node-legacy predates the Rust API migration; apps/web-next-legacy
+# predates the current apps/web). `docker compose build` never reads them.
+for dir in apps/app apps/api-node-legacy apps/web-next-legacy; do
+  if [[ -d "$dir" ]]; then
+    size=$(du -sh "$dir" 2>/dev/null | cut -f1)
+    rm -rf "$dir"
+    echo "[clean] removed $dir ($size)"
+  fi
+done
 
 # storage/imports (raw source PDFs) is git-lfs content only needed during
 # the one-time ingestion run that already happened — the resulting

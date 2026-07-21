@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::{
-    config::Config,
+    config::{Config, ProviderConfig},
     error::ApiError,
     models::{AiAnswer, AiChatRequest, ChatPromptMessage, SourceInfo},
 };
@@ -99,9 +99,11 @@ impl AiGateway {
             role: "system",
             content: &system,
         }];
+        // Trimmed from 18 to 12 turns: older turns rarely change the answer
+        // to the current question but cost real tokens on every request.
         let mut history = request.history.clone().unwrap_or_default();
-        if history.len() > 18 {
-            history = history.split_off(history.len() - 18);
+        if history.len() > 12 {
+            history = history.split_off(history.len() - 12);
         }
         let history_strings: Vec<ChatPromptMessage> = history;
         let mut owned_messages = Vec::new();
@@ -184,8 +186,148 @@ impl AiGateway {
                 "AI provider returned an empty/degenerate response".into(),
             ));
         }
-        let speech_text = extracted.as_ref().and_then(|e| e.speech_text.clone());
-        let blocks = extracted.as_ref().and_then(|e| e.blocks.clone());
+        let mut speech_text = extracted.as_ref().and_then(|e| e.speech_text.clone());
+        let mut blocks = extracted.as_ref().and_then(|e| e.blocks.clone());
+        let mut content = content;
+        let mut final_model = model.clone();
+
+        let mut input_tokens = data
+            .usage
+            .as_ref()
+            .and_then(|u| u.prompt_tokens)
+            .unwrap_or(0);
+        let mut output_tokens = data
+            .usage
+            .as_ref()
+            .and_then(|u| u.completion_tokens)
+            .unwrap_or_else(|| estimate_tokens(&content));
+
+        // Most questions are answerable from text alone — a second,
+        // vision-model call only happens when the first pass explicitly
+        // says it needs to actually see a page image (a diagram, graph, or
+        // table) to answer precisely, and a retrieved source has one. This
+        // keeps the common case at one call/one token budget instead of
+        // always paying for a vision call up front.
+        let needs_visual_source = extracted
+            .as_ref()
+            .map(|e| e.needs_visual_source)
+            .unwrap_or(false);
+        if rich && needs_visual_source {
+            if let Some(image_url) = selected_sources
+                .iter()
+                .find_map(|source| source.image_url.as_deref())
+            {
+                if let Ok(visual) = self
+                    .chat_with_image(request, question, image_url, &provider)
+                    .await
+                {
+                    content = visual.content;
+                    speech_text = visual.speech_text.or(speech_text);
+                    blocks = visual.blocks.or(blocks);
+                    final_model = visual.model;
+                    input_tokens += visual.input_tokens;
+                    output_tokens += visual.output_tokens;
+                }
+                // A failed/degenerate vision pass silently keeps the
+                // text-only pass-1 answer rather than erroring the whole
+                // request — a refinement attempt, not a requirement.
+            }
+        }
+
+        Ok(AiAnswer {
+            content,
+            speech_text,
+            blocks,
+            served_from: "model".into(),
+            model: final_model,
+            provider: provider.name.into(),
+            input_tokens,
+            output_tokens,
+            source_chunks: selected_contexts,
+            sources: selected_sources.to_vec(),
+        })
+    }
+
+    /// Second-pass refinement call: sends the flagged source's page image to
+    /// a vision-capable model with a deliberately short prompt (no need to
+    /// resend the full multi-chunk text context — pass 1 already used that
+    /// to identify which image matters; this pass just needs to look at it
+    /// and answer precisely).
+    async fn chat_with_image(
+        &self,
+        request: &AiChatRequest,
+        question: &str,
+        image_url: &str,
+        provider: &ProviderConfig,
+    ) -> Result<AiAnswer, ApiError> {
+        let model = if request.reasoning_level.as_deref() == Some("high") {
+            self.config.vlm_thinking_model.clone()
+        } else {
+            self.config.vlm_instruct_model.clone()
+        };
+
+        let mut system = "You are Right Answer, a careful AI study partner. You already \
+            drafted an answer but flagged that you needed to see the actual textbook page \
+            image to be precise (a diagram, graph, or table). Look at the attached image and \
+            give the final, accurate answer grounded in what it actually shows."
+            .to_string();
+        if let Some(language) = &request.response_language {
+            system.push_str(&format!(" Respond in {language}."));
+        }
+        system.push_str(
+            " Return valid JSON using schema right_answer.rich_answer.v1 with renderMarkdown, \
+            speechText, and blocks. renderMarkdown must be a non-empty, complete answer.",
+        );
+
+        let body = json!({
+            "model": model,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": [
+                    {"type": "text", "text": question},
+                    {"type": "image_url", "image_url": {"url": image_url}}
+                ]}
+            ],
+            "temperature": 0.25,
+            "max_tokens": 2048,
+            "response_format": {"type": "json_object"}
+        });
+
+        let response = self
+            .client
+            .post(format!("{}/chat/completions", provider.base_url))
+            .headers(provider_headers(&provider.api_key, &self.config.app_url))
+            .json(&body)
+            .send()
+            .await
+            .map_err(|error| ApiError::Upstream(error.to_string()))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().await.unwrap_or_default();
+            return Err(ApiError::Upstream(format!(
+                "Vision AI provider failed ({status}): {text}"
+            )));
+        }
+
+        let data: ChatResponse = response
+            .json()
+            .await
+            .map_err(|error| ApiError::Upstream(error.to_string()))?;
+        let raw_content = data
+            .choices
+            .first()
+            .and_then(|choice| choice.message.content.clone())
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+
+        let envelope = extract_rich_envelope(&raw_content);
+        let content = envelope
+            .as_ref()
+            .and_then(|e| e.display_text.clone())
+            .filter(|text| !text.trim().is_empty())
+            .ok_or_else(|| ApiError::Upstream("Vision pass returned no usable text".into()))?;
 
         let input_tokens = data
             .usage
@@ -200,15 +342,15 @@ impl AiGateway {
 
         Ok(AiAnswer {
             content,
-            speech_text,
-            blocks,
+            speech_text: envelope.as_ref().and_then(|e| e.speech_text.clone()),
+            blocks: envelope.as_ref().and_then(|e| e.blocks.clone()),
             served_from: "model".into(),
             model,
             provider: provider.name.into(),
             input_tokens,
             output_tokens,
-            source_chunks: selected_contexts,
-            sources: selected_sources.to_vec(),
+            source_chunks: Vec::new(),
+            sources: Vec::new(),
         })
     }
 
@@ -296,6 +438,7 @@ struct RichEnvelope {
     display_text: Option<String>,
     speech_text: Option<String>,
     blocks: Option<Value>,
+    needs_visual_source: bool,
 }
 
 /// Parses a model response that was requested in json_mode/rich mode.
@@ -331,10 +474,16 @@ fn extract_rich_envelope(raw: &str) -> Option<RichEnvelope> {
 
     let blocks = object.get("blocks").cloned();
 
+    let needs_visual_source = object
+        .get("needsVisualSource")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+
     Some(RichEnvelope {
         display_text,
         speech_text,
         blocks,
+        needs_visual_source,
     })
 }
 
@@ -405,8 +554,9 @@ fn build_system_prompt(
         // the model must be told what shape to use — leaving it unguided
         // while forcing response_format=json_object produces degenerate
         // output like "{}" for anything without an obvious canonical shape.
-        lines.push("Return valid JSON using schema right_answer.rich_answer.v1 with renderMarkdown, speechText, blocks, sources, needsMoreContext, and limitations. renderMarkdown must always be a non-empty, complete answer to the question.".into());
-        lines.push("Use Markdown, LaTeX, tables, charts, geometry, SVG, images, code, or timeline blocks only when useful.".into());
+        lines.push("Return valid JSON using schema right_answer.rich_answer.v1 with renderMarkdown, speechText, blocks, needsVisualSource, sources, needsMoreContext, and limitations. renderMarkdown must always be a non-empty, complete answer to the question.".into());
+        lines.push("Use Markdown, LaTeX, tables, charts, geometry, SVG, images, code, or timeline blocks only when useful. A chart/graph block should appear whenever the answer describes data, trends, or comparisons the context provides numbers for.".into());
+        lines.push("Set needsVisualSource: true only if you cannot answer precisely without actually seeing a diagram/graph/table image from the source page (not just describing one from text) — most questions don't need this. Still give your best text answer in renderMarkdown either way; a follow-up pass with the image may refine it.".into());
         lines.push("speechText must be clean speaker-only prose without #, *, Markdown tables, raw LaTeX, code fences, or JSON.".into());
     }
     append_context(&lines.join("\n"), contexts)
