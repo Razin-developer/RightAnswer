@@ -175,6 +175,15 @@ impl AiGateway {
             .and_then(|envelope| envelope.display_text.clone())
             .filter(|text| !text.trim().is_empty())
             .unwrap_or(raw_content);
+        // A degenerate JSON envelope (e.g. "{}") with no usable field falls
+        // through to here as raw_content itself — better to surface this as
+        // an upstream failure than silently show "{}" as if it were a real
+        // answer.
+        if content.trim().is_empty() || content.trim() == "{}" {
+            return Err(ApiError::Upstream(
+                "AI provider returned an empty/degenerate response".into(),
+            ));
+        }
         let speech_text = extracted.as_ref().and_then(|e| e.speech_text.clone());
         let blocks = extracted.as_ref().and_then(|e| e.blocks.clone());
 
@@ -391,8 +400,12 @@ fn build_system_prompt(
         "Reasoning depth: {}.",
         request.reasoning_level.as_deref().unwrap_or("mid")
     ));
-    if rich && !json_mode {
-        lines.push("Return valid JSON using schema right_answer.rich_answer.v1 with renderMarkdown, speechText, blocks, sources, needsMoreContext, and limitations.".into());
+    if rich || json_mode {
+        // Whenever JSON output is requested at all (rich or plain json_mode),
+        // the model must be told what shape to use — leaving it unguided
+        // while forcing response_format=json_object produces degenerate
+        // output like "{}" for anything without an obvious canonical shape.
+        lines.push("Return valid JSON using schema right_answer.rich_answer.v1 with renderMarkdown, speechText, blocks, sources, needsMoreContext, and limitations. renderMarkdown must always be a non-empty, complete answer to the question.".into());
         lines.push("Use Markdown, LaTeX, tables, charts, geometry, SVG, images, code, or timeline blocks only when useful.".into());
         lines.push("speechText must be clean speaker-only prose without #, *, Markdown tables, raw LaTeX, code fences, or JSON.".into());
     }
