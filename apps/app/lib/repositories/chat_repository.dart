@@ -70,8 +70,8 @@ class ChatRepository {
       {
         'subjectId': subjectId,
         'subjectName': subjectName,
-        'chapterIds': chapterId == null ? '' : chapterId,
-        'chapterNames': chapterName == null ? '' : chapterName,
+        'chapterIds': chapterId ?? '',
+'chapterNames': chapterName ?? '',
       },
       where: 'id = ?',
       whereArgs: [id],
