@@ -1871,10 +1871,6 @@ class _AiMessage extends StatelessWidget {
                   letterSpacing: 0.5,
                 ),
               ),
-              if (isStreaming && !showContent) ...[
-                const SizedBox(width: 10),
-                _DotsIndicator(color: coral),
-              ],
             ],
           ),
           const SizedBox(height: 8),
