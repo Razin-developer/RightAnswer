@@ -72,7 +72,7 @@ pub struct ChatPromptMessage {
     pub content: String,
 }
 
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AiChatRequest {
     pub question: Option<String>,

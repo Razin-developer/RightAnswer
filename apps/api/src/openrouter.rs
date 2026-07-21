@@ -248,6 +248,116 @@ impl AiGateway {
         })
     }
 
+    /// Streaming counterpart to `chat()`. Deliberately plain-text/markdown
+    /// only (never json_mode/rich) — partial JSON can't be rendered safely
+    /// token by token, so the streaming path forgoes structured blocks,
+    /// speechText, and the two-pass vision refinement in exchange for real
+    /// incremental output. The rich, non-streaming endpoint remains
+    /// available for callers that need those (exam/study-plan generation,
+    /// or a client that explicitly wants blocks/sources-heavy answers).
+    /// Returns the chosen model name and a stream of raw text deltas — the
+    /// caller is responsible for accumulating them, caching, and persisting
+    /// once the stream ends.
+    pub async fn chat_stream(
+        &self,
+        request: &AiChatRequest,
+        selected_sources: &[SourceInfo],
+    ) -> Result<(String, impl futures_util::Stream<Item = String>), ApiError> {
+        let selected_contexts: Vec<String> =
+            selected_sources.iter().map(|s| s.text.clone()).collect();
+        let provider = self.config.provider()?;
+        let question = request
+            .question
+            .as_deref()
+            .or(request.message.as_deref())
+            .or(request.content.as_deref())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| ApiError::BadRequest("question is required".into()))?;
+
+        let model = choose_model(&self.config, request, question);
+        let system = build_system_prompt(request, &selected_contexts, false, false);
+
+        let mut messages = vec![ProviderMessage {
+            role: "system",
+            content: &system,
+        }];
+        let mut history = request.history.clone().unwrap_or_default();
+        if history.len() > 12 {
+            history = history.split_off(history.len() - 12);
+        }
+        let history_strings: Vec<ChatPromptMessage> = history;
+        let mut owned_messages = Vec::new();
+        for item in &history_strings {
+            owned_messages.push(ProviderMessage {
+                role: item.role.as_str(),
+                content: item.content.as_str(),
+            });
+        }
+        messages.extend(owned_messages);
+        messages.push(ProviderMessage {
+            role: "user",
+            content: question,
+        });
+
+        let body = json!({
+            "model": model,
+            "messages": messages,
+            "temperature": request.temperature.unwrap_or(if request.reasoning_level.as_deref() == Some("high") { 0.35 } else { 0.25 }),
+            "max_tokens": request.max_tokens.unwrap_or(if request.response_length.as_deref() == Some("large") { 4096 } else { 2048 }),
+            "stream": true
+        });
+
+        let response = self
+            .client
+            .post(format!("{}/chat/completions", provider.base_url))
+            .headers(provider_headers(&provider.api_key, &self.config.app_url))
+            .json(&body)
+            .send()
+            .await
+            .map_err(|error| ApiError::Upstream(error.to_string()))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().await.unwrap_or_default();
+            return Err(ApiError::Upstream(format!(
+                "AI provider failed ({status}): {text}"
+            )));
+        }
+
+        use futures_util::StreamExt;
+        let mut byte_stream = response.bytes_stream();
+
+        let text_stream = async_stream::stream! {
+            let mut buffer = String::new();
+            while let Some(chunk) = byte_stream.next().await {
+                let Ok(bytes) = chunk else { break; };
+                buffer.push_str(&String::from_utf8_lossy(&bytes));
+                while let Some(pos) = buffer.find("\n\n") {
+                    let event: String = buffer.drain(..pos + 2).collect();
+                    for line in event.lines() {
+                        let Some(data) = line.strip_prefix("data: ").or_else(|| line.strip_prefix("data:")) else {
+                            continue;
+                        };
+                        let data = data.trim();
+                        if data.is_empty() || data == "[DONE]" {
+                            continue;
+                        }
+                        if let Ok(value) = serde_json::from_str::<Value>(data) {
+                            if let Some(delta) = value["choices"][0]["delta"]["content"].as_str() {
+                                if !delta.is_empty() {
+                                    yield delta.to_string();
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        };
+
+        Ok((model, text_stream))
+    }
+
     /// Second-pass refinement call: sends the flagged source's page image to
     /// a vision-capable model with a deliberately short prompt (no need to
     /// resend the full multi-chunk text context — pass 1 already used that
@@ -260,7 +370,7 @@ impl AiGateway {
         image_url: &str,
         provider: &ProviderConfig,
     ) -> Result<AiAnswer, ApiError> {
-        let model = if request.reasoning_level.as_deref() == Some("high") {
+        let model = if is_malayalam(request) || request.reasoning_level.as_deref() == Some("high") {
             self.config.vlm_thinking_model.clone()
         } else {
             self.config.vlm_instruct_model.clone()
@@ -506,8 +616,26 @@ fn provider_headers(api_key: &str, app_url: &str) -> reqwest::header::HeaderMap 
     headers
 }
 
+/// Malayalam always routes to the reasoning tier regardless of AI_MODEL_FAMILY
+/// — a live model-quality comparison (fast vs reasoning, gemma vs qwen)
+/// found the fast tier prone to script-mixing artifacts and factual slips
+/// specifically in Malayalam, while reasoning stayed reliable across every
+/// language tested. English and other languages keep the normal
+/// complexity-based routing.
+fn is_malayalam(request: &AiChatRequest) -> bool {
+    request
+        .response_language
+        .as_deref()
+        .map(|language| {
+            let trimmed = language.trim();
+            trimmed.eq_ignore_ascii_case("malayalam") || trimmed.eq_ignore_ascii_case("ml")
+        })
+        .unwrap_or(false)
+}
+
 fn choose_model(config: &Config, request: &AiChatRequest, question: &str) -> String {
-    let high = request.reasoning_level.as_deref() == Some("high")
+    let high = is_malayalam(request)
+        || request.reasoning_level.as_deref() == Some("high")
         || request.response_length.as_deref() == Some("large")
         || question.len() > 320;
     if high {
@@ -589,6 +717,6 @@ fn keyword_rerank(question: &str, documents: &[String]) -> Vec<String> {
     docs
 }
 
-fn estimate_tokens(text: &str) -> i32 {
+pub(crate) fn estimate_tokens(text: &str) -> i32 {
     ((text.len() as f32) / 4.0).ceil() as i32
 }

@@ -1,11 +1,13 @@
-use std::{sync::Arc, time::Duration};
+use std::{convert::Infallible, sync::Arc, time::Duration};
 
 use axum::{
     extract::State,
     http::HeaderMap,
+    response::sse::{Event, KeepAlive, KeepAliveStream, Sse},
     routing::{get, post},
     Json, Router,
 };
+use futures_util::Stream;
 use governor::middleware::NoOpMiddleware;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -78,6 +80,7 @@ pub fn api_router(state: Arc<AppState>) -> Router {
 
     let ai_routes = Router::new()
         .route("/ai/chat", post(ai_chat))
+        .route("/ai/chat/stream", post(ai_chat_stream))
         .route("/ai/embeddings", post(embeddings))
         .route("/ai/rerank", post(rerank))
         .layer(governed_layer(1, 10));
@@ -365,6 +368,243 @@ async fn ai_chat(
         "chapterId": selected.primary_meta.chapter_id,
         "chapterName": selected.primary_meta.chapter_name
     })))
+}
+
+/// SSE counterpart to `ai_chat`: same cache/beta-gate/retrieval pipeline,
+/// but the actual generation streams real text deltas as they arrive from
+/// the provider instead of waiting for the full response. Event types sent
+/// to the client:
+///   - "chunk": {"delta": "..."} — a plain-text/markdown fragment, append
+///     and re-render; never contains a partial JSON envelope.
+///   - "beta": {chapterId, chapterName, subjectName, message} — terminal,
+///     no chunks follow.
+///   - "done": {sources, subjectId, subjectName, chapterId, chapterName,
+///     servedFrom} — terminal, sent after the last chunk.
+///   - "error": {"message": "..."} — terminal.
+///
+/// Rich-mode-only features (structured blocks, speechText, the two-pass
+/// vision refinement) aren't available on this path — see chat_stream's
+/// doc comment on why. Use the non-streaming /ai/chat when those matter.
+type BoxedEventStream = std::pin::Pin<Box<dyn Stream<Item = Result<Event, Infallible>> + Send>>;
+
+async fn ai_chat_stream(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(body): Json<AiChatRequest>,
+) -> Result<Sse<KeepAliveStream<BoxedEventStream>>, ApiError> {
+    let user = user_from_headers(&state, &headers).await?;
+    let question = body
+        .question
+        .as_deref()
+        .or(body.message.as_deref())
+        .or(body.content.as_deref())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| ApiError::BadRequest("question is required".into()))?
+        .to_string();
+
+    let normalized_question = normalize_question(&question);
+    let response_length = body.response_length.clone().unwrap_or("normal".into());
+    let reasoning_level = body.reasoning_level.clone().unwrap_or("mid".into());
+    let chapter_ids = normalized_chapter_ids(&body);
+    let exact_key = cache_key(
+        &normalized_question,
+        body.response_language.as_deref(),
+        &response_length,
+        &reasoning_level,
+        body.subject_id.as_deref(),
+        &chapter_ids,
+        body.confirm_beta_chapter_id.as_deref(),
+    );
+
+    // Cache hits stream as a single immediate chunk + done — genuinely
+    // instant, not simulated, since the full answer is already known.
+    if let Some(cached) = state
+        .db
+        .lookup_exact_cache(&exact_key)
+        .await?
+        .filter(|cached| !is_degenerate_answer(&cached.answer))
+    {
+        let context_meta = cache_context_meta(&cached);
+        let answer = cached_answer(cached, "exact-cache", &context_meta);
+        persist_ai_chat(
+            &state,
+            user.as_ref(),
+            &body,
+            &question,
+            &answer,
+            &context_meta,
+        )
+        .await?;
+        return Ok(
+            Sse::new(Box::pin(single_shot_stream(answer, context_meta)) as BoxedEventStream)
+                .keep_alive(KeepAlive::default()),
+        );
+    }
+
+    let question_embedding = state.ai.embed(&question).await.unwrap_or_default();
+    let semantic_cached = if body.confirm_beta_chapter_id.is_some() {
+        None
+    } else {
+        state
+            .db
+            .lookup_semantic_cache(
+                &question_embedding,
+                state.config.semantic_cache_threshold,
+                body.response_language.as_deref(),
+                &response_length,
+                &reasoning_level,
+                body.subject_id.as_deref(),
+                &chapter_ids,
+            )
+            .await?
+            .filter(|cached| !is_degenerate_answer(&cached.answer))
+    };
+    if let Some(cached) = semantic_cached {
+        let context_meta = cache_context_meta(&cached);
+        let answer = cached_answer(cached, "semantic-cache", &context_meta);
+        persist_ai_chat(
+            &state,
+            user.as_ref(),
+            &body,
+            &question,
+            &answer,
+            &context_meta,
+        )
+        .await?;
+        return Ok(
+            Sse::new(Box::pin(single_shot_stream(answer, context_meta)) as BoxedEventStream)
+                .keep_alive(KeepAlive::default()),
+        );
+    }
+
+    let outcome = select_contexts(&state, &body, &question, Some(&question_embedding)).await?;
+    let selected = match outcome {
+        ContextsOutcome::Ready(selected) => selected,
+        ContextsOutcome::NeedsBetaConfirmation(beta) => {
+            let message = format!(
+                "\"{}\" from {} is in your syllabus, but that content is still in beta. Do you want the response anyway?",
+                beta.chapter_name, beta.subject_name
+            );
+            let stream = async_stream::stream! {
+                yield Ok(Event::default().event("beta").data(
+                    json!({
+                        "chapterId": beta.chapter_id,
+                        "chapterName": beta.chapter_name,
+                        "subjectName": beta.subject_name,
+                        "message": message,
+                    })
+                    .to_string(),
+                ));
+            };
+            return Ok(
+                Sse::new(Box::pin(stream) as BoxedEventStream).keep_alive(KeepAlive::default())
+            );
+        }
+    };
+
+    let (model, text_stream) = state.ai.chat_stream(&body, &selected.sources).await?;
+    let provider_name = state.config.provider()?.name;
+
+    let stream_state = state.clone();
+    let stream_body = body.clone();
+    let stream_user = user.clone();
+    let primary_meta = selected.primary_meta.clone();
+    let sources = selected.sources.clone();
+    let source_chunks: Vec<String> = sources.iter().map(|s| s.text.clone()).collect();
+
+    let sse = async_stream::stream! {
+        use futures_util::StreamExt;
+        futures_util::pin_mut!(text_stream);
+        let mut full_text = String::new();
+        while let Some(delta) = text_stream.next().await {
+            full_text.push_str(&delta);
+            yield Ok(Event::default().event("chunk").data(json!({ "delta": delta }).to_string()));
+        }
+
+        if full_text.trim().is_empty() {
+            yield Ok(Event::default().event("error").data(
+                json!({ "message": "AI provider returned an empty response" }).to_string(),
+            ));
+            return;
+        }
+
+        let subject_id = primary_meta.subject_id.as_deref().or(stream_body.subject_id.as_deref());
+        let subject_name = primary_meta.subject_name.as_deref().or(stream_body.subject_name.as_deref());
+        let output_tokens = crate::openrouter::estimate_tokens(&full_text);
+
+        if stream_body.confirm_beta_chapter_id.is_none() {
+            let _ = stream_state
+                .db
+                .store_answer_cache(
+                    &exact_key,
+                    &normalized_question,
+                    &question,
+                    &full_text,
+                    &question_embedding,
+                    &model,
+                    provider_name,
+                    stream_body.response_language.as_deref(),
+                    &response_length,
+                    &reasoning_level,
+                    subject_id,
+                    subject_name,
+                    &chapter_ids,
+                    &source_chunks,
+                    0,
+                    output_tokens,
+                )
+                .await;
+        }
+
+        let answer = AiAnswer {
+            content: full_text,
+            speech_text: None,
+            blocks: None,
+            served_from: "model".into(),
+            model,
+            provider: provider_name.into(),
+            input_tokens: 0,
+            output_tokens,
+            source_chunks,
+            sources: sources.clone(),
+        };
+        let _ = persist_ai_chat(&stream_state, stream_user.as_ref(), &stream_body, &question, &answer, &primary_meta).await;
+
+        yield Ok(Event::default().event("done").data(
+            json!({
+                "sources": sources,
+                "subjectId": subject_id,
+                "subjectName": subject_name,
+                "chapterId": primary_meta.chapter_id,
+                "chapterName": primary_meta.chapter_name,
+                "servedFrom": answer.served_from,
+            })
+            .to_string(),
+        ));
+    };
+
+    Ok(Sse::new(Box::pin(sse) as BoxedEventStream).keep_alive(KeepAlive::default()))
+}
+
+fn single_shot_stream(
+    answer: AiAnswer,
+    context_meta: crate::rag::ContextMeta,
+) -> impl Stream<Item = Result<Event, Infallible>> {
+    async_stream::stream! {
+        yield Ok(Event::default().event("chunk").data(json!({ "delta": answer.content }).to_string()));
+        yield Ok(Event::default().event("done").data(
+            json!({
+                "sources": answer.sources,
+                "subjectId": context_meta.subject_id,
+                "subjectName": context_meta.subject_name,
+                "chapterId": context_meta.chapter_id,
+                "chapterName": context_meta.chapter_name,
+                "servedFrom": answer.served_from,
+            })
+            .to_string(),
+        ));
+    }
 }
 
 async fn persist_ai_chat(
