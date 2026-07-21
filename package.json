@@ -23,6 +23,7 @@
     "textbook:ingest-local": "pnpm --filter @right-answer/api-node-legacy textbook:ingest-local",
     "textbook:run-all": "pnpm --filter @right-answer/api-node-legacy textbook:run-all",
     "textbook:batch-csv": "pnpm --filter @right-answer/api-node-legacy textbook:batch-csv",
+    "textbook:verify-chapters": "pnpm --filter @right-answer/api-node-legacy textbook:verify-chapters",
     "db:generate": "pnpm --filter @right-answer/database prisma generate",
     "db:migrate": "pnpm --filter @right-answer/database prisma migrate dev",
     "db:deploy": "pnpm --filter @right-answer/database prisma migrate deploy",

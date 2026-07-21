@@ -13,7 +13,8 @@
     "textbook:detect-chapters": "tsx scripts/textbook-detect-chapters.ts",
     "textbook:ingest-local": "tsx scripts/textbook-ingest-local.ts",
     "textbook:run-all": "tsx scripts/textbook-run-all.ts",
-    "textbook:batch-csv": "tsx scripts/textbook-batch-from-csv.ts"
+    "textbook:batch-csv": "tsx scripts/textbook-batch-from-csv.ts",
+    "textbook:verify-chapters": "tsx scripts/verify-chapter-metadata.ts"
   },
   "dependencies": {
     "@fastify/cookie": "^11.0.2",

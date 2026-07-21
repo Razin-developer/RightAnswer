@@ -17,7 +17,7 @@ class DatabaseHelper {
     final path = join(dbPath, 'right_answer.db');
     return openDatabase(
       path,
-      version: 11,
+      version: 12,
       onCreate: _onCreate,
       onUpgrade: _onUpgrade,
     );
@@ -72,6 +72,13 @@ class DatabaseHelper {
       await db.execute(
         'ALTER TABLE chapters ADD COLUMN number INTEGER NOT NULL DEFAULT 0',
       );
+    }
+    if (oldVersion < 12) {
+      // Rich-answer envelope extras: typed render blocks and structured
+      // sources (page/subject/chapter), alongside the existing plain-text
+      // sourceChunks column.
+      await db.execute('ALTER TABLE chat_messages ADD COLUMN blocks TEXT');
+      await db.execute('ALTER TABLE chat_messages ADD COLUMN sources TEXT');
     }
   }
 
@@ -191,6 +198,8 @@ class DatabaseHelper {
         tokenCount INTEGER NOT NULL DEFAULT 0,
         cost REAL NOT NULL DEFAULT 0,
         sourceChunks TEXT,
+        blocks TEXT,
+        sources TEXT,
         createdAt TEXT NOT NULL,
         FOREIGN KEY (chatId) REFERENCES chats(id) ON DELETE CASCADE
       )

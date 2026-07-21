@@ -33,6 +33,25 @@ class AIBackendService {
     }
 
     final decoded = jsonDecode(response.body) as Map<String, dynamic>;
+
+    // The backend can short-circuit a normal answer with a beta-chapter
+    // confirmation prompt instead. Pass that shape straight through — the
+    // caller (ChatAIService) checks for it before treating the response as
+    // a regular answer.
+    if (decoded['needsBetaConfirmation'] == true) {
+      return http.Response(
+        jsonEncode({
+          'needsBetaConfirmation': true,
+          'chapterId': decoded['chapterId'],
+          'chapterName': decoded['chapterName'],
+          'subjectName': decoded['subjectName'],
+          'message': decoded['message'],
+        }),
+        200,
+        headers: {'content-type': 'application/json'},
+      );
+    }
+
     final answer =
         (decoded['content'] as String?) ??
         (decoded['answer'] is Map<String, dynamic>
@@ -45,6 +64,9 @@ class AIBackendService {
     final inputTokens = (answerMeta['inputTokens'] as int?) ?? 0;
     final outputTokens = (answerMeta['outputTokens'] as int?) ?? 0;
     final sourceChunks = decoded['sourceChunks'] ?? answerMeta['sourceChunks'];
+    final sources = decoded['sources'] ?? answerMeta['sources'];
+    final blocks = decoded['blocks'] ?? answerMeta['blocks'];
+    final speechText = decoded['speechText'] ?? answerMeta['speechText'];
 
     return http.Response(
       jsonEncode({
@@ -61,6 +83,9 @@ class AIBackendService {
         'model': answerMeta['model'],
         'servedFrom': decoded['servedFrom'] ?? answerMeta['servedFrom'],
         if (sourceChunks is List) 'sourceChunks': sourceChunks,
+        if (sources is List) 'sources': sources,
+        if (blocks != null) 'blocks': blocks,
+        if (speechText != null) 'speechText': speechText,
         // Server-driven classification of which subject/chapter this
         // answer's sources came from — the client no longer picks these.
         'subjectId': decoded['subjectId'],
@@ -153,6 +178,10 @@ class AIBackendService {
         'responseLanguage': payload['responseLanguage'],
       if (payload['richAnswer'] == true) 'richAnswer': true,
       if (payload['answerFormat'] != null) 'answerFormat': payload['answerFormat'],
+      // Set when the user confirmed they want an answer sourced from a
+      // beta chapter after the backend asked for confirmation.
+      if (payload['confirmBetaChapterId'] != null)
+        'confirmBetaChapterId': payload['confirmBetaChapterId'],
       // Optional retrieval scoping — only present when the user actively
       // picked a chapter via the chapter picker. Absent/empty means the
       // backend searches globally, exactly as before.

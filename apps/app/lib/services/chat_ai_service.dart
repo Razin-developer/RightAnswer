@@ -28,6 +28,21 @@ class ChatAIStreamEvent {
   final String? subjectName;
   final String? chapterId;
   final String? chapterName;
+  // Rich-answer envelope extras (only populated when the backend returned
+  // a `richAnswer: true` response). `blocks` may be null/malformed — callers
+  // must always be able to fall back to rendering `content` as markdown.
+  final List<Map<String, dynamic>>? blocks;
+  final List<Map<String, dynamic>> sources;
+  final String? speechText;
+  // Set instead of a normal answer when the backend wants confirmation
+  // before answering from a beta (not-yet-verified) chapter. When true,
+  // `content` is empty and callers must prompt the user rather than treat
+  // this as a completed/empty answer.
+  final bool needsBetaConfirmation;
+  final String? betaChapterId;
+  final String? betaChapterName;
+  final String? betaSubjectName;
+  final String? betaMessage;
 
   const ChatAIStreamEvent({
     required this.content,
@@ -40,6 +55,14 @@ class ChatAIStreamEvent {
     this.subjectName,
     this.chapterId,
     this.chapterName,
+    this.blocks,
+    this.sources = const [],
+    this.speechText,
+    this.needsBetaConfirmation = false,
+    this.betaChapterId,
+    this.betaChapterName,
+    this.betaSubjectName,
+    this.betaMessage,
   });
 }
 
@@ -65,6 +88,10 @@ class ChatAIService {
     // picker. Scopes backend Qdrant retrieval to just this chapter; null or
     // empty preserves the existing global-search behavior.
     List<String>? chapterIds,
+    // Set when resending after the user tapped "Yes" on the beta-chapter
+    // confirmation prompt — tells the backend to answer from that chapter
+    // despite it being in beta.
+    String? confirmBetaChapterId,
   }) async* {
     AIBackendService.requireChatApiKey();
     final model =
@@ -104,6 +131,8 @@ class ChatAIService {
       'answerFormat': 'rich',
       if (chapterIds != null && chapterIds.isNotEmpty)
         'chapterIds': chapterIds,
+      if (confirmBetaChapterId != null)
+        'confirmBetaChapterId': confirmBetaChapterId,
     };
 
     final promptEstimate = _estimateTokens(jsonEncode(messages));
@@ -118,6 +147,20 @@ class ChatAIService {
       }
 
       final data = jsonDecode(resp.body) as Map<String, dynamic>;
+
+      if (data['needsBetaConfirmation'] == true) {
+        yield ChatAIStreamEvent(
+          content: '',
+          isDone: true,
+          needsBetaConfirmation: true,
+          betaChapterId: data['chapterId'] as String?,
+          betaChapterName: data['chapterName'] as String?,
+          betaSubjectName: data['subjectName'] as String?,
+          betaMessage: data['message'] as String?,
+        );
+        return;
+      }
+
       final content =
           (data['choices'][0]['message']['content'] as String).trim();
       final usage = data['usage'] as Map<String, dynamic>?;
@@ -130,6 +173,9 @@ class ChatAIService {
               (data['sourceChunks'] as List).map((value) => value.toString()),
             )
           : const <String>[];
+      final backendSources = _asMapList(data['sources']);
+      final backendBlocks = _asMapList(data['blocks']);
+      final speechText = data['speechText'] as String?;
 
       await _usageRepo.insert(
         UsageLog(
@@ -153,6 +199,9 @@ class ChatAIService {
         subjectName: data['subjectName'] as String?,
         chapterId: data['chapterId'] as String?,
         chapterName: data['chapterName'] as String?,
+        blocks: backendBlocks,
+        sources: backendSources ?? const [],
+        speechText: speechText,
       );
     } on TimeoutException {
       throw AppException.network(
@@ -268,6 +317,17 @@ class ChatAIService {
         _defaultOutputPrice;
     return (inputTokens / 1000) * inputPrice +
         (outputTokens / 1000) * outputPrice;
+  }
+
+  /// Defensively coerce a dynamic JSON value into a list of string-keyed
+  /// maps. Returns null (not empty) when the value is absent/malformed so
+  /// callers can distinguish "no blocks" from "backend sent something we
+  /// couldn't parse" if they ever need to.
+  List<Map<String, dynamic>>? _asMapList(dynamic value) {
+    if (value is! List) return null;
+    return value.whereType<Map>().map((item) {
+      return item.map((key, value) => MapEntry(key.toString(), value));
+    }).toList();
   }
 
   int _estimateTokens(String text) =>

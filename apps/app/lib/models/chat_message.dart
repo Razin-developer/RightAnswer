@@ -12,6 +12,13 @@ class ChatMessage {
   final int tokenCount;
   final double cost;
   final List<String> sourceChunks;
+  // Rich-answer envelope extras (from `richAnswer: true` chat responses).
+  // `blocks` is the raw, defensively-typed list of block objects the backend
+  // returned (may be null/empty — the baseline markdown path always works
+  // regardless). `sources` are structured {text, pageNumber, subjectName,
+  // chapterName} entries, richer than the plain-text `sourceChunks` above.
+  final List<Map<String, dynamic>>? blocks;
+  final List<Map<String, dynamic>> sources;
   final DateTime createdAt;
 
   const ChatMessage({
@@ -26,6 +33,8 @@ class ChatMessage {
     required this.tokenCount,
     required this.cost,
     this.sourceChunks = const [],
+    this.blocks,
+    this.sources = const [],
     required this.createdAt,
   });
 
@@ -43,6 +52,8 @@ class ChatMessage {
     int? tokenCount,
     double? cost,
     List<String>? sourceChunks,
+    List<Map<String, dynamic>>? blocks,
+    List<Map<String, dynamic>>? sources,
     DateTime? createdAt,
   }) => ChatMessage(
     id: id ?? this.id,
@@ -56,6 +67,8 @@ class ChatMessage {
     tokenCount: tokenCount ?? this.tokenCount,
     cost: cost ?? this.cost,
     sourceChunks: sourceChunks ?? this.sourceChunks,
+    blocks: blocks ?? this.blocks,
+    sources: sources ?? this.sources,
     createdAt: createdAt ?? this.createdAt,
   );
 
@@ -71,6 +84,8 @@ class ChatMessage {
     'tokenCount': tokenCount,
     'cost': cost,
     'sourceChunks': sourceChunks.isEmpty ? null : jsonEncode(sourceChunks),
+    'blocks': (blocks == null || blocks!.isEmpty) ? null : jsonEncode(blocks),
+    'sources': sources.isEmpty ? null : jsonEncode(sources),
     'createdAt': createdAt.toIso8601String(),
   };
 
@@ -88,6 +103,21 @@ class ChatMessage {
     sourceChunks: m['sourceChunks'] != null
         ? List<String>.from(jsonDecode(m['sourceChunks'] as String) as List)
         : [],
+    blocks: _decodeMaps(m['blocks']),
+    sources: _decodeMaps(m['sources']) ?? const [],
     createdAt: DateTime.parse(m['createdAt'] as String),
   );
+
+  static List<Map<String, dynamic>>? _decodeMaps(dynamic raw) {
+    if (raw is! String || raw.isEmpty) return null;
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! List) return null;
+      return decoded.whereType<Map>().map((item) {
+        return item.map((key, value) => MapEntry(key.toString(), value));
+      }).toList();
+    } catch (_) {
+      return null;
+    }
+  }
 }

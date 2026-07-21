@@ -226,22 +226,60 @@ class _ChatScreenState extends State<ChatScreen> {
 
     if (!_isTemporary) await _messageRepo.insert(userMsg);
 
+    await _runAssistantTurn(
+      chatId: chatId,
+      text: text,
+      imagePath: imagePathCopy,
+      historyBeforeSend: historyBeforeSend,
+      assistantMsg: assistantMsg,
+    );
+  }
+
+  /// Streams an assistant reply for `assistantMsg` (already appended to
+  /// `_messages` as an empty placeholder by the caller) and handles the
+  /// three possible outcomes: a normal answer, a network/service error, or
+  /// the backend asking for beta-chapter confirmation instead of answering.
+  /// On confirmation, replaces the placeholder with a Yes/No prompt and,
+  /// if the user says yes, resends the exact same request with
+  /// `confirmBetaChapterId` set and recurses into a fresh placeholder.
+  Future<void> _runAssistantTurn({
+    required String chatId,
+    required String text,
+    required String? imagePath,
+    required List<ChatMessage> historyBeforeSend,
+    required ChatMessage assistantMsg,
+    String? confirmBetaChapterId,
+  }) async {
     try {
       String? classifiedSubjectId;
       String? classifiedSubjectName;
       String? classifiedChapterId;
       String? classifiedChapterName;
+      bool betaConfirmationNeeded = false;
+      String? betaChapterId;
+      String? betaChapterName;
+      String? betaSubjectName;
+      String? betaMessage;
 
       await for (final event in ChatAIService.instance.streamMessage(
         userContent: text,
-        imagePath: imagePathCopy,
+        imagePath: imagePath,
         responseLength: _responseLength,
         reasoningLevel: _reasoningLevel,
-        responseLanguage: chosenLanguage,
+        responseLanguage: effectiveResponseLanguage(_selectedResponseLanguage),
         history: historyBeforeSend,
         chapterIds: _selectedChapterId != null ? [_selectedChapterId!] : null,
+        confirmBetaChapterId: confirmBetaChapterId,
       )) {
         if (!mounted) return;
+        if (event.needsBetaConfirmation) {
+          betaConfirmationNeeded = true;
+          betaChapterId = event.betaChapterId;
+          betaChapterName = event.betaChapterName;
+          betaSubjectName = event.betaSubjectName;
+          betaMessage = event.betaMessage;
+          break;
+        }
         setState(() {
           _messages = _messages
               .map(
@@ -251,6 +289,8 @@ class _ChatScreenState extends State<ChatScreen> {
                         tokenCount: event.inputTokens + event.outputTokens,
                         cost: event.cost,
                         sourceChunks: event.isDone ? event.sourceChunks : null,
+                        blocks: event.isDone ? event.blocks : null,
+                        sources: event.isDone ? event.sources : null,
                       )
                     : message,
               )
@@ -265,6 +305,55 @@ class _ChatScreenState extends State<ChatScreen> {
           }
         });
         _scrollToBottom();
+      }
+
+      if (betaConfirmationNeeded) {
+        // Drop the empty placeholder — it never received an answer.
+        setState(() {
+          _messages = _messages
+              .where((message) => message.id != assistantMsg.id)
+              .toList();
+          _isGenerating = false;
+          _streamingMessageId = null;
+        });
+        if (!mounted) return;
+        final betaLabel = [
+          betaChapterName,
+          betaSubjectName,
+        ].where((v) => v != null && v.isNotEmpty).join(' from ');
+        final confirmed = await _showBetaConfirmationDialog(
+          betaMessage ??
+              '${betaLabel.isEmpty ? 'That content' : '"$betaLabel"'} is still in beta. Do you want the response anyway?',
+        );
+        if (!mounted || confirmed != true || betaChapterId == null) return;
+
+        final retryAssistantMsg = ChatMessage(
+          id: const Uuid().v4(),
+          chatId: chatId,
+          role: 'assistant',
+          content: '',
+          responseLanguage: assistantMsg.responseLanguage,
+          responseLength: assistantMsg.responseLength,
+          reasoningLevel: assistantMsg.reasoningLevel,
+          tokenCount: 0,
+          cost: 0,
+          createdAt: DateTime.now(),
+        );
+        setState(() {
+          _messages = [..._messages, retryAssistantMsg];
+          _isGenerating = true;
+          _streamingMessageId = retryAssistantMsg.id;
+        });
+        _scrollToBottom();
+        await _runAssistantTurn(
+          chatId: chatId,
+          text: text,
+          imagePath: imagePath,
+          historyBeforeSend: historyBeforeSend,
+          assistantMsg: retryAssistantMsg,
+          confirmBetaChapterId: betaChapterId,
+        );
+        return;
       }
 
       final finalAssistant = _messages.firstWhere(
@@ -328,6 +417,29 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
+  /// Shows the beta-chapter confirmation prompt sent by the backend when
+  /// the best-matching chapter for a question hasn't been fully verified
+  /// yet. Returns true for "Yes, answer anyway", false/null for "No".
+  Future<bool?> _showBetaConfirmationDialog(String message) {
+    return showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Beta chapter'),
+        content: Text(message),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('No'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Yes'),
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<void> _regenerateStreaming(ChatMessage assistantMsg) async {
     if (!ConnectivityService.instance.isOnline) {
       AppFeedback.showToast(context, 'You are offline. Connect to regenerate.');
@@ -380,6 +492,8 @@ class _ChatScreenState extends State<ChatScreen> {
                         tokenCount: event.inputTokens + event.outputTokens,
                         cost: event.cost,
                         sourceChunks: event.isDone ? event.sourceChunks : null,
+                        blocks: event.isDone ? event.blocks : null,
+                        sources: event.isDone ? event.sources : null,
                       )
                     : message,
               )
@@ -998,18 +1112,25 @@ class _ChatScreenState extends State<ChatScreen> {
                                   fullscreenDialog: true,
                                   builder: (_) => _FullscreenResponseScreen(
                                     content: msg.content,
+                                    blocks: msg.blocks,
+                                    sources: msg.sources,
                                     onCopy: () => _copyText(msg.content),
                                   ),
                                 ),
                               ),
-                        onSources: msg.isUser || msg.sourceChunks.isEmpty
+                        onSources:
+                            msg.isUser ||
+                                (msg.sourceChunks.isEmpty &&
+                                    msg.sources.isEmpty)
                             ? null
                             : () => showModalBottomSheet(
                                 context: context,
                                 isScrollControlled: true,
                                 backgroundColor: Colors.transparent,
-                                builder: (_) =>
-                                    _ResourcesSheet(chunks: msg.sourceChunks),
+                                builder: (_) => _ResourcesSheet(
+                                  chunks: msg.sourceChunks,
+                                  sources: msg.sources,
+                                ),
                               ),
                       );
                     },
@@ -1770,7 +1891,12 @@ class _AiMessage extends StatelessWidget {
             ),
           // Editorial AI content — no box, flows on canvas
           if (showContent)
-            RichAnswerView(content: message.content, isDark: isDark)
+            RichAnswerView(
+              content: message.content,
+              blocks: message.blocks,
+              sources: message.sources,
+              isDark: isDark,
+            )
           else if (isStreaming)
             _DotsIndicator(color: coral),
           // Action bar
@@ -2875,10 +3001,14 @@ class _FullscreenInputScreen extends StatelessWidget {
 
 class _FullscreenResponseScreen extends StatelessWidget {
   final String content;
+  final List<Map<String, dynamic>>? blocks;
+  final List<Map<String, dynamic>> sources;
   final VoidCallback onCopy;
 
   const _FullscreenResponseScreen({
     required this.content,
+    this.blocks,
+    this.sources = const [],
     required this.onCopy,
   });
 
@@ -2918,6 +3048,8 @@ class _FullscreenResponseScreen extends StatelessWidget {
           padding: const EdgeInsets.fromLTRB(20, 12, 20, 32),
           child: RichAnswerView(
             content: content,
+            blocks: blocks,
+            sources: sources,
             isDark: theme.brightness == Brightness.dark,
           ),
         ),
@@ -2930,12 +3062,17 @@ class _FullscreenResponseScreen extends StatelessWidget {
 
 class _ResourcesSheet extends StatelessWidget {
   final List<String> chunks;
+  final List<Map<String, dynamic>> sources;
 
-  const _ResourcesSheet({required this.chunks});
+  const _ResourcesSheet({required this.chunks, this.sources = const []});
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    // Prefer the structured `sources` (page/subject/chapter metadata) when
+    // the backend provided them; fall back to the plain-text chunks.
+    final useStructured = sources.isNotEmpty;
+    final itemCount = useStructured ? sources.length : chunks.length;
     return DraggableScrollableSheet(
       initialChildSize: 0.6,
       maxChildSize: 0.92,
@@ -2987,7 +3124,7 @@ class _ResourcesSheet extends StatelessWidget {
                       borderRadius: BorderRadius.circular(20),
                     ),
                     child: Text(
-                      '${chunks.length} excerpt${chunks.length != 1 ? 's' : ''}',
+                      '$itemCount excerpt${itemCount != 1 ? 's' : ''}',
                       style: TextStyle(
                         fontSize: 11,
                         fontWeight: FontWeight.w600,
@@ -3013,9 +3150,22 @@ class _ResourcesSheet extends StatelessWidget {
               child: ListView.separated(
                 controller: scrollCtrl,
                 padding: const EdgeInsets.fromLTRB(12, 12, 12, 24),
-                itemCount: chunks.length,
+                itemCount: itemCount,
                 separatorBuilder: (_, _) => const SizedBox(height: 10),
                 itemBuilder: (ctx, i) {
+                  final source = useStructured ? sources[i] : null;
+                  final text = useStructured
+                      ? (source!['text']?.toString() ?? '')
+                      : chunks[i];
+                  final metaLabel = useStructured
+                      ? [
+                          source!['subjectName']?.toString(),
+                          source['chapterName']?.toString(),
+                        ].where((v) => v != null && v.isNotEmpty).join(' · ')
+                      : '';
+                  final pageLabel = useStructured && source!['pageNumber'] != null
+                      ? 'p. ${source['pageNumber']}'
+                      : null;
                   return Container(
                     padding: const EdgeInsets.all(14),
                     decoration: BoxDecoration(
@@ -3040,7 +3190,9 @@ class _ResourcesSheet extends StatelessWidget {
                                 borderRadius: BorderRadius.circular(6),
                               ),
                               child: Text(
-                                'Excerpt ${i + 1}',
+                                metaLabel.isNotEmpty
+                                    ? metaLabel
+                                    : 'Excerpt ${i + 1}',
                                 style: TextStyle(
                                   fontSize: 10,
                                   fontWeight: FontWeight.w700,
@@ -3048,11 +3200,23 @@ class _ResourcesSheet extends StatelessWidget {
                                 ),
                               ),
                             ),
+                            if (pageLabel != null) ...[
+                              const SizedBox(width: 6),
+                              Text(
+                                pageLabel,
+                                style: TextStyle(
+                                  fontSize: 10.5,
+                                  fontWeight: FontWeight.w600,
+                                  color: theme.colorScheme.onSurface
+                                      .withValues(alpha: 0.45),
+                                ),
+                              ),
+                            ],
                           ],
                         ),
                         const SizedBox(height: 8),
                         SelectableText(
-                          chunks[i],
+                          text,
                           style: TextStyle(
                             fontSize: 13,
                             height: 1.55,
