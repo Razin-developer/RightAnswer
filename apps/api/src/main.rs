@@ -1,6 +1,7 @@
 mod admin;
 mod auth;
 mod config;
+mod content_policy;
 mod db;
 mod error;
 mod models;

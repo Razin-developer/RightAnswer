@@ -99,18 +99,37 @@ pub struct AiChatRequest {
     pub chat_name: Option<String>,
     pub user_message_local_id: Option<String>,
     pub assistant_message_local_id: Option<String>,
+    /// Set when the client is re-sending a request after the user tapped
+    /// "Yes" on the beta-chapter confirmation prompt (see rag::select_contexts).
+    pub confirm_beta_chapter_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceInfo {
+    pub text: String,
+    pub page_number: Option<i32>,
+    pub subject_name: Option<String>,
+    pub chapter_name: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AiAnswer {
     pub content: String,
+    /// Clean speaker-only prose for TTS, when the model returned a rich/json
+    /// envelope that included one. Falls back to None for plain answers.
+    pub speech_text: Option<String>,
+    /// Structured render blocks (markdown/math/table/geometry/...), passed
+    /// through verbatim when the model returned a parseable rich envelope.
+    pub blocks: Option<serde_json::Value>,
     pub served_from: String,
     pub model: String,
     pub provider: String,
     pub input_tokens: i32,
     pub output_tokens: i32,
     pub source_chunks: Vec<String>,
+    pub sources: Vec<SourceInfo>,
 }
 
 #[derive(Debug, Clone, FromRow)]

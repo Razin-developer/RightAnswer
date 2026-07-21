@@ -5,7 +5,7 @@ use serde_json::{json, Value};
 use crate::{
     config::Config,
     error::ApiError,
-    models::{AiAnswer, AiChatRequest, ChatPromptMessage},
+    models::{AiAnswer, AiChatRequest, ChatPromptMessage, SourceInfo},
 };
 
 #[derive(Clone)]
@@ -74,8 +74,10 @@ impl AiGateway {
     pub async fn chat(
         &self,
         request: &AiChatRequest,
-        selected_contexts: &[String],
+        selected_sources: &[SourceInfo],
     ) -> Result<AiAnswer, ApiError> {
+        let selected_contexts: Vec<String> =
+            selected_sources.iter().map(|s| s.text.clone()).collect();
         let provider = self.config.provider()?;
         let question = request
             .question
@@ -91,7 +93,7 @@ impl AiGateway {
         let json_mode =
             request.json_mode == Some(true) || request.response_format.as_deref() == Some("json");
         let model = choose_model(&self.config, request, question);
-        let system = build_system_prompt(request, selected_contexts, rich, json_mode);
+        let system = build_system_prompt(request, &selected_contexts, rich, json_mode);
 
         let mut messages = vec![ProviderMessage {
             role: "system",
@@ -144,18 +146,38 @@ impl AiGateway {
             .json()
             .await
             .map_err(|error| ApiError::Upstream(error.to_string()))?;
-        let content = data
+        let raw_content = data
             .choices
             .first()
             .and_then(|choice| choice.message.content.clone())
             .unwrap_or_default()
             .trim()
             .to_string();
-        if content.is_empty() {
+        if raw_content.is_empty() {
             return Err(ApiError::Upstream(
                 "AI provider returned empty content".into(),
             ));
         }
+
+        // When json_mode/rich was requested, the model returns a JSON
+        // envelope rather than plain prose. Extract the human-readable
+        // display text from it instead of showing the raw JSON blob to the
+        // user — a prior bug did exactly that, making answers appear
+        // blank/garbled in the app whenever the model (or a client-supplied
+        // system prompt) used a different JSON schema than expected.
+        let extracted = if json_mode || rich {
+            extract_rich_envelope(&raw_content)
+        } else {
+            None
+        };
+        let content = extracted
+            .as_ref()
+            .and_then(|envelope| envelope.display_text.clone())
+            .filter(|text| !text.trim().is_empty())
+            .unwrap_or(raw_content);
+        let speech_text = extracted.as_ref().and_then(|e| e.speech_text.clone());
+        let blocks = extracted.as_ref().and_then(|e| e.blocks.clone());
+
         let input_tokens = data
             .usage
             .as_ref()
@@ -169,12 +191,15 @@ impl AiGateway {
 
         Ok(AiAnswer {
             content,
+            speech_text,
+            blocks,
             served_from: "model".into(),
             model,
             provider: provider.name.into(),
             input_tokens,
             output_tokens,
-            source_chunks: selected_contexts.to_vec(),
+            source_chunks: selected_contexts,
+            sources: selected_sources.to_vec(),
         })
     }
 
@@ -256,6 +281,52 @@ impl AiGateway {
             output
         }
     }
+}
+
+struct RichEnvelope {
+    display_text: Option<String>,
+    speech_text: Option<String>,
+    blocks: Option<Value>,
+}
+
+/// Parses a model response that was requested in json_mode/rich mode.
+/// Tolerant of a couple of schema shapes seen in practice (the backend's
+/// own right_answer.rich_answer.v1 schema using `renderMarkdown`, and a
+/// simpler `{"answer": "..."}` shape some client-supplied system prompts
+/// use) and of models wrapping JSON in a ```json fenced code block.
+fn extract_rich_envelope(raw: &str) -> Option<RichEnvelope> {
+    let trimmed = raw.trim();
+    let unfenced = trimmed
+        .strip_prefix("```json")
+        .or_else(|| trimmed.strip_prefix("```"))
+        .map(str::trim_start)
+        .and_then(|value| value.strip_suffix("```"))
+        .map(str::trim)
+        .unwrap_or(trimmed);
+
+    let value: Value = serde_json::from_str(unfenced).ok()?;
+    let object = value.as_object()?;
+
+    let display_text = object
+        .get("renderMarkdown")
+        .or_else(|| object.get("answer"))
+        .or_else(|| object.get("content"))
+        .or_else(|| object.get("text"))
+        .and_then(Value::as_str)
+        .map(str::to_string);
+
+    let speech_text = object
+        .get("speechText")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+
+    let blocks = object.get("blocks").cloned();
+
+    Some(RichEnvelope {
+        display_text,
+        speech_text,
+        blocks,
+    })
 }
 
 fn provider_headers(api_key: &str, app_url: &str) -> reqwest::header::HeaderMap {

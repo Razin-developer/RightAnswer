@@ -63,10 +63,13 @@ services:
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       HACKAI_API_KEY: ${HACKAI_API_KEY:-}
       NVIDIA_API_KEY: ${NVIDIA_API_KEY:-}
+      AI_MODEL_FAMILY: ${AI_MODEL_FAMILY:-gemma}
       AI_SIMPLE_MODEL: ${AI_SIMPLE_MODEL:-google/gemma-3-12b-it}
       AI_REASONING_MODEL: ${AI_REASONING_MODEL:-google/gemma-4-31b-it}
       AI_EMBEDDING_MODEL: ${AI_EMBEDDING_MODEL:-perplexity/pplx-embed-v1-0.6b}
       AI_RERANK_MODEL: ${AI_RERANK_MODEL:-nvidia/rerank-qa-mistral-4b}
+      AI_VLM_THINKING_MODEL: ${AI_VLM_THINKING_MODEL:-qwen/qwen3-vl-8b-thinking}
+      AI_VLM_INSTRUCT_MODEL: ${AI_VLM_INSTRUCT_MODEL:-qwen/qwen3-vl-8b-instruct}
       GROQ_API_KEY: ${GROQ_API_KEY:-}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}

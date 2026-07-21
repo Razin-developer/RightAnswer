@@ -3,7 +3,10 @@ use std::time::Duration;
 use sqlx::{postgres::PgPoolOptions, PgPool};
 use uuid::Uuid;
 
-use crate::models::{CachedAnswer, Chat, ChatMessage, User};
+use crate::{
+    content_policy::{is_chapter_enabled, ChapterInfo},
+    models::{CachedAnswer, Chat, ChatMessage, User},
+};
 
 #[derive(Clone)]
 pub struct Database {
@@ -25,17 +28,17 @@ impl Database {
         Ok(())
     }
 
-    /// Subject/chapter catalog for the app's optional chapter picker. Reads
-    /// from the Prisma-managed textbook schema (not this crate's own
-    /// migrations) — only the currently active textbook version per subject
-    /// is included.
-    pub async fn list_catalog(&self) -> Result<Vec<CatalogSubject>, sqlx::Error> {
-        let rows = sqlx::query_as::<_, CatalogRow>(
+    /// Every chapter across every active textbook version, including
+    /// currently-disabled ones (wrong medium, excluded subject, front
+    /// matter) — used for beta-content gating decisions, not for display.
+    pub async fn list_chapter_info(&self) -> Result<Vec<ChapterInfo>, sqlx::Error> {
+        let rows = sqlx::query_as::<_, ChapterInfoRow>(
             r#"
             SELECT
               s.id::text AS subject_id,
               s.name AS subject_name,
               s.code AS subject_code,
+              t.medium::text AS medium,
               ch.id::text AS chapter_id,
               ch.chapter_number,
               ch.title AS chapter_title
@@ -44,30 +47,54 @@ impl Database {
             JOIN "TextbookVersion" tv ON tv.textbook_id = t.id AND tv.is_active = true
             JOIN "Chapter" ch ON ch.textbook_version_id = tv.id
             WHERE s.active = true
-            ORDER BY s.name, ch.chapter_number
+            ORDER BY s.id, ch.chapter_number
             "#,
         )
         .fetch_all(&self.pool)
         .await?;
 
+        Ok(rows
+            .into_iter()
+            .map(|row| {
+                let enabled =
+                    is_chapter_enabled(&row.subject_code, &row.medium, row.chapter_number);
+                ChapterInfo {
+                    chapter_id: row.chapter_id,
+                    chapter_number: row.chapter_number,
+                    chapter_name: row.chapter_title,
+                    subject_id: row.subject_id,
+                    subject_name: row.subject_name,
+                    subject_code: row.subject_code,
+                    medium: row.medium,
+                    enabled,
+                }
+            })
+            .collect())
+    }
+
+    /// Subject/chapter catalog for the app's optional chapter picker —
+    /// enabled chapters only (see content_policy).
+    pub async fn list_catalog(&self) -> Result<Vec<CatalogSubject>, sqlx::Error> {
+        let chapters = self.list_chapter_info().await?;
+
         let mut subjects: Vec<CatalogSubject> = Vec::new();
-        for row in rows {
+        for chapter in chapters.into_iter().filter(|c| c.enabled) {
             let subject = match subjects.last_mut() {
-                Some(existing) if existing.id == row.subject_id => existing,
+                Some(existing) if existing.id == chapter.subject_id => existing,
                 _ => {
                     subjects.push(CatalogSubject {
-                        id: row.subject_id.clone(),
-                        name: row.subject_name.clone(),
-                        code: row.subject_code.clone(),
+                        id: chapter.subject_id.clone(),
+                        name: chapter.subject_name.clone(),
+                        code: chapter.subject_code.clone(),
                         chapters: Vec::new(),
                     });
                     subjects.last_mut().unwrap()
                 }
             };
             subject.chapters.push(CatalogChapter {
-                id: row.chapter_id,
-                number: row.chapter_number,
-                title: row.chapter_title,
+                id: chapter.chapter_id,
+                number: chapter.chapter_number,
+                title: chapter.chapter_name,
             });
         }
         Ok(subjects)
@@ -379,10 +406,11 @@ impl Database {
 }
 
 #[derive(sqlx::FromRow)]
-struct CatalogRow {
+struct ChapterInfoRow {
     subject_id: String,
     subject_name: String,
     subject_code: String,
+    medium: String,
     chapter_id: String,
     chapter_number: i32,
     chapter_title: String,

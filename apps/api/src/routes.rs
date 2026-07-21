@@ -24,7 +24,7 @@ use crate::{
     models::{AiAnswer, AiChatRequest, AuthUser, CachedAnswer, Chat},
     openrouter::AiGateway,
     qdrant::QdrantGateway,
-    rag::select_contexts,
+    rag::{select_contexts, ContextsOutcome},
 };
 
 #[derive(Clone)]
@@ -205,7 +205,7 @@ async fn ai_chat(
 
     if let Some(cached) = state.db.lookup_exact_cache(&exact_key).await? {
         let context_meta = cache_context_meta(&cached);
-        let answer = cached_answer(cached, "exact-cache");
+        let answer = cached_answer(cached, "exact-cache", &context_meta);
         persist_ai_chat(
             &state,
             user.as_ref(),
@@ -218,8 +218,11 @@ async fn ai_chat(
         return Ok(ok(json!({
             "answer": answer,
             "content": answer.content,
+            "speechText": answer.speech_text,
+            "blocks": answer.blocks,
             "servedFrom": answer.served_from,
             "sourceChunks": answer.source_chunks,
+            "sources": answer.sources,
             "subjectId": context_meta.subject_id,
             "subjectName": context_meta.subject_name,
             "chapterId": context_meta.chapter_id,
@@ -242,7 +245,7 @@ async fn ai_chat(
         .await?
     {
         let context_meta = cache_context_meta(&cached);
-        let answer = cached_answer(cached, "semantic-cache");
+        let answer = cached_answer(cached, "semantic-cache", &context_meta);
         persist_ai_chat(
             &state,
             user.as_ref(),
@@ -255,8 +258,11 @@ async fn ai_chat(
         return Ok(ok(json!({
             "answer": answer,
             "content": answer.content,
+            "speechText": answer.speech_text,
+            "blocks": answer.blocks,
             "servedFrom": answer.served_from,
             "sourceChunks": answer.source_chunks,
+            "sources": answer.sources,
             "subjectId": context_meta.subject_id,
             "subjectName": context_meta.subject_name,
             "chapterId": context_meta.chapter_id,
@@ -264,8 +270,23 @@ async fn ai_chat(
         })));
     }
 
-    let selected = select_contexts(&state, &body, question, Some(&question_embedding)).await?;
-    let answer = state.ai.chat(&body, &selected.texts).await?;
+    let outcome = select_contexts(&state, &body, question, Some(&question_embedding)).await?;
+    let selected = match outcome {
+        ContextsOutcome::Ready(selected) => selected,
+        ContextsOutcome::NeedsBetaConfirmation(beta) => {
+            return Ok(ok(json!({
+                "needsBetaConfirmation": true,
+                "chapterId": beta.chapter_id,
+                "chapterName": beta.chapter_name,
+                "subjectName": beta.subject_name,
+                "message": format!(
+                    "\"{}\" from {} is in your syllabus, but that content is still in beta. Do you want the response anyway?",
+                    beta.chapter_name, beta.subject_name
+                )
+            })));
+        }
+    };
+    let answer = state.ai.chat(&body, &selected.sources).await?;
     let subject_id = selected
         .primary_meta
         .subject_id
@@ -310,8 +331,11 @@ async fn ai_chat(
     Ok(ok(json!({
         "answer": answer,
         "content": answer.content,
+        "speechText": answer.speech_text,
+        "blocks": answer.blocks,
         "servedFrom": answer.served_from,
         "sourceChunks": answer.source_chunks,
+        "sources": answer.sources,
         "subjectId": subject_id,
         "subjectName": subject_name,
         "chapterId": selected.primary_meta.chapter_id,
@@ -512,15 +536,32 @@ fn cache_context_meta(cached: &CachedAnswer) -> crate::rag::ContextMeta {
     }
 }
 
-fn cached_answer(cached: CachedAnswer, served_from: &str) -> AiAnswer {
+fn cached_answer(
+    cached: CachedAnswer,
+    served_from: &str,
+    context_meta: &crate::rag::ContextMeta,
+) -> AiAnswer {
+    let sources = cached
+        .source_chunks
+        .iter()
+        .map(|text| crate::models::SourceInfo {
+            text: text.clone(),
+            page_number: None,
+            subject_name: context_meta.subject_name.clone(),
+            chapter_name: context_meta.chapter_name.clone(),
+        })
+        .collect();
     AiAnswer {
         content: cached.answer,
+        speech_text: None,
+        blocks: None,
         served_from: served_from.into(),
         model: cached.model,
         provider: cached.provider,
         input_tokens: 0,
         output_tokens: 0,
         source_chunks: cached.source_chunks,
+        sources,
     }
 }
 
