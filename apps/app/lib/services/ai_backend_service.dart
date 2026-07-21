@@ -84,8 +84,8 @@ class AIBackendService {
         'servedFrom': decoded['servedFrom'] ?? answerMeta['servedFrom'],
         if (sourceChunks is List) 'sourceChunks': sourceChunks,
         if (sources is List) 'sources': sources,
-        if (blocks != null) 'blocks': blocks,
-        if (speechText != null) 'speechText': speechText,
+        'blocks': ?blocks,
+        'speechText': ?speechText,
         // Server-driven classification of which subject/chapter this
         // answer's sources came from — the client no longer picks these.
         'subjectId': decoded['subjectId'],

@@ -131,8 +131,7 @@ class ChatAIService {
       'answerFormat': 'rich',
       if (chapterIds != null && chapterIds.isNotEmpty)
         'chapterIds': chapterIds,
-      if (confirmBetaChapterId != null)
-        'confirmBetaChapterId': confirmBetaChapterId,
+      'confirmBetaChapterId': ?confirmBetaChapterId,
     };
 
     final promptEstimate = _estimateTokens(jsonEncode(messages));
