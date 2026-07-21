@@ -8,6 +8,7 @@ import '../config/app_config.dart';
 import '../models/app_exception.dart';
 import 'auth_service.dart';
 import 'connectivity_service.dart';
+import 'sse_client.dart';
 
 class AIBackendService {
   AIBackendService._();
@@ -95,6 +96,49 @@ class AIBackendService {
       }),
       200,
       headers: {'content-type': 'application/json'},
+    );
+  }
+
+  /// Streams a chat completion from `/api/ai/chat/stream` as parsed SSE
+  /// events (`chunk` / `beta` / `done` / `error`) — the real incremental
+  /// streaming endpoint, as opposed to [postChatCompletions] which is a
+  /// single request/response call.
+  ///
+  /// Reuses [_chatPayloadToBackend] so the request body shape stays
+  /// identical to the non-streaming path; only the URL and response
+  /// handling differ. Never throws — connection and HTTP-status failures
+  /// are surfaced as `error` SseEvents, same as genuine server-sent errors,
+  /// so callers can handle every failure mode from one place.
+  static Stream<SseEvent> streamChatCompletions({
+    required Map<String, dynamic> payload,
+    Duration connectTimeout = const Duration(seconds: 30),
+  }) async* {
+    requireChatApiKey();
+
+    if (!ConnectivityService.instance.isOnline) {
+      yield const SseEvent(
+        event: 'error',
+        data: {
+          'message':
+              "You're offline — connect to the internet to use AI features.",
+          'kind': 'connection',
+        },
+      );
+      return;
+    }
+
+    final backendPayload = _chatPayloadToBackend(payload);
+    final token = await AuthService.instance.getToken();
+
+    yield* SseClient.postJsonStream(
+      uri: Uri.parse('${AppConfig.apiUrl}/api/ai/chat/stream'),
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'text/event-stream',
+        if (token != null) 'Authorization': 'Bearer $token',
+      },
+      body: backendPayload,
+      connectTimeout: connectTimeout,
     );
   }
 

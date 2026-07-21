@@ -261,6 +261,7 @@ class _ChatScreenState extends State<ChatScreen> {
       String? betaSubjectName;
       String? betaMessage;
 
+      final throttle = _StreamFlushThrottle();
       await for (final event in ChatAIService.instance.streamMessage(
         userContent: text,
         imagePath: imagePath,
@@ -280,31 +281,39 @@ class _ChatScreenState extends State<ChatScreen> {
           betaMessage = event.betaMessage;
           break;
         }
-        setState(() {
-          _messages = _messages
-              .map(
-                (message) => message.id == assistantMsg.id
-                    ? message.copyWith(
-                        content: event.content,
-                        tokenCount: event.inputTokens + event.outputTokens,
-                        cost: event.cost,
-                        sourceChunks: event.isDone ? event.sourceChunks : null,
-                        blocks: event.isDone ? event.blocks : null,
-                        sources: event.isDone ? event.sources : null,
-                      )
-                    : message,
-              )
-              .toList();
-          if (event.isDone) {
-            _isGenerating = false;
-            _streamingMessageId = null;
-            classifiedSubjectId = event.subjectId;
-            classifiedSubjectName = event.subjectName;
-            classifiedChapterId = event.chapterId;
-            classifiedChapterName = event.chapterName;
-          }
-        });
-        _scrollToBottom();
+        final updatedMessages = _messages
+            .map(
+              (message) => message.id == assistantMsg.id
+                  ? message.copyWith(
+                      content: event.content,
+                      tokenCount: event.inputTokens + event.outputTokens,
+                      cost: event.cost,
+                      sourceChunks: event.isDone ? event.sourceChunks : null,
+                      blocks: event.isDone ? event.blocks : null,
+                      sources: event.isDone ? event.sources : null,
+                    )
+                  : message,
+            )
+            .toList();
+        // Coalesce rapid `chunk` updates into at most one rebuild per
+        // ~80ms — the terminal event always flushes immediately regardless,
+        // so the final render is never stale. See _StreamFlushThrottle.
+        if (throttle.shouldFlush(force: event.isDone)) {
+          setState(() {
+            _messages = updatedMessages;
+            if (event.isDone) {
+              _isGenerating = false;
+              _streamingMessageId = null;
+              classifiedSubjectId = event.subjectId;
+              classifiedSubjectName = event.subjectName;
+              classifiedChapterId = event.chapterId;
+              classifiedChapterName = event.chapterName;
+            }
+          });
+          _scrollToBottom();
+        } else {
+          _messages = updatedMessages;
+        }
       }
 
       if (betaConfirmationNeeded) {
@@ -474,6 +483,7 @@ class _ChatScreenState extends State<ChatScreen> {
     _scrollToBottom();
 
     try {
+      final throttle = _StreamFlushThrottle();
       await for (final event in ChatAIService.instance.streamMessage(
         userContent: userMsg.content,
         imagePath: userMsg.imagePath,
@@ -483,27 +493,32 @@ class _ChatScreenState extends State<ChatScreen> {
         history: withoutOld.take(idx - 1).toList(),
       )) {
         if (!mounted) return;
-        setState(() {
-          _messages = _messages
-              .map(
-                (message) => message.id == replacement.id
-                    ? message.copyWith(
-                        content: event.content,
-                        tokenCount: event.inputTokens + event.outputTokens,
-                        cost: event.cost,
-                        sourceChunks: event.isDone ? event.sourceChunks : null,
-                        blocks: event.isDone ? event.blocks : null,
-                        sources: event.isDone ? event.sources : null,
-                      )
-                    : message,
-              )
-              .toList();
-          if (event.isDone) {
-            _isGenerating = false;
-            _streamingMessageId = null;
-          }
-        });
-        _scrollToBottom();
+        final updatedMessages = _messages
+            .map(
+              (message) => message.id == replacement.id
+                  ? message.copyWith(
+                      content: event.content,
+                      tokenCount: event.inputTokens + event.outputTokens,
+                      cost: event.cost,
+                      sourceChunks: event.isDone ? event.sourceChunks : null,
+                      blocks: event.isDone ? event.blocks : null,
+                      sources: event.isDone ? event.sources : null,
+                    )
+                  : message,
+            )
+            .toList();
+        if (throttle.shouldFlush(force: event.isDone)) {
+          setState(() {
+            _messages = updatedMessages;
+            if (event.isDone) {
+              _isGenerating = false;
+              _streamingMessageId = null;
+            }
+          });
+          _scrollToBottom();
+        } else {
+          _messages = updatedMessages;
+        }
       }
 
       final finalAssistant = _messages.firstWhere(
@@ -1157,6 +1172,37 @@ class _ChatScreenState extends State<ChatScreen> {
         ],
       ),
     );
+  }
+}
+
+// ── Stream flush throttling ──────────────────────────────────────────────
+//
+// SSE `chunk` events can arrive many times a second (down to per-token).
+// GptMarkdown re-parses and re-lays-out the *entire* accumulated message on
+// every rebuild, so calling setState on every single delta would mean
+// dozens of full markdown re-parses per second for a stream the user only
+// perceives at reading speed — wasted CPU with no visible benefit, and
+// potential jank on longer answers as the accumulated text (and thus the
+// re-parse cost) grows. Coalescing to one rebuild per ~80ms keeps the
+// stream feeling instant (first content still renders as soon as it
+// arrives, since the very first update always flushes) while capping
+// rebuild frequency to something well under the 60fps/16ms frame budget's
+// concern threshold for a text-heavy widget tree.
+class _StreamFlushThrottle {
+  static const Duration _interval = Duration(milliseconds: 80);
+  DateTime _last = DateTime.fromMillisecondsSinceEpoch(0);
+
+  /// Returns true if enough time has passed since the last flush (or this
+  /// is the very first call) to justify a rebuild — or unconditionally
+  /// when [force] is set, which callers use for the terminal event so the
+  /// final render is never left stale behind the throttle window.
+  bool shouldFlush({bool force = false}) {
+    final now = DateTime.now();
+    if (force || now.difference(_last) >= _interval) {
+      _last = now;
+      return true;
+    }
+    return false;
   }
 }
 

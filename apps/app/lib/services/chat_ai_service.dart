@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:http/http.dart' as http;
 import 'package:uuid/uuid.dart';
 
 import '../constants/app_prompts.dart';
@@ -77,6 +76,16 @@ class ChatAIService {
   static const double _defaultInputPrice = 0.0005;
   static const double _defaultOutputPrice = 0.0015;
 
+  /// Streams a chat answer incrementally from the real SSE endpoint
+  /// (`/api/ai/chat/stream`). Yields a `ChatAIStreamEvent` per `chunk` with
+  /// the full accumulated text so far (never `isDone`), then exactly one
+  /// terminal event: either a normal `isDone` answer, a
+  /// `needsBetaConfirmation` prompt, or a thrown [AppException] on error.
+  ///
+  /// Note: the streaming endpoint is plain-Markdown-only — it never returns
+  /// `blocks` or `speechText` (no rich/JSON mode, no vision refinement pass;
+  /// see apps/api's `ai_chat_stream` doc comment). Callers that need those
+  /// must keep using the non-streaming path.
   Stream<ChatAIStreamEvent> streamMessage({
     required String userContent,
     String? imagePath,
@@ -94,8 +103,6 @@ class ChatAIService {
     String? confirmBetaChapterId,
   }) async* {
     AIBackendService.requireChatApiKey();
-    final model =
-        await _settingsRepo.get(SettingKeys.openAiModel) ?? 'gpt-4o-mini';
 
     await _checkDailyLimit();
 
@@ -120,97 +127,96 @@ class ChatAIService {
     // reranks — the client just sends the question and lets the server
     // decide which subject/chapter context applies.
     final payload = {
-      'model': model,
       'messages': messages,
       'temperature': _temperature(reasoningLevel),
-      'max_tokens': 4096,
       'responseLength': responseLength,
       'reasoningLevel': reasoningLevel,
       'responseLanguage': responseLanguage,
-      'richAnswer': true,
-      'answerFormat': 'rich',
       if (chapterIds != null && chapterIds.isNotEmpty)
         'chapterIds': chapterIds,
       'confirmBetaChapterId': ?confirmBetaChapterId,
     };
 
+    // The stream contract doesn't return token usage, so cost/usage are
+    // estimated client-side from prompt/response text — same estimator the
+    // non-streaming path falls back to when the backend omits `usage`.
     final promptEstimate = _estimateTokens(jsonEncode(messages));
+    final buffer = StringBuffer();
+    var reachedTerminalEvent = false;
 
-    try {
-      final resp = await AIBackendService.postChatCompletions(
-        payload: payload,
-        timeout: const Duration(seconds: 120),
-      );
-      if (resp.statusCode != 200) {
-        throw _buildException(resp);
+    await for (final event in AIBackendService.streamChatCompletions(
+      payload: payload,
+      connectTimeout: const Duration(seconds: 30),
+    )) {
+      switch (event.event) {
+        case 'chunk':
+          final delta = event.data['delta']?.toString() ?? '';
+          if (delta.isEmpty) break;
+          buffer.write(delta);
+          yield ChatAIStreamEvent(content: buffer.toString());
+          break;
+
+        case 'beta':
+          reachedTerminalEvent = true;
+          yield ChatAIStreamEvent(
+            content: '',
+            isDone: true,
+            needsBetaConfirmation: true,
+            betaChapterId: event.data['chapterId'] as String?,
+            betaChapterName: event.data['chapterName'] as String?,
+            betaSubjectName: event.data['subjectName'] as String?,
+            betaMessage: event.data['message'] as String?,
+          );
+          return;
+
+        case 'done':
+          reachedTerminalEvent = true;
+          final content = buffer.toString().trim();
+          final outputTokens = _estimateTokens(content);
+          final cost = await _calculateCost(promptEstimate, outputTokens);
+          final backendSources = _asMapList(event.data['sources']);
+
+          await _usageRepo.insert(
+            UsageLog(
+              id: const Uuid().v4(),
+              toolType: 'chat',
+              inputTokensEstimate: promptEstimate,
+              outputTokensEstimate: outputTokens,
+              estimatedCost: cost,
+              createdAt: DateTime.now(),
+            ),
+          );
+
+          yield ChatAIStreamEvent(
+            content: content,
+            isDone: true,
+            inputTokens: promptEstimate,
+            outputTokens: outputTokens,
+            cost: cost,
+            subjectId: event.data['subjectId'] as String?,
+            subjectName: event.data['subjectName'] as String?,
+            chapterId: event.data['chapterId'] as String?,
+            chapterName: event.data['chapterName'] as String?,
+            sources: backendSources ?? const [],
+          );
+          return;
+
+        case 'error':
+          reachedTerminalEvent = true;
+          throw _buildStreamException(event.data);
+
+        default:
+          // Unknown/keep-alive event types are ignored rather than treated
+          // as fatal — forward compatible with server additions.
+          break;
       }
+    }
 
-      final data = jsonDecode(resp.body) as Map<String, dynamic>;
-
-      if (data['needsBetaConfirmation'] == true) {
-        yield ChatAIStreamEvent(
-          content: '',
-          isDone: true,
-          needsBetaConfirmation: true,
-          betaChapterId: data['chapterId'] as String?,
-          betaChapterName: data['chapterName'] as String?,
-          betaSubjectName: data['subjectName'] as String?,
-          betaMessage: data['message'] as String?,
-        );
-        return;
-      }
-
-      final content =
-          (data['choices'][0]['message']['content'] as String).trim();
-      final usage = data['usage'] as Map<String, dynamic>?;
-      final inputTokens = (usage?['prompt_tokens'] as int?) ?? promptEstimate;
-      final outputTokens =
-          (usage?['completion_tokens'] as int?) ?? _estimateTokens(content);
-      final cost = await _calculateCost(inputTokens, outputTokens);
-      final backendSourceChunks = data['sourceChunks'] is List
-          ? List<String>.from(
-              (data['sourceChunks'] as List).map((value) => value.toString()),
-            )
-          : const <String>[];
-      final backendSources = _asMapList(data['sources']);
-      final backendBlocks = _asMapList(data['blocks']);
-      final speechText = data['speechText'] as String?;
-
-      await _usageRepo.insert(
-        UsageLog(
-          id: const Uuid().v4(),
-          toolType: 'chat',
-          inputTokensEstimate: inputTokens,
-          outputTokensEstimate: outputTokens,
-          estimatedCost: cost,
-          createdAt: DateTime.now(),
-        ),
-      );
-
-      yield ChatAIStreamEvent(
-        content: content,
-        isDone: true,
-        inputTokens: inputTokens,
-        outputTokens: outputTokens,
-        cost: cost,
-        sourceChunks: backendSourceChunks,
-        subjectId: data['subjectId'] as String?,
-        subjectName: data['subjectName'] as String?,
-        chapterId: data['chapterId'] as String?,
-        chapterName: data['chapterName'] as String?,
-        blocks: backendBlocks,
-        sources: backendSources ?? const [],
-        speechText: speechText,
-      );
-    } on TimeoutException {
+    if (!reachedTerminalEvent) {
+      // The connection closed (or the stream ended) before any terminal
+      // event (`done`/`beta`/`error`) arrived — a mid-stream disconnect.
       throw AppException.network(
-        'The AI response took too long. Please try again.',
-      );
-    } on SocketException {
-      throw AppException.network('No internet connection.');
-    } on http.ClientException {
-      throw AppException.network(
-        'Could not reach the backend. Please try again shortly.',
+        'The connection was lost before the response finished. Please try again.',
       );
     }
   }
@@ -332,25 +338,35 @@ class ChatAIService {
   int _estimateTokens(String text) =>
       RetrievalService(_chunkRepo).estimateTokens(text);
 
-  AppException _buildException(http.Response response) {
-    var message = 'Unexpected error from the backend.';
-    try {
-      final decoded = jsonDecode(response.body) as Map<String, dynamic>;
-      message = decoded['error']?['message'] as String? ?? message;
-    } catch (_) {
-      // Fall back to the generic message if the response is not JSON.
-    }
+  /// Classifies an `error` SseEvent's data into the right [AppException]
+  /// type, mirroring the non-streaming path's status-code handling (see
+  /// `AIBackendService._postJson`'s callers). `kind`/`statusCode` are set by
+  /// [SseClient] itself for connection- and HTTP-status-level failures; a
+  /// genuine `event: error` frame sent by the server carries neither and is
+  /// treated as a generic service error.
+  AppException _buildStreamException(Map<String, dynamic> data) {
+    final message =
+        data['message']?.toString() ??
+        'The AI stream failed. Please try again.';
+    final kind = data['kind'] as String?;
 
-    if (response.statusCode == 401 || response.statusCode == 403) {
-      return AppException.authentication('Sign in again and retry.');
+    if (kind == 'connection') {
+      return AppException.network(message);
     }
-    if (response.statusCode == 429) {
-      return AppException.rateLimit(message);
-    }
-    if (response.statusCode >= 500) {
-      return AppException.service(
-        'The backend is having trouble right now. Please try again soon.',
-      );
+    if (kind == 'httpStatus') {
+      final statusCode = data['statusCode'] as int? ?? 0;
+      if (statusCode == 401 || statusCode == 403) {
+        return AppException.authentication('Sign in again and retry.');
+      }
+      if (statusCode == 429) {
+        return AppException.rateLimit(message);
+      }
+      if (statusCode >= 500) {
+        return AppException.service(
+          'The backend is having trouble right now. Please try again soon.',
+        );
+      }
+      return AppException.service(message);
     }
     return AppException.service(message);
   }
