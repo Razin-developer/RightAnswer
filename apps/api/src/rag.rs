@@ -132,12 +132,23 @@ pub async fn select_contexts(
         .map(|chunk| chunk.score)
         .unwrap_or(f32::MIN);
 
-    // Beta gate: peek at the best unrestricted match (embeddings only, no
-    // rerank — rerank is comparatively expensive and unnecessary just to
-    // classify readiness) before committing to a real answer.
+    // Beta gate: peek at the best match outside Front Matter (embeddings
+    // only, no rerank — rerank is comparatively expensive and unnecessary
+    // just to classify readiness) before committing to a real answer.
+    // Front Matter (chapter 0) is generic textbook boilerplate — legend,
+    // table of contents — never real subject content, and its short,
+    // generic phrasing scores deceptively well against short questions in
+    // any language. It's excluded from the peek scope entirely rather than
+    // relying on the margin to filter it out, since it isn't a genuine
+    // "better match" case, it's a structural false positive.
+    let peek_scope: Vec<String> = chapter_index
+        .iter()
+        .filter(|info| info.chapter_number != 0)
+        .map(|info| info.chapter_id.clone())
+        .collect();
     let peek = state
         .qdrant
-        .search(embedding, &[], 3)
+        .search(embedding, &peek_scope, 3)
         .await
         .unwrap_or_default();
     if let Some(top) = peek.first() {
