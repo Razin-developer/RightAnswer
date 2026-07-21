@@ -74,12 +74,12 @@ TextStyle _inter({
       color: color,
     );
 
-TextStyle _mono({double size = 13, Color? color}) =>
-    GoogleFonts.jetBrainsMono(
-      fontSize: size,
-      height: 1.6,
-      color: color,
-    );
+// TextStyle _mono({double size = 13, Color? color}) =>
+//     GoogleFonts.jetBrainsMono(
+//       fontSize: size,
+//       height: 1.6,
+//       color: color,
+//     );
 
 // ── Text Themes ───────────────────────────────────────────────────────────────
 TextTheme _textTheme(Color displayColor, Color bodyColor) => TextTheme(
