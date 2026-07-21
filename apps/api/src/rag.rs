@@ -39,6 +39,20 @@ struct ChunkMeta {
     chapter_id: Option<String>,
     chapter_name: Option<String>,
     page_number: Option<i32>,
+    image_url: Option<String>,
+}
+
+/// Qdrant stores image_url as a path relative to storage/ (e.g.
+/// "textbooks/processed/sslc/mathematics/en/.../page-057-embedded-01.jpeg"),
+/// which nginx serves as a static file under /textbook-assets/ — see
+/// deploy/nginx/rightanswer.conf. Turns that into a full URL the app can
+/// hand directly to an image widget.
+fn full_image_url(app_url: &str, relative_path: &str) -> String {
+    format!(
+        "{}/textbook-assets/{}",
+        app_url.trim_end_matches('/'),
+        relative_path.trim_start_matches('/')
+    )
 }
 
 /// Retrieves and reranks context for a question. Subject/chapter selection
@@ -72,6 +86,7 @@ pub async fn select_contexts(
             page_number: None,
             subject_name: None,
             chapter_name: None,
+            image_url: None,
         })
         .collect();
 
@@ -191,9 +206,12 @@ async fn finalize(
             .page_number
             .map(|page| format!("Page {page}: "))
             .unwrap_or_default();
-        let image = chunk
+        let full_image_url = chunk
             .image_url
-            .clone()
+            .as_deref()
+            .map(|relative| full_image_url(&state.config.app_url, relative));
+        let image = full_image_url
+            .as_ref()
             .map(|url| format!("\nImage: {url}"))
             .unwrap_or_default();
         let text = format!("{page}{}{}", chunk.text, image);
@@ -205,6 +223,7 @@ async fn finalize(
                 chapter_id: chunk.chapter_id,
                 chapter_name: chunk.chapter_name,
                 page_number: chunk.page_number,
+                image_url: full_image_url,
             },
         );
         candidates.push(text);
@@ -241,6 +260,7 @@ async fn finalize(
                 page_number: meta.and_then(|meta| meta.page_number),
                 subject_name: meta.and_then(|meta| meta.subject_name.clone()),
                 chapter_name: meta.and_then(|meta| meta.chapter_name.clone()),
+                image_url: meta.and_then(|meta| meta.image_url.clone()),
             }
         })
         .collect();

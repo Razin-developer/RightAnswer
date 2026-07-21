@@ -19,12 +19,17 @@ cd "$(dirname "$0")/../.."
 echo "[clean] before:"
 df -h / | tail -1
 
-# storage/textbooks (processed page images) and storage/imports (raw source
-# PDFs) are git-lfs content only needed during the one-time ingestion run
-# that already happened — the resulting embeddings/text live in Postgres
-# and Qdrant, which is what the running app actually reads. Nothing on this
-# server currently serves these image files over HTTP.
-for dir in storage/textbooks storage/imports storage/seeds; do
+# storage/imports (raw source PDFs) is git-lfs content only needed during
+# the one-time ingestion run that already happened — the resulting
+# embeddings/text live in Postgres and Qdrant, which is what the running app
+# actually reads for generation. storage/seeds is a one-time restore
+# input, pulled back on demand by restore-seed.sh if needed again.
+#
+# storage/textbooks is deliberately NOT cleaned here: nginx serves it live
+# at /textbook-assets/ (see deploy/nginx/rightanswer.conf) for the app's
+# sources drawer (page illustrations/diagrams/tables) — deleting it would
+# break real, in-use image URLs, not just reclaim dead weight.
+for dir in storage/imports storage/seeds; do
   if [[ -d "$dir" ]]; then
     size=$(du -sh "$dir" 2>/dev/null | cut -f1)
     rm -rf "${dir:?}"/*

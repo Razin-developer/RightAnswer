@@ -582,6 +582,12 @@ fn cached_answer(
             page_number: None,
             subject_name: context_meta.subject_name.clone(),
             chapter_name: context_meta.chapter_name.clone(),
+            // The cached text itself carries "\nImage: <full url>" inline
+            // (see rag::finalize) — pull it back out rather than losing
+            // image sources on a cache hit.
+            image_url: text
+                .split_once("\nImage: ")
+                .map(|(_, url)| url.trim().to_string()),
         })
         .collect();
     AiAnswer {

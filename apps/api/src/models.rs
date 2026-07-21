@@ -111,6 +111,10 @@ pub struct SourceInfo {
     pub page_number: Option<i32>,
     pub subject_name: Option<String>,
     pub chapter_name: Option<String>,
+    /// Full, directly-fetchable URL to the source page's embedded
+    /// illustration/diagram/table image, when the retrieved chunk has one
+    /// (served as a static file by nginx — see content_assets::image_url).
+    pub image_url: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
