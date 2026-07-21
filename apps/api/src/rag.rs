@@ -98,23 +98,53 @@ pub async fn select_contexts(
         .map(|info| (info.chapter_id.as_str(), info))
         .collect();
 
-    // Beta gate: peek at the best match (embeddings only, no rerank —
-    // rerank is comparatively expensive and unnecessary just to classify
-    // readiness) before committing to a real answer.
-    let peek_scope: Vec<String> = if explicit_chapter_ids.is_empty() {
-        Vec::new()
-    } else {
+    // A disabled chapter only trips the beta gate when it's a genuinely
+    // *better* match than anything the enabled scope offers — otherwise a
+    // low-relevance disabled hit (e.g. shared boilerplate text, or a
+    // question that's actually well-covered by enabled content) would
+    // needlessly block a perfectly answerable question. Qdrant scores are
+    // cosine similarity in [-1, 1]; a hit has to beat the best enabled
+    // score by this margin to count as "actually better", not just present.
+    const BETA_GATE_MARGIN: f32 = 0.03;
+
+    let search_scope: Vec<String> = if !explicit_chapter_ids.is_empty() {
         explicit_chapter_ids.clone()
+    } else {
+        let mut ids: Vec<String> = chapter_index
+            .iter()
+            .filter(|info| info.enabled)
+            .map(|info| info.chapter_id.clone())
+            .collect();
+        if let Some(id) = &confirmed_chapter_id {
+            if !ids.contains(id) {
+                ids.push(id.clone());
+            }
+        }
+        ids
     };
+    let enabled_scope_results = state
+        .qdrant
+        .search(embedding, &search_scope, 12)
+        .await
+        .unwrap_or_default();
+    let enabled_top_score = enabled_scope_results
+        .first()
+        .map(|chunk| chunk.score)
+        .unwrap_or(f32::MIN);
+
+    // Beta gate: peek at the best unrestricted match (embeddings only, no
+    // rerank — rerank is comparatively expensive and unnecessary just to
+    // classify readiness) before committing to a real answer.
     let peek = state
         .qdrant
-        .search(embedding, &peek_scope, 3)
+        .search(embedding, &[], 3)
         .await
         .unwrap_or_default();
     if let Some(top) = peek.first() {
         let already_confirmed = confirmed_chapter_id.is_some()
             && confirmed_chapter_id.as_deref() == top.chapter_id.as_deref();
-        if !already_confirmed {
+        let beats_enabled_scope = top.score > enabled_top_score + BETA_GATE_MARGIN;
+        if !already_confirmed && beats_enabled_scope {
             if let Some(info) = top.chapter_id.as_deref().and_then(|id| index_by_id.get(id)) {
                 if !info.enabled {
                     return Ok(ContextsOutcome::NeedsBetaConfirmation(BetaConfirmation {
@@ -127,29 +157,8 @@ pub async fn select_contexts(
         }
     }
 
-    let search_scope: Vec<String> = if !explicit_chapter_ids.is_empty() {
-        explicit_chapter_ids
-    } else {
-        let mut ids: Vec<String> = chapter_index
-            .iter()
-            .filter(|info| info.enabled)
-            .map(|info| info.chapter_id.clone())
-            .collect();
-        if let Some(id) = confirmed_chapter_id {
-            if !ids.contains(&id) {
-                ids.push(id);
-            }
-        }
-        ids
-    };
-    let retrieved = state
-        .qdrant
-        .search(embedding, &search_scope, 12)
-        .await
-        .unwrap_or_default();
-
     Ok(ContextsOutcome::Ready(
-        finalize(direct_sources, retrieved, question, state).await,
+        finalize(direct_sources, enabled_scope_results, question, state).await,
     ))
 }
 

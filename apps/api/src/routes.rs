@@ -201,6 +201,7 @@ async fn ai_chat(
         reasoning_level,
         body.subject_id.as_deref(),
         &chapter_ids,
+        body.confirm_beta_chapter_id.as_deref(),
     );
 
     if let Some(cached) = state
@@ -236,20 +237,28 @@ async fn ai_chat(
     }
 
     let question_embedding = state.ai.embed(question).await.unwrap_or_default();
-    if let Some(cached) = state
-        .db
-        .lookup_semantic_cache(
-            &question_embedding,
-            state.config.semantic_cache_threshold,
-            body.response_language.as_deref(),
-            response_length,
-            reasoning_level,
-            body.subject_id.as_deref(),
-            &chapter_ids,
-        )
-        .await?
-        .filter(|cached| !is_degenerate_answer(&cached.answer))
-    {
+    let semantic_cached = if body.confirm_beta_chapter_id.is_some() {
+        // Never consult semantic cache for a beta-confirmed request: fuzzy
+        // matching ignores confirmation state entirely, so it could hand
+        // back an unrelated cached answer instead of honoring the explicit
+        // bypass. Always regenerate fresh for these.
+        None
+    } else {
+        state
+            .db
+            .lookup_semantic_cache(
+                &question_embedding,
+                state.config.semantic_cache_threshold,
+                body.response_language.as_deref(),
+                response_length,
+                reasoning_level,
+                body.subject_id.as_deref(),
+                &chapter_ids,
+            )
+            .await?
+            .filter(|cached| !is_degenerate_answer(&cached.answer))
+    };
+    if let Some(cached) = semantic_cached {
         let context_meta = cache_context_meta(&cached);
         let answer = cached_answer(cached, "semantic-cache", &context_meta);
         persist_ai_chat(
@@ -303,27 +312,36 @@ async fn ai_chat(
         .subject_name
         .as_deref()
         .or(body.subject_name.as_deref());
-    let _ = state
-        .db
-        .store_answer_cache(
-            &exact_key,
-            &normalized_question,
-            question,
-            &answer.content,
-            &question_embedding,
-            &answer.model,
-            &answer.provider,
-            body.response_language.as_deref(),
-            response_length,
-            reasoning_level,
-            subject_id,
-            subject_name,
-            &chapter_ids,
-            &answer.source_chunks,
-            answer.input_tokens,
-            answer.output_tokens,
-        )
-        .await;
+    // Beta-confirmed answers are never cached: exact-cache and
+    // semantic-cache share the same answer_cache table, and semantic
+    // lookup matches purely on embedding similarity + subject/chapter —
+    // it has no way to know a cached row required confirmation. Caching
+    // it would let a differently-worded, unconfirmed request semantically
+    // match straight to bypassed beta content. These are rare/edge-case
+    // requests, so losing caching here is a fine tradeoff for correctness.
+    if body.confirm_beta_chapter_id.is_none() {
+        let _ = state
+            .db
+            .store_answer_cache(
+                &exact_key,
+                &normalized_question,
+                question,
+                &answer.content,
+                &question_embedding,
+                &answer.model,
+                &answer.provider,
+                body.response_language.as_deref(),
+                response_length,
+                reasoning_level,
+                subject_id,
+                subject_name,
+                &chapter_ids,
+                &answer.source_chunks,
+                answer.input_tokens,
+                answer.output_tokens,
+            )
+            .await;
+    }
     persist_ai_chat(
         &state,
         user.as_ref(),
@@ -603,6 +621,7 @@ fn normalize_question(question: &str) -> String {
         .join(" ")
 }
 
+#[allow(clippy::too_many_arguments)]
 fn cache_key(
     normalized_question: &str,
     language: Option<&str>,
@@ -610,7 +629,12 @@ fn cache_key(
     reasoning_level: &str,
     subject_id: Option<&str>,
     chapter_ids: &[String],
+    confirm_beta_chapter_id: Option<&str>,
 ) -> String {
+    // confirm_beta_chapter_id is part of the key deliberately: a
+    // beta-confirmed answer must never be served back to a plain,
+    // unconfirmed request for the same question — that would silently
+    // defeat the beta gate for every user after the first confirmation.
     let input = json!({
         "question": normalized_question,
         "language": language.unwrap_or(""),
@@ -618,6 +642,7 @@ fn cache_key(
         "reasoningLevel": reasoning_level,
         "subjectId": subject_id.unwrap_or(""),
         "chapterIds": chapter_ids,
+        "confirmBetaChapterId": confirm_beta_chapter_id.unwrap_or(""),
     })
     .to_string();
     let digest = Sha256::digest(input.as_bytes());
