@@ -97,7 +97,7 @@ pub async fn select_contexts(
     let embedding = if let Some(embedding) = question_embedding {
         embedding
     } else {
-        owned_embedding = state.ai.embed(question).await.unwrap_or_default();
+        owned_embedding = state.ai.embed(question).await.unwrap_or_default().0;
         &owned_embedding
     };
 

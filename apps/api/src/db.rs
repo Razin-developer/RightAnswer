@@ -444,13 +444,26 @@ struct CacheCandidate {
     chapter_ids: Vec<String>,
 }
 
+/// Rough per-model pricing tiers (USD per million tokens) for admin-dashboard
+/// cost estimates — not exact invoiced pricing (HackAI/OpenRouter route
+/// through several upstream providers whose rates aren't exposed per-call),
+/// but distinguishes model families instead of one binary guess, so relative
+/// cost between e.g. embeddings vs. reasoning chat is meaningful.
 fn estimate_cost(model: &str, input_tokens: i32, output_tokens: i32) -> f64 {
-    let (input_per_million, output_per_million) =
-        if model.contains("gemma-4") || model.contains("reasoning") {
-            (0.20, 0.40)
-        } else {
-            (0.05, 0.10)
-        };
+    let (input_per_million, output_per_million) = if model.contains("embed") {
+        (0.02, 0.0)
+    } else if model.contains("vl") {
+        // Vision calls: image tokens dominate real cost and aren't counted
+        // here at all (no per-image token count from the provider), so
+        // this consistently undercounts actual vision spend.
+        (0.20, 0.40)
+    } else if model.contains("gemma-4") || model.contains("qwen3-14b") {
+        (0.20, 0.40)
+    } else if model.contains("gemma-3") || model.contains("qwen3-8b") {
+        (0.05, 0.10)
+    } else {
+        (0.10, 0.20)
+    };
     (input_tokens as f64 / 1_000_000.0) * input_per_million
         + (output_tokens as f64 / 1_000_000.0) * output_per_million
 }

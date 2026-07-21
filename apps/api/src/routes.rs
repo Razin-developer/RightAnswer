@@ -239,7 +239,20 @@ async fn ai_chat(
         })));
     }
 
-    let question_embedding = state.ai.embed(question).await.unwrap_or_default();
+    let (question_embedding, embed_input_tokens) =
+        state.ai.embed(question).await.unwrap_or_default();
+    let _ = state
+        .db
+        .record_usage(
+            user.as_ref().map(|u| u.id),
+            "/api/ai/chat#embed",
+            state.config.provider()?.name,
+            &state.config.embedding_model,
+            embed_input_tokens,
+            0,
+            "model",
+        )
+        .await;
     let semantic_cached = if body.confirm_beta_chapter_id.is_some() {
         // Never consult semantic cache for a beta-confirmed request: fuzzy
         // matching ignores confirmation state entirely, so it could hand
@@ -442,7 +455,20 @@ async fn ai_chat_stream(
         );
     }
 
-    let question_embedding = state.ai.embed(&question).await.unwrap_or_default();
+    let (question_embedding, embed_input_tokens) =
+        state.ai.embed(&question).await.unwrap_or_default();
+    let _ = state
+        .db
+        .record_usage(
+            user.as_ref().map(|u| u.id),
+            "/api/ai/chat/stream#embed",
+            state.config.provider()?.name,
+            &state.config.embedding_model,
+            embed_input_tokens,
+            0,
+            "model",
+        )
+        .await;
     let semantic_cached = if body.confirm_beta_chapter_id.is_some() {
         None
     } else {
@@ -711,13 +737,27 @@ struct EmbeddingRequest {
 
 async fn embeddings(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Json(body): Json<EmbeddingRequest>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>, ApiError> {
     let text = body
         .text
         .or(body.input)
         .ok_or_else(|| ApiError::BadRequest("text is required".into()))?;
-    let embedding = state.ai.embed(&text).await?;
+    let user = user_from_headers(&state, &headers).await?;
+    let (embedding, input_tokens) = state.ai.embed(&text).await?;
+    let _ = state
+        .db
+        .record_usage(
+            user.as_ref().map(|u| u.id),
+            "/api/ai/embeddings",
+            state.config.provider()?.name,
+            &state.config.embedding_model,
+            input_tokens,
+            0,
+            "model",
+        )
+        .await;
     Ok(ok(json!({
         "model": state.config.embedding_model,
         "embedding": embedding

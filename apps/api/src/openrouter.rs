@@ -39,11 +39,18 @@ struct Usage {
 #[derive(Debug, Deserialize)]
 struct EmbeddingResponse {
     data: Vec<EmbeddingItem>,
+    usage: Option<EmbeddingUsage>,
 }
 
 #[derive(Debug, Deserialize)]
 struct EmbeddingItem {
     embedding: Vec<f32>,
+}
+
+#[derive(Debug, Deserialize)]
+struct EmbeddingUsage {
+    prompt_tokens: Option<i32>,
+    total_tokens: Option<i32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -464,7 +471,12 @@ impl AiGateway {
         })
     }
 
-    pub async fn embed(&self, text: &str) -> Result<Vec<f32>, ApiError> {
+    /// Returns the embedding vector plus the input token count reported by
+    /// the provider (0 if unavailable) — the caller is responsible for
+    /// recording it into ai_usage_events, since embeddings are a real,
+    /// billed provider cost like chat calls, just easy to lose track of
+    /// since they happen implicitly during retrieval.
+    pub async fn embed(&self, text: &str) -> Result<(Vec<f32>, i32), ApiError> {
         let provider = self.config.provider()?;
         let response = self
             .client
@@ -479,18 +491,24 @@ impl AiGateway {
             .map_err(|error| ApiError::Upstream(error.to_string()))?;
 
         if !response.status().is_success() {
-            return Ok(vec![]);
+            return Ok((vec![], 0));
         }
 
         let data: EmbeddingResponse = response
             .json()
             .await
             .map_err(|error| ApiError::Upstream(error.to_string()))?;
-        Ok(data
+        let embedding = data
             .data
             .first()
             .map(|item| item.embedding.clone())
-            .unwrap_or_default())
+            .unwrap_or_default();
+        let input_tokens = data
+            .usage
+            .as_ref()
+            .and_then(|usage| usage.prompt_tokens.or(usage.total_tokens))
+            .unwrap_or_else(|| estimate_tokens(text));
+        Ok((embedding, input_tokens))
     }
 
     /// Reranking always goes through NVIDIA's dedicated reranking API,
