@@ -203,7 +203,12 @@ async fn ai_chat(
         &chapter_ids,
     );
 
-    if let Some(cached) = state.db.lookup_exact_cache(&exact_key).await? {
+    if let Some(cached) = state
+        .db
+        .lookup_exact_cache(&exact_key)
+        .await?
+        .filter(|cached| !is_degenerate_answer(&cached.answer))
+    {
         let context_meta = cache_context_meta(&cached);
         let answer = cached_answer(cached, "exact-cache", &context_meta);
         persist_ai_chat(
@@ -243,6 +248,7 @@ async fn ai_chat(
             &chapter_ids,
         )
         .await?
+        .filter(|cached| !is_degenerate_answer(&cached.answer))
     {
         let context_meta = cache_context_meta(&cached);
         let answer = cached_answer(cached, "semantic-cache", &context_meta);
@@ -525,6 +531,15 @@ pub fn ok<T: Serialize>(data: T) -> Json<ApiResponse<T>> {
         success: true,
         data,
     })
+}
+
+/// Guards against ever serving a broken cached answer (e.g. a degenerate
+/// "{}" JSON envelope that slipped through before a prompt/extraction fix)
+/// forever. Treated as a cache miss, not an error — falls through to fresh
+/// generation.
+fn is_degenerate_answer(answer: &str) -> bool {
+    let trimmed = answer.trim();
+    trimmed.is_empty() || trimmed == "{}"
 }
 
 fn cache_context_meta(cached: &CachedAnswer) -> crate::rag::ContextMeta {
