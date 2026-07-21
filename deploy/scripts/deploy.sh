@@ -13,11 +13,17 @@ fi
 chmod 600 .env.production
 
 git pull --ff-only
-git lfs pull --include="storage/**"
+# storage/** (source PDFs, processed page images, seed dumps) is only
+# needed for the one-off ingestion/restore-seed flow, not for running the
+# app — deliberately not pulled here. Run restore-seed.sh directly (it
+# pulls what it needs from git-lfs on demand) if you need to reload seed
+# data on this host.
 $COMPOSE build
 $COMPOSE up -d postgres redis qdrant
 $COMPOSE up -d api web
 $COMPOSE ps
+
+bash deploy/scripts/clean.sh
 
 echo "Run this after your textbook embeddings exist in Postgres:"
 echo "$COMPOSE run --rm api migrate_qdrant"

@@ -6,6 +6,14 @@ SEED_SQL="${SEED_SQL:-storage/seeds/postgres-textbook-seed.sql}"
 QDRANT_SEED="${QDRANT_SEED:-storage/seeds/qdrant-right-answer-v1.18.3.tar.gz}"
 
 if [[ ! -f "${SEED_SQL}" ]]; then
+  # clean.sh removes storage/seeds after a successful deploy to save disk —
+  # pull it back from git-lfs on demand rather than requiring it to always
+  # be present on disk.
+  echo "${SEED_SQL} not on disk, pulling from git-lfs..."
+  git lfs pull --include="storage/seeds/**"
+fi
+
+if [[ ! -f "${SEED_SQL}" ]]; then
   echo "Missing ${SEED_SQL}. Run scripts/export-postgres-seed.mjs locally and push the seed first."
   exit 1
 fi
