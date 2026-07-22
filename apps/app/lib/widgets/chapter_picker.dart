@@ -106,6 +106,12 @@ class _ChapterPickerSheetState extends State<_ChapterPickerSheet> {
   List<Subject> _subjects = [];
   Map<String, List<Chapter>> _chaptersBySubject = {};
 
+  // Browse navigation: subject -> part (only when a subject has more than
+  // one distinct part label) -> chapter. Search bypasses this entirely and
+  // always shows a flat, filtered list.
+  Subject? _drilldownSubject;
+  String? _drilldownPart;
+
   @override
   void initState() {
     super.initState();
@@ -129,6 +135,46 @@ class _ChapterPickerSheetState extends State<_ChapterPickerSheet> {
       _subjects = subjects;
       _chaptersBySubject = byId;
       _loading = false;
+    });
+  }
+
+  /// Distinct part labels for a subject's chapters, in first-seen order.
+  /// A subject with a single (or no) part label has nothing worth splitting
+  /// into a separate "select part" step.
+  List<String?> _partsFor(Subject subject) {
+    final chapters = _chaptersBySubject[subject.id] ?? const [];
+    final seen = <String?>[];
+    for (final chapter in chapters) {
+      if (!seen.contains(chapter.partLabel)) seen.add(chapter.partLabel);
+    }
+    return seen;
+  }
+
+  bool _hasMultipleParts(Subject subject) => _partsFor(subject).length > 1;
+
+  void _openSubject(Subject subject) {
+    if (_hasMultipleParts(subject)) {
+      setState(() {
+        _drilldownSubject = subject;
+        _drilldownPart = null;
+      });
+    } else {
+      final parts = _partsFor(subject);
+      setState(() {
+        _drilldownSubject = subject;
+        _drilldownPart = parts.isEmpty ? null : parts.first;
+      });
+    }
+  }
+
+  void _backOnePage() {
+    setState(() {
+      if (_drilldownPart != null && _hasMultipleParts(_drilldownSubject!)) {
+        _drilldownPart = null;
+      } else {
+        _drilldownSubject = null;
+        _drilldownPart = null;
+      }
     });
   }
 
@@ -160,9 +206,27 @@ class _ChapterPickerSheetState extends State<_ChapterPickerSheet> {
               const SizedBox(height: 18),
               Row(
                 children: [
+                  if (query.isEmpty && _drilldownSubject != null)
+                    Padding(
+                      padding: const EdgeInsets.only(right: 4),
+                      child: IconButton(
+                        onPressed: _backOnePage,
+                        icon: const Icon(Icons.arrow_back_rounded),
+                        visualDensity: VisualDensity.compact,
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints(),
+                      ),
+                    ),
                   Expanded(
                     child: Text(
-                      'Scope to a chapter',
+                      query.isNotEmpty
+                          ? 'Scope to a chapter'
+                          : _drilldownSubject == null
+                          ? 'Select a subject'
+                          : _drilldownPart == null
+                          ? _drilldownSubject!.name
+                          : '${_drilldownSubject!.name} · $_drilldownPart',
+                      overflow: TextOverflow.ellipsis,
                       style: theme.textTheme.titleMedium?.copyWith(
                         fontWeight: FontWeight.w700,
                       ),
@@ -232,31 +296,30 @@ class _ChapterPickerSheetState extends State<_ChapterPickerSheet> {
 
   Widget _buildList(ThemeData theme, String query) {
     if (query.isEmpty) {
-      // Grouped, expandable-by-subject view — the default when the user
-      // hasn't typed anything yet.
+      // Subject -> Part -> Chapter browse, driven by _drilldownSubject /
+      // _drilldownPart. Subjects with only one part skip straight to their
+      // chapter list (see _openSubject).
       final subjectsWithChapters = _subjects
           .where((s) => (_chaptersBySubject[s.id] ?? const []).isNotEmpty)
           .toList();
       if (subjectsWithChapters.isEmpty) {
         return _EmptyCatalog(theme: theme);
       }
-      return ListView.builder(
-        shrinkWrap: true,
-        itemCount: subjectsWithChapters.length,
-        itemBuilder: (context, index) {
-          final subject = subjectsWithChapters[index];
-          final chapters = _chaptersBySubject[subject.id] ?? const [];
-          return Theme(
-            data: theme.copyWith(dividerColor: Colors.transparent),
-            child: ExpansionTile(
-              tilePadding: EdgeInsets.zero,
-              childrenPadding: const EdgeInsets.only(bottom: 4),
+
+      if (_drilldownSubject == null) {
+        return ListView.separated(
+          shrinkWrap: true,
+          itemCount: subjectsWithChapters.length,
+          separatorBuilder: (_, _) => Divider(height: 1, color: theme.dividerColor),
+          itemBuilder: (context, index) {
+            final subject = subjectsWithChapters[index];
+            final chapters = _chaptersBySubject[subject.id] ?? const [];
+            return ListTile(
+              contentPadding: EdgeInsets.zero,
+              dense: true,
               title: Text(
                 subject.name,
-                style: const TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w700,
-                ),
+                style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
               ),
               subtitle: Text(
                 '${chapters.length} chapter${chapters.length == 1 ? '' : 's'}',
@@ -265,12 +328,56 @@ class _ChapterPickerSheetState extends State<_ChapterPickerSheet> {
                   color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
                 ),
               ),
-              children: chapters
-                  .map((c) => _ChapterTile(chapter: c, subject: subject))
-                  .toList(),
-            ),
-          );
-        },
+              trailing: const Icon(Icons.chevron_right_rounded),
+              onTap: () => _openSubject(subject),
+            );
+          },
+        );
+      }
+
+      final subject = _drilldownSubject!;
+      if (_drilldownPart == null) {
+        final parts = _partsFor(subject);
+        return ListView.separated(
+          shrinkWrap: true,
+          itemCount: parts.length,
+          separatorBuilder: (_, _) => Divider(height: 1, color: theme.dividerColor),
+          itemBuilder: (context, index) {
+            final part = parts[index];
+            final count = (_chaptersBySubject[subject.id] ?? const [])
+                .where((c) => c.partLabel == part)
+                .length;
+            return ListTile(
+              contentPadding: EdgeInsets.zero,
+              dense: true,
+              leading: const Icon(Icons.menu_book_outlined),
+              title: Text(
+                part ?? 'All chapters',
+                style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+              ),
+              subtitle: Text(
+                '$count chapter${count == 1 ? '' : 's'}',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
+                ),
+              ),
+              trailing: const Icon(Icons.chevron_right_rounded),
+              onTap: () => setState(() => _drilldownPart = part),
+            );
+          },
+        );
+      }
+
+      final chapters = (_chaptersBySubject[subject.id] ?? const [])
+          .where((c) => c.partLabel == _drilldownPart)
+          .toList();
+      return ListView.separated(
+        shrinkWrap: true,
+        itemCount: chapters.length,
+        separatorBuilder: (_, _) => Divider(height: 1, color: theme.dividerColor),
+        itemBuilder: (context, index) =>
+            _ChapterTile(chapter: chapters[index], subject: subject),
       );
     }
 

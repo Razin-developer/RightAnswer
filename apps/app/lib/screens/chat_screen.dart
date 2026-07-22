@@ -57,6 +57,10 @@ class _ChatScreenState extends State<ChatScreen> {
   String? _selectedImagePath;
   String? _selectedResponseLanguage;
   String? _streamingMessageId;
+  // The message currently being read aloud (streamed or not) — set by
+  // _toggleRead, drained incrementally in _runAssistantTurn as new content
+  // arrives so reading starts without waiting for generation to finish.
+  String? _autoReadMessageId;
   String _responseLength = 'normal';
   String _reasoningLevel = 'mid';
   // Classification the AI backend attaches to a chat's answers — the client
@@ -295,6 +299,22 @@ class _ChatScreenState extends State<ChatScreen> {
                   : message,
             )
             .toList();
+        // If the user tapped "Read" on this message, feed it new content as
+        // it streams in so speech starts on the first sentence rather than
+        // waiting for the whole response to finish generating.
+        if (_autoReadMessageId == assistantMsg.id) {
+          if (event.isDone) {
+            _tts.finishStreaming(
+              event.content,
+              language: assistantMsg.responseLanguage,
+            );
+          } else {
+            _tts.speakStreamingUpdate(
+              event.content,
+              language: assistantMsg.responseLanguage,
+            );
+          }
+        }
         // Coalesce rapid `chunk` updates into at most one rebuild per
         // ~80ms — the terminal event always flushes immediately regardless,
         // so the final render is never stale. See _StreamFlushThrottle.
@@ -866,6 +886,26 @@ class _ChatScreenState extends State<ChatScreen> {
     AppFeedback.showToast(context, 'Copied to clipboard');
   }
 
+  /// Starts/stops reading a message aloud. For a message that's still
+  /// streaming in, this starts immediately from whatever content has
+  /// arrived so far — the streaming loop in _runAssistantTurn keeps feeding
+  /// it new sentences as they land (see _autoReadMessageId).
+  void _toggleRead(ChatMessage msg) {
+    if (_autoReadMessageId == msg.id) {
+      _tts.stop();
+      setState(() => _autoReadMessageId = null);
+      return;
+    }
+    _tts.stop();
+    setState(() => _autoReadMessageId = msg.id);
+    if (msg.id == _streamingMessageId) {
+      _tts.resetStreamingState();
+      _tts.speakStreamingUpdate(msg.content, language: msg.responseLanguage);
+    } else {
+      _tts.speak(msg.content, language: msg.responseLanguage);
+    }
+  }
+
   Future<void> _openChapterPicker() async {
     Navigator.pop(context); // close the plus menu first
     final result = await showChapterPickerSheet(context);
@@ -1112,10 +1152,7 @@ class _ChatScreenState extends State<ChatScreen> {
                         message: msg,
                         isStreaming: msg.id == _streamingMessageId,
                         onCopy: () => _copyText(msg.content),
-                        onRead: () => _tts.toggle(
-                          msg.content,
-                          language: msg.responseLanguage,
-                        ),
+                        onRead: () => _toggleRead(msg),
                         onRegenerate: msg.isUser
                             ? null
                             : () => _regenerate(msg),
@@ -1941,6 +1978,26 @@ class _AiMessage extends StatelessWidget {
             )
           else if (isStreaming)
             _DotsIndicator(color: coral),
+          if (showContent && !isStreaming)
+            _SourceImageStrip(sources: message.sources, isDark: isDark),
+          // While streaming, only "Read" is offered — tapping it starts
+          // speaking the partial content immediately instead of making the
+          // user wait for generation to finish (Copy/Full/Sources need the
+          // final content, so they wait for showActions below).
+          if (showContent && isStreaming) ...[
+            const SizedBox(height: 10),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _AiActionBtn(
+                  icon: Icons.volume_up_outlined,
+                  label: 'Read',
+                  onTap: onRead,
+                  isDark: isDark,
+                ),
+              ],
+            ),
+          ],
           // Action bar
           if (showActions) ...[
             const SizedBox(height: 10),
@@ -1986,6 +2043,159 @@ class _AiMessage extends StatelessWidget {
             color: isDark ? const Color(0xFF2E2C28) : const Color(0xFFEBE6DF),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// Small, non-fullscreen thumbnail row for the textbook source images
+/// attached to an answer (illustrations/diagrams/tables referenced while
+/// answering). Tapping a thumbnail opens a scrollable, swipeable preview —
+/// see [_ImagePreviewScreen].
+class _SourceImageStrip extends StatelessWidget {
+  final List<Map<String, dynamic>> sources;
+  final bool isDark;
+
+  const _SourceImageStrip({required this.sources, required this.isDark});
+
+  @override
+  Widget build(BuildContext context) {
+    final urls = <String>[];
+    for (final source in sources) {
+      final url = source['imageUrl']?.toString();
+      if (url != null && url.isNotEmpty && !urls.contains(url)) {
+        urls.add(url);
+      }
+    }
+    if (urls.isEmpty) return const SizedBox.shrink();
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 10),
+      child: SizedBox(
+        height: 64,
+        child: ListView.separated(
+          scrollDirection: Axis.horizontal,
+          itemCount: urls.length,
+          separatorBuilder: (_, _) => const SizedBox(width: 8),
+          itemBuilder: (context, index) {
+            return GestureDetector(
+              onTap: () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                  fullscreenDialog: true,
+                  builder: (_) =>
+                      _ImagePreviewScreen(urls: urls, initialIndex: index),
+                ),
+              ),
+              child: Container(
+                width: 64,
+                height: 64,
+                clipBehavior: Clip.antiAlias,
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(
+                    color: isDark
+                        ? const Color(0xFF2E2C28)
+                        : const Color(0xFFEBE6DF),
+                  ),
+                ),
+                child: Image.network(
+                  urls[index],
+                  fit: BoxFit.cover,
+                  errorBuilder: (_, _, _) => Container(
+                    color: isDark
+                        ? const Color(0xFF1F1E1B)
+                        : const Color(0xFFF3EFE8),
+                    child: Icon(
+                      Icons.broken_image_outlined,
+                      size: 20,
+                      color: isDark ? Colors.white38 : Colors.black26,
+                    ),
+                  ),
+                  loadingBuilder: (context, child, progress) {
+                    if (progress == null) return child;
+                    return Container(
+                      color: isDark
+                          ? const Color(0xFF1F1E1B)
+                          : const Color(0xFFF3EFE8),
+                      child: const Center(
+                        child: SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+            );
+          },
+        ),
+      ),
+    );
+  }
+}
+
+/// Fullscreen, swipeable, zoomable/scrollable preview for source images —
+/// opened by tapping a thumbnail in [_SourceImageStrip]. Each image is kept
+/// at its natural (contained) size rather than stretched to fill the
+/// screen, and can be panned/zoomed via [InteractiveViewer].
+class _ImagePreviewScreen extends StatefulWidget {
+  final List<String> urls;
+  final int initialIndex;
+
+  const _ImagePreviewScreen({required this.urls, required this.initialIndex});
+
+  @override
+  State<_ImagePreviewScreen> createState() => _ImagePreviewScreenState();
+}
+
+class _ImagePreviewScreenState extends State<_ImagePreviewScreen> {
+  late final PageController _pageCtrl = PageController(
+    initialPage: widget.initialIndex,
+  );
+  late int _index = widget.initialIndex;
+
+  @override
+  void dispose() {
+    _pageCtrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      appBar: AppBar(
+        backgroundColor: Colors.black,
+        foregroundColor: Colors.white,
+        title: Text(
+          '${_index + 1} / ${widget.urls.length}',
+          style: const TextStyle(fontSize: 14),
+        ),
+      ),
+      body: PageView.builder(
+        controller: _pageCtrl,
+        itemCount: widget.urls.length,
+        onPageChanged: (i) => setState(() => _index = i),
+        itemBuilder: (context, index) {
+          return Center(
+            child: InteractiveViewer(
+              minScale: 0.8,
+              maxScale: 4,
+              child: Image.network(
+                widget.urls[index],
+                fit: BoxFit.contain,
+                errorBuilder: (_, _, _) => const Icon(
+                  Icons.broken_image_outlined,
+                  size: 48,
+                  color: Colors.white38,
+                ),
+              ),
+            ),
+          );
+        },
       ),
     );
   }

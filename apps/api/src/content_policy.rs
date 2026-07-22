@@ -33,6 +33,10 @@ pub struct ChapterInfo {
     pub subject_code: String,
     #[allow(dead_code)]
     pub medium: String,
+    /// e.g. "Part 1" / "Part 2" for subjects (Maths, English, ...) whose
+    /// textbook is split into multiple physical volumes; None for subjects
+    /// with a single textbook.
+    pub part_label: Option<String>,
     pub enabled: bool,
 }
 

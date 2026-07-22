@@ -50,6 +50,7 @@ impl Database {
               s.name AS subject_name,
               s.code AS subject_code,
               t.medium::text AS medium,
+              t.part_label AS part_label,
               ch.id::text AS chapter_id,
               ch.chapter_number,
               ch.title AS chapter_title
@@ -58,7 +59,7 @@ impl Database {
             JOIN "TextbookVersion" tv ON tv.textbook_id = t.id AND tv.is_active = true
             JOIN "Chapter" ch ON ch.textbook_version_id = tv.id
             WHERE s.active = true
-            ORDER BY s.id, ch.chapter_number
+            ORDER BY s.id, t.part_label NULLS FIRST, ch.chapter_number
             "#,
         )
         .fetch_all(&self.pool)
@@ -77,14 +78,16 @@ impl Database {
                     subject_name: row.subject_name,
                     subject_code: row.subject_code,
                     medium: row.medium,
+                    part_label: row.part_label,
                     enabled,
                 }
             })
             .collect())
     }
 
-    /// Subject/chapter catalog for the app's optional chapter picker —
-    /// enabled chapters only (see content_policy).
+    /// Subject/part/chapter catalog for the app's optional chapter picker —
+    /// enabled chapters only (see content_policy). Subjects whose textbook
+    /// isn't split into volumes get a single part with `label: None`.
     pub async fn list_catalog(&self) -> Result<Vec<CatalogSubject>, sqlx::Error> {
         let chapters = self.list_chapter_info().await?;
 
@@ -97,12 +100,22 @@ impl Database {
                         id: chapter.subject_id.clone(),
                         name: chapter.subject_name.clone(),
                         code: chapter.subject_code.clone(),
-                        chapters: Vec::new(),
+                        parts: Vec::new(),
                     });
                     subjects.last_mut().unwrap()
                 }
             };
-            subject.chapters.push(CatalogChapter {
+            let part = match subject.parts.last_mut() {
+                Some(existing) if existing.label == chapter.part_label => existing,
+                _ => {
+                    subject.parts.push(CatalogPart {
+                        label: chapter.part_label.clone(),
+                        chapters: Vec::new(),
+                    });
+                    subject.parts.last_mut().unwrap()
+                }
+            };
+            part.chapters.push(CatalogChapter {
                 id: chapter.chapter_id,
                 number: chapter.chapter_number,
                 title: chapter.chapter_name,
@@ -569,6 +582,7 @@ struct ChapterInfoRow {
     subject_name: String,
     subject_code: String,
     medium: String,
+    part_label: Option<String>,
     chapter_id: String,
     chapter_number: i32,
     chapter_title: String,
@@ -582,11 +596,17 @@ pub struct CatalogChapter {
 }
 
 #[derive(serde::Serialize)]
+pub struct CatalogPart {
+    pub label: Option<String>,
+    pub chapters: Vec<CatalogChapter>,
+}
+
+#[derive(serde::Serialize)]
 pub struct CatalogSubject {
     pub id: String,
     pub name: String,
     pub code: String,
-    pub chapters: Vec<CatalogChapter>,
+    pub parts: Vec<CatalogPart>,
 }
 
 #[derive(sqlx::FromRow)]

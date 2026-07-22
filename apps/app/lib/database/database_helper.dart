@@ -17,7 +17,7 @@ class DatabaseHelper {
     final path = join(dbPath, 'right_answer.db');
     return openDatabase(
       path,
-      version: 12,
+      version: 13,
       onCreate: _onCreate,
       onUpgrade: _onUpgrade,
     );
@@ -80,6 +80,12 @@ class DatabaseHelper {
       await db.execute('ALTER TABLE chat_messages ADD COLUMN blocks TEXT');
       await db.execute('ALTER TABLE chat_messages ADD COLUMN sources TEXT');
     }
+    if (oldVersion < 13) {
+      // Subject -> Part -> Chapter catalog: subjects whose textbook is
+      // split into volumes (e.g. Maths Part 1/Part 2) tag each chapter with
+      // its part label; null for subjects with a single textbook.
+      await db.execute('ALTER TABLE chapters ADD COLUMN partLabel TEXT');
+    }
   }
 
   Future<void> _createCoreTablesV1(Database db) async {
@@ -99,6 +105,7 @@ class DatabaseHelper {
         className TEXT NOT NULL,
         rawContent TEXT NOT NULL DEFAULT '',
         number INTEGER NOT NULL DEFAULT 0,
+        partLabel TEXT,
         createdAt TEXT NOT NULL,
         FOREIGN KEY (subjectId) REFERENCES subjects(id) ON DELETE CASCADE
       )

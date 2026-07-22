@@ -68,26 +68,33 @@ class CatalogSyncService {
       }
       subjects.add(Subject(id: subjectId, name: subjectName, createdAt: now));
 
-      final rawChapters = entry['chapters'];
-      if (rawChapters is! List) continue;
-      for (final chapterEntry in rawChapters) {
-        if (chapterEntry is! Map) continue;
-        final chapterId = chapterEntry['id']?.toString();
-        final chapterTitle = chapterEntry['title']?.toString();
-        if (chapterId == null || chapterId.isEmpty || chapterTitle == null) {
-          continue;
+      final rawParts = entry['parts'];
+      if (rawParts is! List) continue;
+      for (final partEntry in rawParts) {
+        if (partEntry is! Map) continue;
+        final partLabel = partEntry['label']?.toString();
+        final rawChapters = partEntry['chapters'];
+        if (rawChapters is! List) continue;
+        for (final chapterEntry in rawChapters) {
+          if (chapterEntry is! Map) continue;
+          final chapterId = chapterEntry['id']?.toString();
+          final chapterTitle = chapterEntry['title']?.toString();
+          if (chapterId == null || chapterId.isEmpty || chapterTitle == null) {
+            continue;
+          }
+          final number = chapterEntry['number'];
+          chapters.add(
+            Chapter(
+              id: chapterId,
+              subjectId: subjectId,
+              title: chapterTitle,
+              className: '',
+              number: number is num ? number.toInt() : 0,
+              partLabel: partLabel,
+              createdAt: now,
+            ),
+          );
         }
-        final number = chapterEntry['number'];
-        chapters.add(
-          Chapter(
-            id: chapterId,
-            subjectId: subjectId,
-            title: chapterTitle,
-            className: '',
-            number: number is num ? number.toInt() : 0,
-            createdAt: now,
-          ),
-        );
       }
     }
 

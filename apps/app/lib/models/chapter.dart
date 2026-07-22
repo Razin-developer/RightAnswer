@@ -8,6 +8,10 @@ class Chapter {
   // (GET /api/catalog). Defaults to 0 for chapters that predate this field
   // (e.g. imported archives) or weren't synced from the catalog.
   final int number;
+  // Volume label from the backend catalog (e.g. "Part 1", "Part 2") for
+  // subjects whose textbook is split into multiple physical books. Null for
+  // subjects with a single textbook.
+  final String? partLabel;
   final DateTime createdAt;
 
   Chapter({
@@ -17,6 +21,7 @@ class Chapter {
     required this.className,
     this.rawContent = '',
     this.number = 0,
+    this.partLabel,
     required this.createdAt,
   });
 
@@ -27,6 +32,7 @@ class Chapter {
     'className': className,
     'rawContent': rawContent,
     'number': number,
+    'partLabel': partLabel,
     'createdAt': createdAt.toIso8601String(),
   };
 
@@ -37,6 +43,7 @@ class Chapter {
     className: map['className'] as String,
     rawContent: (map['rawContent'] as String?) ?? '',
     number: (map['number'] as int?) ?? 0,
+    partLabel: map['partLabel'] as String?,
     createdAt: DateTime.parse(map['createdAt'] as String),
   );
 
@@ -45,6 +52,7 @@ class Chapter {
     String? className,
     String? rawContent,
     int? number,
+    String? partLabel,
   }) => Chapter(
     id: id,
     subjectId: subjectId,
@@ -52,6 +60,7 @@ class Chapter {
     className: className ?? this.className,
     rawContent: rawContent ?? this.rawContent,
     number: number ?? this.number,
+    partLabel: partLabel ?? this.partLabel,
     createdAt: createdAt,
   );
 

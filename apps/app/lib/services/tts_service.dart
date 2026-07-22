@@ -11,6 +11,10 @@ class TtsService {
   final FlutterTts _tts = FlutterTts();
   bool _speaking = false;
 
+  // How much of the current streaming message's cleaned text has already
+  // been queued for speech (see speakStreamingUpdate/finishStreaming).
+  int _spokenLength = 0;
+
   bool get isSpeaking => _speaking;
 
   Future<void> initialize() async {
@@ -51,6 +55,58 @@ class TtsService {
 
   Future<void> toggle(String text, {String? language}) async {
     _speaking ? await stop() : await speak(text, language: language);
+  }
+
+  /// Call with the FULL text received so far on every streamed update.
+  /// Speaks only the newly-arrived, sentence-complete portion since the
+  /// last call (queued after any in-flight utterance), so playback starts
+  /// as soon as the first sentence lands instead of waiting for the whole
+  /// response to finish generating. Pair with [resetStreamingState] before
+  /// starting a new message and [finishStreaming] once generation ends.
+  Future<void> speakStreamingUpdate(String fullTextSoFar, {String? language}) async {
+    final cleaned = _speakerText(fullTextSoFar);
+    if (cleaned.length <= _spokenLength) return;
+    final pending = cleaned.substring(_spokenLength);
+    final boundary = _lastSentenceBoundary(pending);
+    if (boundary <= 0) return;
+    final chunk = pending.substring(0, boundary).trim();
+    _spokenLength += boundary;
+    if (chunk.isEmpty) return;
+    await _enqueue(chunk, language: language);
+  }
+
+  /// Flushes any trailing partial sentence once generation has finished.
+  Future<void> finishStreaming(String fullText, {String? language}) async {
+    final cleaned = _speakerText(fullText);
+    if (cleaned.length <= _spokenLength) return;
+    final chunk = cleaned.substring(_spokenLength).trim();
+    _spokenLength = cleaned.length;
+    if (chunk.isEmpty) return;
+    await _enqueue(chunk, language: language);
+  }
+
+  /// Resets the streaming cursor — call before speaking a new message.
+  void resetStreamingState() {
+    _spokenLength = 0;
+  }
+
+  Future<void> _enqueue(String chunk, {String? language}) async {
+    try {
+      final locale = speechLocaleForLanguage(language) ?? defaultSpeechLocale;
+      await _tts.setLanguage(locale);
+      _speaking = true;
+      await _tts.speak(chunk);
+    } catch (_) {
+      _speaking = false;
+    }
+  }
+
+  int _lastSentenceBoundary(String text) {
+    for (var i = text.length - 1; i >= 0; i--) {
+      final ch = text[i];
+      if (ch == '.' || ch == '!' || ch == '?' || ch == '\n') return i + 1;
+    }
+    return 0;
   }
 
   String _speakerText(String raw) {
