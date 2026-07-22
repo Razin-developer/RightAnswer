@@ -1,9 +1,13 @@
 use std::{convert::Infallible, sync::Arc, time::Duration};
 
 use axum::{
-    extract::State,
-    http::HeaderMap,
-    response::sse::{Event, KeepAlive, KeepAliveStream, Sse},
+    body::Bytes,
+    extract::{Multipart, Path, State},
+    http::{header, HeaderMap},
+    response::{
+        sse::{Event, KeepAlive, KeepAliveStream, Sse},
+        IntoResponse, Response,
+    },
     routing::{get, post},
     Json, Router,
 };
@@ -90,6 +94,9 @@ pub fn api_router(state: Arc<AppState>) -> Router {
         .route("/catalog", get(catalog))
         .route("/auth/me", get(me))
         .route("/chats", get(list_chats).post(upsert_chat))
+        .route("/chats/by-local/{local_id}/share", post(share_chat))
+        .route("/share/{token}", get(resolve_share))
+        .route("/content", post(upload_content))
         .route("/admin/metrics", get(admin::metrics))
         .merge(auth_routes)
         .merge(ai_routes)
@@ -822,6 +829,148 @@ async fn upsert_chat(
         )
         .await?;
     Ok(ok(json!({ "chat": chat })))
+}
+
+fn share_url(app_url: &str, token: &str) -> String {
+    format!("{}/api/share/{token}", app_url.trim_end_matches('/'))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ShareChatRequest {
+    #[serde(default)]
+    access_level: Option<String>,
+}
+
+/// Creates a 10-minute share link that points straight at an existing
+/// chat — no data is copied, the recipient fetches the live chat +
+/// messages through GET /share/:token while the link is valid.
+async fn share_chat(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(local_id): Path<String>,
+    Json(body): Json<ShareChatRequest>,
+) -> Result<Json<ApiResponse<serde_json::Value>>, ApiError> {
+    let user = require_user(&state, &headers).await?;
+    let chat = state
+        .db
+        .find_chat_by_local_id(user.id, &local_id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("Chat not found".into()))?;
+    let access_level = body.access_level.as_deref().unwrap_or("full");
+    let share = state
+        .db
+        .create_chat_share(user.id, chat.id, access_level)
+        .await?;
+    Ok(ok(json!({
+        "token": share.token,
+        "url": share_url(&state.config.app_url, &share.token),
+        "expiresAt": share.expires_at
+    })))
+}
+
+/// Uploads a self-contained export (exam/study-plan ZIP) and creates a
+/// 10-minute share link pointing at the stored blob. multipart fields:
+/// `file` (required) and `metadata` (optional JSON string).
+async fn upload_content(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    mut multipart: Multipart,
+) -> Result<Json<ApiResponse<serde_json::Value>>, ApiError> {
+    let user = require_user(&state, &headers).await?;
+
+    let mut file_bytes: Option<Vec<u8>> = None;
+    let mut filename = "content.zip".to_string();
+    let mut mime_type = "application/zip".to_string();
+    let mut metadata = serde_json::json!({});
+
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|error| ApiError::BadRequest(format!("invalid multipart body: {error}")))?
+    {
+        let name = field.name().unwrap_or_default().to_string();
+        if name == "file" {
+            filename = field
+                .file_name()
+                .map(ToString::to_string)
+                .unwrap_or(filename);
+            mime_type = field
+                .content_type()
+                .map(ToString::to_string)
+                .unwrap_or(mime_type);
+            let bytes = field
+                .bytes()
+                .await
+                .map_err(|error| ApiError::BadRequest(format!("failed reading file: {error}")))?;
+            file_bytes = Some(bytes.to_vec());
+        } else if name == "metadata" {
+            if let Ok(text) = field.text().await {
+                if let Ok(value) = serde_json::from_str(&text) {
+                    metadata = value;
+                }
+            }
+        }
+    }
+
+    let bytes = file_bytes.ok_or_else(|| ApiError::BadRequest("file is required".into()))?;
+    let share = state
+        .db
+        .create_content_share(user.id, &filename, &mime_type, &metadata, &bytes)
+        .await?;
+    Ok(ok(json!({
+        "token": share.token,
+        "url": share_url(&state.config.app_url, &share.token),
+        "expiresAt": share.expires_at
+    })))
+}
+
+/// Resolves a share token. Content shares stream the stored bytes back
+/// directly (matching the original download); chat shares return the
+/// chat + its messages as JSON. An invalid/expired token is a 404 either
+/// way — recipients shouldn't be able to distinguish the two.
+async fn resolve_share(
+    State(state): State<Arc<AppState>>,
+    Path(token): Path<String>,
+) -> Result<Response, ApiError> {
+    let share = state
+        .db
+        .resolve_share(&token)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("Share link is invalid or expired".into()))?;
+
+    if share.share_type == "content" {
+        let content = state
+            .db
+            .get_content_share(share.ref_id)
+            .await?
+            .ok_or_else(|| ApiError::NotFound("Shared content not found".into()))?;
+        let disposition = format!(
+            "attachment; filename=\"{}\"",
+            content.filename.replace('"', "")
+        );
+        return Ok((
+            [
+                (header::CONTENT_TYPE, content.mime_type),
+                (header::CONTENT_DISPOSITION, disposition),
+            ],
+            Bytes::from(content.bytes),
+        )
+            .into_response());
+    }
+
+    let chat = state
+        .db
+        .chat_by_id(share.ref_id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("Shared chat not found".into()))?;
+    let messages = state.db.list_messages(chat.id).await?;
+    Ok(ok(json!({
+        "chat": chat,
+        "messages": messages,
+        "expiresAt": share.expires_at
+    }))
+    .into_response())
 }
 
 pub fn ok<T: Serialize>(data: T) -> Json<ApiResponse<T>> {

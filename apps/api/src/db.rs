@@ -1,12 +1,23 @@
 use std::time::Duration;
 
+use base64::Engine;
 use sqlx::{postgres::PgPoolOptions, PgPool};
 use uuid::Uuid;
 
 use crate::{
     content_policy::{is_chapter_enabled, ChapterInfo},
-    models::{CachedAnswer, Chat, ChatMessage, User},
+    models::{CachedAnswer, Chat, ChatMessage, ContentShare, ShareLink, User},
 };
+
+/// 24 random bytes, base64url-encoded (no padding) — matches the
+/// pre-migration Node backend's `randomBytes(24).toString("base64url")`,
+/// so existing/cached share URLs have the same shape.
+fn generate_share_token() -> String {
+    use argon2::password_hash::rand_core::{OsRng, RngCore};
+    let mut bytes = [0u8; 24];
+    OsRng.fill_bytes(&mut bytes);
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
+}
 
 #[derive(Clone)]
 pub struct Database {
@@ -214,6 +225,153 @@ impl Database {
         .bind(token_count)
         .bind(source_chunks)
         .fetch_one(&self.pool)
+        .await
+    }
+
+    pub async fn find_chat_by_local_id(
+        &self,
+        owner_id: Uuid,
+        local_id: &str,
+    ) -> Result<Option<Chat>, sqlx::Error> {
+        sqlx::query_as::<_, Chat>(
+            r#"
+            SELECT id, owner_id, local_id, name, subject_id, subject_name,
+              chapter_ids, chapter_names, is_temporary, is_pinned, created_at, updated_at
+            FROM chats
+            WHERE owner_id = $1 AND local_id = $2
+            "#,
+        )
+        .bind(owner_id)
+        .bind(local_id)
+        .fetch_optional(&self.pool)
+        .await
+    }
+
+    pub async fn chat_by_id(&self, chat_id: Uuid) -> Result<Option<Chat>, sqlx::Error> {
+        sqlx::query_as::<_, Chat>(
+            r#"
+            SELECT id, owner_id, local_id, name, subject_id, subject_name,
+              chapter_ids, chapter_names, is_temporary, is_pinned, created_at, updated_at
+            FROM chats
+            WHERE id = $1
+            "#,
+        )
+        .bind(chat_id)
+        .fetch_optional(&self.pool)
+        .await
+    }
+
+    pub async fn list_messages(&self, chat_id: Uuid) -> Result<Vec<ChatMessage>, sqlx::Error> {
+        sqlx::query_as::<_, ChatMessage>(
+            r#"
+            SELECT id, owner_id, chat_id, local_id, role, content,
+              response_language, response_length, reasoning_level, token_count, source_chunks, created_at
+            FROM chat_messages
+            WHERE chat_id = $1
+            ORDER BY created_at ASC
+            "#,
+        )
+        .bind(chat_id)
+        .fetch_all(&self.pool)
+        .await
+    }
+
+    /// Creates a 10-minute share link referencing an existing chat directly
+    /// (no data duplication — the recipient fetches the live chat + its
+    /// messages through the token).
+    pub async fn create_chat_share(
+        &self,
+        owner_id: Uuid,
+        chat_id: Uuid,
+        access_level: &str,
+    ) -> Result<ShareLink, sqlx::Error> {
+        let token = generate_share_token();
+        sqlx::query_as::<_, ShareLink>(
+            r#"
+            INSERT INTO share_links (owner_id, token, share_type, ref_id, access_level, expires_at)
+            VALUES ($1, $2, 'chat', $3, $4, now() + interval '10 minutes')
+            RETURNING id, owner_id, token, share_type, ref_id, access_level, use_count, expires_at, created_at
+            "#,
+        )
+        .bind(owner_id)
+        .bind(token)
+        .bind(chat_id)
+        .bind(access_level)
+        .fetch_one(&self.pool)
+        .await
+    }
+
+    /// Stores an uploaded content blob (an exam/study-plan export ZIP) and
+    /// creates a 10-minute share link pointing at it.
+    pub async fn create_content_share(
+        &self,
+        owner_id: Uuid,
+        filename: &str,
+        mime_type: &str,
+        metadata: &serde_json::Value,
+        bytes: &[u8],
+    ) -> Result<ShareLink, sqlx::Error> {
+        let content_id: Uuid = sqlx::query_scalar(
+            r#"
+            INSERT INTO content_shares (owner_id, filename, mime_type, metadata, bytes)
+            VALUES ($1, $2, $3, $4, $5)
+            RETURNING id
+            "#,
+        )
+        .bind(owner_id)
+        .bind(filename)
+        .bind(mime_type)
+        .bind(metadata)
+        .bind(bytes)
+        .fetch_one(&self.pool)
+        .await?;
+
+        let token = generate_share_token();
+        sqlx::query_as::<_, ShareLink>(
+            r#"
+            INSERT INTO share_links (owner_id, token, share_type, ref_id, expires_at)
+            VALUES ($1, $2, 'content', $3, now() + interval '10 minutes')
+            RETURNING id, owner_id, token, share_type, ref_id, access_level, use_count, expires_at, created_at
+            "#,
+        )
+        .bind(owner_id)
+        .bind(token)
+        .bind(content_id)
+        .fetch_one(&self.pool)
+        .await
+    }
+
+    /// Resolves a share token (only if not expired) and bumps its use
+    /// count. Returns None for an invalid or expired token — callers
+    /// shouldn't distinguish the two, both just mean "can't be used".
+    pub async fn resolve_share(&self, token: &str) -> Result<Option<ShareLink>, sqlx::Error> {
+        let share = sqlx::query_as::<_, ShareLink>(
+            r#"
+            UPDATE share_links
+            SET use_count = use_count + 1
+            WHERE token = $1 AND expires_at > now()
+            RETURNING id, owner_id, token, share_type, ref_id, access_level, use_count, expires_at, created_at
+            "#,
+        )
+        .bind(token)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(share)
+    }
+
+    pub async fn get_content_share(
+        &self,
+        content_id: Uuid,
+    ) -> Result<Option<ContentShare>, sqlx::Error> {
+        sqlx::query_as::<_, ContentShare>(
+            r#"
+            SELECT id, owner_id, filename, mime_type, bytes, created_at
+            FROM content_shares
+            WHERE id = $1
+            "#,
+        )
+        .bind(content_id)
+        .fetch_optional(&self.pool)
         .await
     }
 

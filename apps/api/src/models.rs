@@ -65,6 +65,35 @@ pub struct ChatMessage {
     pub created_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone, Serialize, FromRow)]
+#[serde(rename_all = "camelCase")]
+pub struct ShareLink {
+    pub id: Uuid,
+    #[allow(dead_code)]
+    #[serde(skip_serializing)]
+    pub owner_id: Uuid,
+    pub token: String,
+    pub share_type: String,
+    pub ref_id: Uuid,
+    pub access_level: String,
+    pub use_count: i32,
+    pub expires_at: DateTime<Utc>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, FromRow)]
+pub struct ContentShare {
+    #[allow(dead_code)]
+    pub id: Uuid,
+    #[allow(dead_code)]
+    pub owner_id: Uuid,
+    pub filename: String,
+    pub mime_type: String,
+    pub bytes: Vec<u8>,
+    #[allow(dead_code)]
+    pub created_at: DateTime<Utc>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChatPromptMessage {

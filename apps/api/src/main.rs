@@ -103,6 +103,11 @@ async fn main() -> anyhow::Result<()> {
         ))
         .layer(TraceLayer::new_for_http())
         .layer(cors)
+        // axum's own default is 2MB, well under nginx's 25MB
+        // (client_max_body_size) — the exam/study-plan share upload
+        // (POST /api/content) needs headroom to match, or exports over
+        // 2MB fail with a confusing 413 the client can't do anything about.
+        .layer(axum::extract::DefaultBodyLimit::max(25 * 1024 * 1024))
         // Last line of defense: a panic anywhere in a handler (a bad
         // .unwrap(), an out-of-bounds index, etc.) is caught here and
         // turned into a 500 instead of dropping the connection/task
