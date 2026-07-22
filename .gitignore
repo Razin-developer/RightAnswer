@@ -1,5 +1,6 @@
 node_modules
 apps/api/target/
+/logs/
 .turbo
 .next
 dist

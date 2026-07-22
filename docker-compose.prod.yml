@@ -94,6 +94,9 @@ services:
       AI_VLM_INSTRUCT_MODEL: ${AI_VLM_INSTRUCT_MODEL:-qwen/qwen3-vl-8b-instruct}
       SEMANTIC_CACHE_THRESHOLD: ${SEMANTIC_CACHE_THRESHOLD:-0.9}
       RUST_LOG: ${RUST_LOG:-right_answer_api=info,tower_http=info}
+      LOG_DIR: /app/logs
+    volumes:
+      - ./logs/api:/app/logs
     ports:
       - "127.0.0.1:4000:4000"
     healthcheck:

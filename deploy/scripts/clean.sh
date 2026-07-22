@@ -46,6 +46,14 @@ for dir in storage/imports storage/seeds; do
   fi
 done
 
+# API error/panic logs (see apps/api/src/main.rs — one file per day,
+# never auto-deleted by the writer itself). Keep 14 days for post-incident
+# review, drop anything older.
+if [[ -d logs/api ]]; then
+  find logs/api -name '*.log*' -mtime +14 -delete
+  echo "[clean] pruned api logs older than 14 days"
+fi
+
 # Reclaim finished docker build layers — every `docker compose build` only
 # needs the latest layer chain, not the full history of every past build.
 docker builder prune -f >/dev/null

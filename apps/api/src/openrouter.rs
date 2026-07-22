@@ -137,7 +137,7 @@ impl AiGateway {
         let response = self
             .client
             .post(format!("{}/chat/completions", provider.base_url))
-            .headers(provider_headers(&provider.api_key, &self.config.app_url))
+            .headers(provider_headers(&provider.api_key, &self.config.app_url)?)
             .json(&body)
             .send()
             .await
@@ -318,7 +318,7 @@ impl AiGateway {
         let response = self
             .client
             .post(format!("{}/chat/completions", provider.base_url))
-            .headers(provider_headers(&provider.api_key, &self.config.app_url))
+            .headers(provider_headers(&provider.api_key, &self.config.app_url)?)
             .json(&body)
             .send()
             .await
@@ -413,7 +413,7 @@ impl AiGateway {
         let response = self
             .client
             .post(format!("{}/chat/completions", provider.base_url))
-            .headers(provider_headers(&provider.api_key, &self.config.app_url))
+            .headers(provider_headers(&provider.api_key, &self.config.app_url)?)
             .json(&body)
             .send()
             .await
@@ -481,7 +481,7 @@ impl AiGateway {
         let response = self
             .client
             .post(format!("{}/embeddings", provider.base_url))
-            .headers(provider_headers(&provider.api_key, &self.config.app_url))
+            .headers(provider_headers(&provider.api_key, &self.config.app_url)?)
             .json(&json!({
                 "model": self.config.embedding_model,
                 "input": text,
@@ -615,23 +615,33 @@ fn extract_rich_envelope(raw: &str) -> Option<RichEnvelope> {
     })
 }
 
-fn provider_headers(api_key: &str, app_url: &str) -> reqwest::header::HeaderMap {
+/// Builds provider request headers without ever panicking: api_key/app_url
+/// come from env config, and a malformed value there (stray whitespace,
+/// control characters) used to take down every single AI call via
+/// `.expect()` on the parsed HeaderValue. The auth header is load-bearing
+/// (no point making a request without it), so a bad api_key is a real
+/// error; a bad app_url only affects a non-critical referer header, so it's
+/// just skipped with a log line instead of failing the request.
+fn provider_headers(api_key: &str, app_url: &str) -> Result<reqwest::header::HeaderMap, ApiError> {
     let mut headers = reqwest::header::HeaderMap::new();
-    headers.insert(
-        reqwest::header::AUTHORIZATION,
-        format!("Bearer {api_key}")
-            .parse()
-            .expect("valid auth header"),
-    );
-    headers.insert(
-        "HTTP-Referer",
-        app_url.parse().expect("valid app url header"),
-    );
+    let auth_value = format!("Bearer {api_key}").parse().map_err(|error| {
+        ApiError::Upstream(format!("invalid API key configured for provider: {error}"))
+    })?;
+    headers.insert(reqwest::header::AUTHORIZATION, auth_value);
+
+    match app_url.parse() {
+        Ok(value) => {
+            headers.insert("HTTP-Referer", value);
+        }
+        Err(error) => {
+            tracing::warn!(%error, app_url, "APP_URL is not a valid header value, omitting HTTP-Referer");
+        }
+    }
     headers.insert(
         "X-OpenRouter-Title",
-        "Right Answer".parse().expect("valid title header"),
+        reqwest::header::HeaderValue::from_static("Right Answer"),
     );
-    headers
+    Ok(headers)
 }
 
 /// Malayalam always routes to the reasoning tier regardless of AI_MODEL_FAMILY
