@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -18,6 +19,8 @@ class ApiService {
   static final ApiService instance = ApiService._();
   ApiService._();
 
+  static const _timeout = Duration(seconds: 30);
+
   String get _base => AppConfig.apiUrl;
 
   Future<Map<String, String>> _headers({bool auth = true}) async {
@@ -32,8 +35,41 @@ class ApiService {
     return headers;
   }
 
+  /// Runs an HTTP call and turns every failure mode — timeout, no
+  /// connection, a server response that isn't JSON (a proxy error page, an
+  /// empty body from an unmatched route) — into a single catchable
+  /// [ApiException] instead of letting raw platform exceptions
+  /// (SocketException, TimeoutException, FormatException) escape to
+  /// callers that don't know how to handle them.
+  Future<http.Response> _send(Future<http.Response> Function() request) async {
+    try {
+      return await request().timeout(_timeout);
+    } on TimeoutException {
+      throw const ApiException(0, 'The server took too long to respond.');
+    } on SocketException {
+      throw const ApiException(
+        0,
+        'No internet connection. Check your network and try again.',
+      );
+    } on http.ClientException {
+      throw const ApiException(0, 'Could not reach the server.');
+    } on HandshakeException {
+      throw const ApiException(0, 'A secure connection could not be made.');
+    }
+  }
+
   Map<String, dynamic> _parse(http.Response resp) {
-    final body = jsonDecode(resp.body) as Map<String, dynamic>;
+    final Map<String, dynamic> body;
+    try {
+      final decoded = resp.body.isEmpty ? <String, dynamic>{} : jsonDecode(resp.body);
+      body = decoded is Map<String, dynamic> ? decoded : <String, dynamic>{};
+    } on FormatException {
+      // A non-JSON body (nginx/proxy error page, an unmatched route with no
+      // handler, a truncated response) — surface the status code with a
+      // generic message rather than letting the parse error itself escape.
+      throw ApiException(resp.statusCode, 'Request failed (${resp.statusCode})');
+    }
+
     if (resp.statusCode >= 400) {
       final error = body['error'];
       final message = error is String
@@ -52,9 +88,8 @@ class ApiService {
   }
 
   Future<Map<String, dynamic>> get(String path) async {
-    final resp = await http.get(
-      Uri.parse('$_base$path'),
-      headers: await _headers(),
+    final resp = await _send(
+      () async => http.get(Uri.parse('$_base$path'), headers: await _headers()),
     );
     return _parse(resp);
   }
@@ -64,10 +99,12 @@ class ApiService {
     Map<String, dynamic> body, {
     bool auth = true,
   }) async {
-    final resp = await http.post(
-      Uri.parse('$_base$path'),
-      headers: await _headers(auth: auth),
-      body: jsonEncode(body),
+    final resp = await _send(
+      () async => http.post(
+        Uri.parse('$_base$path'),
+        headers: await _headers(auth: auth),
+        body: jsonEncode(body),
+      ),
     );
     return _parse(resp);
   }
@@ -76,10 +113,19 @@ class ApiService {
     String path,
     Map<String, dynamic> body,
   ) async {
-    final resp = await http.put(
-      Uri.parse('$_base$path'),
-      headers: await _headers(),
-      body: jsonEncode(body),
+    final resp = await _send(
+      () async => http.put(
+        Uri.parse('$_base$path'),
+        headers: await _headers(),
+        body: jsonEncode(body),
+      ),
+    );
+    return _parse(resp);
+  }
+
+  Future<Map<String, dynamic>> delete(String path) async {
+    final resp = await _send(
+      () async => http.delete(Uri.parse('$_base$path'), headers: await _headers()),
     );
     return _parse(resp);
   }
@@ -91,28 +137,30 @@ class ApiService {
     String fieldName = 'file',
     Map<String, String>? fields,
   }) async {
-    final token = await AuthService.instance.getToken();
-    final req = http.MultipartRequest('POST', Uri.parse('$_base$path'));
-    if (token != null) req.headers['Authorization'] = 'Bearer $token';
-    req.files.add(
-      await http.MultipartFile.fromPath(fieldName, file.path),
-    );
-    if (fields != null) req.fields.addAll(fields);
-    final streamed = await req.send();
-    final resp = await http.Response.fromStream(streamed);
+    final resp = await _send(() async {
+      final token = await AuthService.instance.getToken();
+      final req = http.MultipartRequest('POST', Uri.parse('$_base$path'));
+      if (token != null) req.headers['Authorization'] = 'Bearer $token';
+      req.files.add(await http.MultipartFile.fromPath(fieldName, file.path));
+      if (fields != null) req.fields.addAll(fields);
+      final streamed = await req.send();
+      return http.Response.fromStream(streamed);
+    });
     return _parse(resp);
   }
 
   /// Download raw bytes (for ZIP content share).
   Future<List<int>> downloadBytes(String url) async {
-    final token = await AuthService.instance.getToken();
-    final resp = await http.get(
-      Uri.parse(url),
-      headers: {
-        if (token != null) 'Authorization': 'Bearer $token',
-        'Accept': '*/*',
-      },
-    );
+    final resp = await _send(() async {
+      final token = await AuthService.instance.getToken();
+      return http.get(
+        Uri.parse(url),
+        headers: {
+          if (token != null) 'Authorization': 'Bearer $token',
+          'Accept': '*/*',
+        },
+      );
+    });
     if (resp.statusCode >= 400) {
       throw ApiException(resp.statusCode, 'Download failed');
     }

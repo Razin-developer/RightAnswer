@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../services/app_link_service.dart';
+import '../widgets/usage_warning_banner.dart';
 import 'chat_screen.dart';
 import 'exam_screen.dart';
 import 'study_plan_screen.dart';
@@ -38,12 +39,19 @@ class _MainScreenState extends State<MainScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: IndexedStack(
-        index: _selectedIndex,
+      body: Column(
         children: [
-          ChatScreen(initialChatId: widget.initialChatId),
-          ExamScreen(initialExamId: widget.initialExamId),
-          StudyPlanScreen(initialPlanId: widget.initialStudyPlanId),
+          const UsageWarningBanner(),
+          Expanded(
+            child: IndexedStack(
+              index: _selectedIndex,
+              children: [
+                ChatScreen(initialChatId: widget.initialChatId),
+                ExamScreen(initialExamId: widget.initialExamId),
+                StudyPlanScreen(initialPlanId: widget.initialStudyPlanId),
+              ],
+            ),
+          ),
         ],
       ),
       bottomNavigationBar: NavigationBar(

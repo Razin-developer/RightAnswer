@@ -142,6 +142,30 @@ class AIBackendService {
     );
   }
 
+  /// Generates a short chat title from a first message via the dedicated
+  /// `/api/ai/title` endpoint — deliberately separate from
+  /// [postChatCompletions]/[streamChatCompletions], which run the full
+  /// tutoring pipeline (RAG retrieval, beta-chapter gating). Reusing that
+  /// pipeline for a title request could return a beta-confirmation prompt
+  /// instead of an answer, breaking title generation with nothing to show
+  /// for it. Returns null on any failure — callers should fall back to a
+  /// truncated version of the original message.
+  static Future<String?> generateTitle(
+    String message, {
+    Duration timeout = const Duration(seconds: 20),
+  }) async {
+    requireChatApiKey();
+    final response = await _postJson('/api/ai/title', {
+      'message': message,
+    }, timeout);
+    if (response.statusCode >= 400) return null;
+    final decoded = jsonDecode(response.body) as Map<String, dynamic>;
+    final data = decoded['data'];
+    final title = data is Map<String, dynamic> ? data['title'] as String? : null;
+    final trimmed = title?.trim();
+    return (trimmed == null || trimmed.isEmpty) ? null : trimmed;
+  }
+
   static Future<http.Response> postEmbeddings({
     required Map<String, dynamic> payload,
     required Duration timeout,

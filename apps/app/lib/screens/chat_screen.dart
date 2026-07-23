@@ -3,7 +3,10 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:share_plus/share_plus.dart';
 import 'package:uuid/uuid.dart';
 
 import '../constants/app_languages.dart';
@@ -11,6 +14,8 @@ import '../models/chat.dart';
 import '../models/chat_message.dart';
 import '../repositories/chat_message_repository.dart';
 import '../repositories/chat_repository.dart';
+import '../repositories/settings_repository.dart';
+import '../services/api_service.dart';
 import '../services/auth_service.dart';
 import '../services/chat_ai_service.dart';
 import '../services/cloud_sync_service.dart';
@@ -39,6 +44,7 @@ class ChatScreen extends StatefulWidget {
 class _ChatScreenState extends State<ChatScreen> {
   final _chatRepo = ChatRepository();
   final _messageRepo = ChatMessageRepository();
+  final _settingsRepo = SettingsRepository();
   final _tts = TtsService.instance;
 
   Chat? _currentChat;
@@ -80,6 +86,14 @@ class _ChatScreenState extends State<ChatScreen> {
     super.initState();
     _loadAllChats();
     _tts.initialize();
+    _loadDefaultReasoningLevel();
+  }
+
+  Future<void> _loadDefaultReasoningLevel() async {
+    final saved = await _settingsRepo.get(SettingKeys.defaultReasoningLevel);
+    if (!mounted || saved == null) return;
+    if (saved != 'low' && saved != 'mid' && saved != 'high') return;
+    setState(() => _reasoningLevel = saved);
   }
 
   @override
@@ -660,7 +674,12 @@ class _ChatScreenState extends State<ChatScreen> {
       _showShareLinkDialog(url);
     } catch (e) {
       if (mounted) {
-        AppFeedback.showToast(context, 'Failed to create share link');
+        final message = switch (e) {
+          AppException(:final message) => message,
+          ApiException(:final message) => message,
+          _ => 'Failed to create share link',
+        };
+        AppFeedback.showToast(context, message);
       }
     }
   }
@@ -2052,6 +2071,16 @@ class _AiMessage extends StatelessWidget {
 /// attached to an answer (illustrations/diagrams/tables referenced while
 /// answering). Tapping a thumbnail opens a scrollable, swipeable preview —
 /// see [_ImagePreviewScreen].
+/// One retrieved-source page image: the actual textbook page an embedding
+/// match came from, or an illustration/table/graph extracted from that
+/// page — never anything the model itself wrote a URL for (see
+/// rich_answer_view.dart's block filtering for why that's excluded).
+class _SourcePageImage {
+  final String url;
+  final int? pageNumber;
+  const _SourcePageImage({required this.url, this.pageNumber});
+}
+
 class _SourceImageStrip extends StatelessWidget {
   final List<Map<String, dynamic>> sources;
   final bool isDark;
@@ -2060,73 +2089,100 @@ class _SourceImageStrip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final urls = <String>[];
+    final images = <_SourcePageImage>[];
+    final seenUrls = <String>{};
     for (final source in sources) {
       final url = source['imageUrl']?.toString();
-      if (url != null && url.isNotEmpty && !urls.contains(url)) {
-        urls.add(url);
-      }
+      if (url == null || url.isEmpty || !seenUrls.add(url)) continue;
+      final page = source['pageNumber'];
+      images.add(
+        _SourcePageImage(
+          url: url,
+          pageNumber: page is num ? page.toInt() : null,
+        ),
+      );
     }
-    if (urls.isEmpty) return const SizedBox.shrink();
+    if (images.isEmpty) return const SizedBox.shrink();
 
     return Padding(
       padding: const EdgeInsets.only(top: 10),
       child: SizedBox(
-        height: 64,
+        height: 78,
         child: ListView.separated(
           scrollDirection: Axis.horizontal,
-          itemCount: urls.length,
+          itemCount: images.length,
           separatorBuilder: (_, _) => const SizedBox(width: 8),
           itemBuilder: (context, index) {
+            final image = images[index];
             return GestureDetector(
               onTap: () => Navigator.push(
                 context,
                 MaterialPageRoute(
                   fullscreenDialog: true,
                   builder: (_) =>
-                      _ImagePreviewScreen(urls: urls, initialIndex: index),
+                      _ImagePreviewScreen(images: images, initialIndex: index),
                 ),
               ),
-              child: Container(
+              child: SizedBox(
                 width: 64,
-                height: 64,
-                clipBehavior: Clip.antiAlias,
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(10),
-                  border: Border.all(
-                    color: isDark
-                        ? const Color(0xFF2E2C28)
-                        : const Color(0xFFEBE6DF),
-                  ),
-                ),
-                child: Image.network(
-                  urls[index],
-                  fit: BoxFit.cover,
-                  errorBuilder: (_, _, _) => Container(
-                    color: isDark
-                        ? const Color(0xFF1F1E1B)
-                        : const Color(0xFFF3EFE8),
-                    child: Icon(
-                      Icons.broken_image_outlined,
-                      size: 20,
-                      color: isDark ? Colors.white38 : Colors.black26,
-                    ),
-                  ),
-                  loadingBuilder: (context, child, progress) {
-                    if (progress == null) return child;
-                    return Container(
-                      color: isDark
-                          ? const Color(0xFF1F1E1B)
-                          : const Color(0xFFF3EFE8),
-                      child: const Center(
-                        child: SizedBox(
-                          width: 16,
-                          height: 16,
-                          child: CircularProgressIndicator(strokeWidth: 2),
+                child: Column(
+                  children: [
+                    Container(
+                      width: 64,
+                      height: 64,
+                      clipBehavior: Clip.antiAlias,
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(
+                          color: isDark
+                              ? const Color(0xFF2E2C28)
+                              : const Color(0xFFEBE6DF),
                         ),
                       ),
-                    );
-                  },
+                      child: Image.network(
+                        image.url,
+                        fit: BoxFit.cover,
+                        errorBuilder: (_, _, _) => Container(
+                          color: isDark
+                              ? const Color(0xFF1F1E1B)
+                              : const Color(0xFFF3EFE8),
+                          child: Icon(
+                            Icons.broken_image_outlined,
+                            size: 20,
+                            color: isDark ? Colors.white38 : Colors.black26,
+                          ),
+                        ),
+                        loadingBuilder: (context, child, progress) {
+                          if (progress == null) return child;
+                          return Container(
+                            color: isDark
+                                ? const Color(0xFF1F1E1B)
+                                : const Color(0xFFF3EFE8),
+                            child: const Center(
+                              child: SizedBox(
+                                width: 16,
+                                height: 16,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                    if (image.pageNumber != null) ...[
+                      const SizedBox(height: 3),
+                      Text(
+                        'p.${image.pageNumber}',
+                        style: TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.w600,
+                          color: isDark ? Colors.white54 : Colors.black45,
+                        ),
+                      ),
+                    ],
+                  ],
                 ),
               ),
             );
@@ -2140,12 +2196,17 @@ class _SourceImageStrip extends StatelessWidget {
 /// Fullscreen, swipeable, zoomable/scrollable preview for source images —
 /// opened by tapping a thumbnail in [_SourceImageStrip]. Each image is kept
 /// at its natural (contained) size rather than stretched to fill the
-/// screen, and can be panned/zoomed via [InteractiveViewer].
+/// screen, can be panned/zoomed via [InteractiveViewer], and can be saved
+/// via the download button (opens the OS share/save sheet — see
+/// _downloadCurrent).
 class _ImagePreviewScreen extends StatefulWidget {
-  final List<String> urls;
+  final List<_SourcePageImage> images;
   final int initialIndex;
 
-  const _ImagePreviewScreen({required this.urls, required this.initialIndex});
+  const _ImagePreviewScreen({
+    required this.images,
+    required this.initialIndex,
+  });
 
   @override
   State<_ImagePreviewScreen> createState() => _ImagePreviewScreenState();
@@ -2156,6 +2217,7 @@ class _ImagePreviewScreenState extends State<_ImagePreviewScreen> {
     initialPage: widget.initialIndex,
   );
   late int _index = widget.initialIndex;
+  bool _downloading = false;
 
   @override
   void dispose() {
@@ -2163,21 +2225,77 @@ class _ImagePreviewScreenState extends State<_ImagePreviewScreen> {
     super.dispose();
   }
 
+  Future<void> _downloadCurrent() async {
+    if (_downloading) return;
+    setState(() => _downloading = true);
+    final image = widget.images[_index];
+    try {
+      final response = await http
+          .get(Uri.parse(image.url))
+          .timeout(const Duration(seconds: 30));
+      if (response.statusCode >= 400) {
+        throw Exception('Download failed (${response.statusCode})');
+      }
+      final ext = _extensionFromUrl(image.url);
+      final fileName = image.pageNumber != null
+          ? 'page-${image.pageNumber}$ext'
+          : 'source-image-${DateTime.now().millisecondsSinceEpoch}$ext';
+      final dir = await getTemporaryDirectory();
+      final file = File('${dir.path}/$fileName');
+      await file.writeAsBytes(response.bodyBytes);
+      if (!mounted) return;
+      await Share.shareXFiles([XFile(file.path)], text: fileName);
+    } catch (_) {
+      if (mounted) {
+        AppFeedback.showErrorToast(context, 'Could not download this image');
+      }
+    } finally {
+      if (mounted) setState(() => _downloading = false);
+    }
+  }
+
+  String _extensionFromUrl(String url) {
+    final path = Uri.tryParse(url)?.path ?? url;
+    final dot = path.lastIndexOf('.');
+    if (dot == -1 || dot == path.length - 1) return '.jpg';
+    final ext = path.substring(dot);
+    return ext.length <= 5 ? ext : '.jpg';
+  }
+
   @override
   Widget build(BuildContext context) {
+    final current = widget.images[_index];
     return Scaffold(
       backgroundColor: Colors.black,
       appBar: AppBar(
         backgroundColor: Colors.black,
         foregroundColor: Colors.white,
         title: Text(
-          '${_index + 1} / ${widget.urls.length}',
+          current.pageNumber != null
+              ? 'Page ${current.pageNumber} · ${_index + 1}/${widget.images.length}'
+              : '${_index + 1} / ${widget.images.length}',
           style: const TextStyle(fontSize: 14),
         ),
+        actions: [
+          IconButton(
+            icon: _downloading
+                ? const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: Colors.white,
+                    ),
+                  )
+                : const Icon(Icons.download_outlined),
+            tooltip: 'Download',
+            onPressed: _downloading ? null : _downloadCurrent,
+          ),
+        ],
       ),
       body: PageView.builder(
         controller: _pageCtrl,
-        itemCount: widget.urls.length,
+        itemCount: widget.images.length,
         onPageChanged: (i) => setState(() => _index = i),
         itemBuilder: (context, index) {
           return Center(
@@ -2185,7 +2303,7 @@ class _ImagePreviewScreenState extends State<_ImagePreviewScreen> {
               minScale: 0.8,
               maxScale: 4,
               child: Image.network(
-                widget.urls[index],
+                widget.images[index].url,
                 fit: BoxFit.contain,
                 errorBuilder: (_, _, _) => const Icon(
                   Icons.broken_image_outlined,

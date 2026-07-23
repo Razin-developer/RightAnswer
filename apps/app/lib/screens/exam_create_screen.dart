@@ -1,15 +1,19 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:uuid/uuid.dart';
 
 import '../config/app_config.dart';
+import '../models/beta_confirmation_exception.dart';
 import '../models/exam.dart';
 import '../models/exam_question.dart';
 import '../repositories/exam_message_repository.dart';
 import '../repositories/exam_question_repository.dart';
 import '../repositories/exam_repository.dart';
 import '../services/exam_ai_service.dart';
+import '../services/exam_sync_service.dart';
 import '../models/app_exception.dart';
 import '../widgets/app_feedback.dart';
 import '../widgets/chapter_picker.dart';
@@ -144,7 +148,7 @@ class _ExamCreateScreenState extends State<ExamCreateScreen> {
 
   // ── AI Generation ─────────────────────────────────────────────────────────
 
-  Future<void> _generateWithAI() async {
+  Future<void> _generateWithAI({String? confirmBetaChapterId}) async {
     if (_isGenerating) return;
     if (!AppConfig.hasApiUrl) {
       await AppFeedback.showErrorDialog(
@@ -166,6 +170,7 @@ class _ExamCreateScreenState extends State<ExamCreateScreen> {
         mcqOptionCount: _mcqOptionCount,
         timeLimit: _timeLimit,
         chapterIds: _selectedChapterId != null ? [_selectedChapterId!] : null,
+        confirmBetaChapterId: confirmBetaChapterId,
       );
 
       // If name not set, use AI-generated title
@@ -194,6 +199,14 @@ class _ExamCreateScreenState extends State<ExamCreateScreen> {
 
       setState(() => _questions = questions);
       await _saveAll();
+    } on BetaConfirmationRequiredException catch (e) {
+      if (!mounted) return;
+      setState(() => _isGenerating = false);
+      final confirmed = await _showBetaConfirmationDialog(e.message);
+      if (confirmed == true && e.chapterId != null) {
+        await _generateWithAI(confirmBetaChapterId: e.chapterId);
+      }
+      return;
     } on AppException catch (e) {
       if (mounted) AppFeedback.showErrorDialog(context, e);
     } catch (e) {
@@ -203,7 +216,31 @@ class _ExamCreateScreenState extends State<ExamCreateScreen> {
     }
   }
 
-  Future<void> _refineWithAI() async {
+  /// Same beta-chapter confirmation prompt as the chat screen — the
+  /// best-matching content for this request came from a chapter that
+  /// hasn't been fully verified yet. Returns true for "Yes, generate
+  /// anyway", false/null for "No".
+  Future<bool?> _showBetaConfirmationDialog(String message) {
+    return showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Beta chapter'),
+        content: Text(message),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('No'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Yes, generate anyway'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _refineWithAI({String? confirmBetaChapterId}) async {
     if (_isGenerating || _aiPromptCtrl.text.trim().isEmpty) return;
     if (!AppConfig.hasApiUrl) {
       await AppFeedback.showErrorDialog(
@@ -228,6 +265,7 @@ class _ExamCreateScreenState extends State<ExamCreateScreen> {
         examName: _savedExam!.name,
         currentQuestions: _questions,
         history: msgs,
+        confirmBetaChapterId: confirmBetaChapterId,
       );
 
       final questions = result.questions
@@ -252,6 +290,14 @@ class _ExamCreateScreenState extends State<ExamCreateScreen> {
         _aiPromptCtrl.clear();
       });
       await _saveAll();
+    } on BetaConfirmationRequiredException catch (e) {
+      if (!mounted) return;
+      setState(() => _isGenerating = false);
+      final confirmed = await _showBetaConfirmationDialog(e.message);
+      if (confirmed == true && e.chapterId != null) {
+        await _refineWithAI(confirmBetaChapterId: e.chapterId);
+      }
+      return;
     } on AppException catch (e) {
       if (mounted) AppFeedback.showErrorDialog(context, e);
     } catch (e) {
@@ -273,6 +319,9 @@ class _ExamCreateScreenState extends State<ExamCreateScreen> {
     for (final q in _questions) {
       await _questionRepo.insert(q);
     }
+    // Fire-and-forget cloud sync — never blocks the local save or its
+    // "Saved" feedback on network/server state.
+    unawaited(ExamSyncService.instance.pushExam(exam.id));
     if (mounted) AppFeedback.showToast(context, 'Saved');
   }
 

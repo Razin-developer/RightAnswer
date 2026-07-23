@@ -1,8 +1,11 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:intl/intl.dart';
 import 'package:uuid/uuid.dart';
 
+import '../models/beta_confirmation_exception.dart';
 import '../models/study_day.dart';
 import '../models/study_plan.dart';
 import '../models/study_task.dart';
@@ -11,6 +14,7 @@ import '../repositories/study_plan_repository.dart';
 import '../repositories/study_task_repository.dart';
 import '../services/notification_service.dart';
 import '../services/study_plan_ai_service.dart';
+import '../services/study_plan_sync_service.dart';
 import '../widgets/app_feedback.dart';
 import '../widgets/chapter_picker.dart';
 
@@ -107,7 +111,7 @@ class _StudyPlanCreateScreenState extends State<StudyPlanCreateScreen> {
 
   // ── AI generation ──────────────────────────────────────────────────────────
 
-  Future<void> _generate() async {
+  Future<void> _generate({String? confirmBetaChapterId}) async {
     final name = _nameCtrl.text.trim();
     if (name.isEmpty) {
       AppFeedback.showToast(context, 'Enter a plan name first');
@@ -128,6 +132,7 @@ class _StudyPlanCreateScreenState extends State<StudyPlanCreateScreen> {
         hoursPerDay: _hoursPerDay,
         topic: _topicCtrl.text.trim(),
         chapterIds: _selectedChapterId != null ? [_selectedChapterId!] : null,
+        confirmBetaChapterId: confirmBetaChapterId,
       );
       if (draft.suggestedName.isNotEmpty &&
           _nameCtrl.text.trim().isEmpty) {
@@ -139,6 +144,13 @@ class _StudyPlanCreateScreenState extends State<StudyPlanCreateScreen> {
           _phase = _Phase.review;
         });
       }
+    } on BetaConfirmationRequiredException catch (e) {
+      if (!mounted) return;
+      setState(() => _phase = _Phase.config);
+      final confirmed = await _showBetaConfirmationDialog(e.message);
+      if (confirmed == true && e.chapterId != null) {
+        await _generate(confirmBetaChapterId: e.chapterId);
+      }
     } catch (e) {
       if (mounted) {
         setState(() => _phase = _Phase.config);
@@ -147,36 +159,66 @@ class _StudyPlanCreateScreenState extends State<StudyPlanCreateScreen> {
     }
   }
 
-  Future<void> _refineWithAI() async {
-    final ctrl = TextEditingController();
-    final instruction = await showDialog<String>(
+  /// Same beta-chapter confirmation prompt as the chat screen — the
+  /// best-matching content for this request came from a chapter that
+  /// hasn't been fully verified yet. Returns true for "Yes, generate
+  /// anyway", false/null for "No".
+  Future<bool?> _showBetaConfirmationDialog(String message) {
+    return showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: Text('Refine with AI',
-            style: GoogleFonts.playfairDisplay(fontSize: 18)),
-        content: TextField(
-          controller: ctrl,
-          maxLines: 3,
-          autofocus: true,
-          decoration: const InputDecoration(
-            hintText:
-                'e.g. "Add more review sessions" or "Focus more on chapter 3"',
-            border: OutlineInputBorder(),
-          ),
-        ),
+        title: const Text('Beta chapter'),
+        content: Text(message),
         actions: [
           TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text('Cancel')),
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('No'),
+          ),
           FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: _coral),
-            onPressed: () => Navigator.pop(ctx, ctrl.text.trim()),
-            child: const Text('Refine'),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Yes, generate anyway'),
           ),
         ],
       ),
     );
-    ctrl.dispose();
+  }
+
+  Future<void> _refineWithAI({
+    String? instructionOverride,
+    String? confirmBetaChapterId,
+  }) async {
+    String? instruction = instructionOverride;
+    if (instruction == null) {
+      final ctrl = TextEditingController();
+      instruction = await showDialog<String>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: Text('Refine with AI',
+              style: GoogleFonts.playfairDisplay(fontSize: 18)),
+          content: TextField(
+            controller: ctrl,
+            maxLines: 3,
+            autofocus: true,
+            decoration: const InputDecoration(
+              hintText:
+                  'e.g. "Add more review sessions" or "Focus more on chapter 3"',
+              border: OutlineInputBorder(),
+            ),
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('Cancel')),
+            FilledButton(
+              style: FilledButton.styleFrom(backgroundColor: _coral),
+              onPressed: () => Navigator.pop(ctx, ctrl.text.trim()),
+              child: const Text('Refine'),
+            ),
+          ],
+        ),
+      );
+      ctrl.dispose();
+    }
     if (instruction == null || instruction.isEmpty || _draft == null) return;
 
     setState(() => _phase = _Phase.generating);
@@ -184,12 +226,23 @@ class _StudyPlanCreateScreenState extends State<StudyPlanCreateScreen> {
       final refined = await _aiService.refinePlan(
         current: _draft!,
         instruction: instruction,
+        confirmBetaChapterId: confirmBetaChapterId,
       );
       if (mounted) {
         setState(() {
           _draft = refined;
           _phase = _Phase.review;
         });
+      }
+    } on BetaConfirmationRequiredException catch (e) {
+      if (!mounted) return;
+      setState(() => _phase = _Phase.review);
+      final confirmed = await _showBetaConfirmationDialog(e.message);
+      if (confirmed == true && e.chapterId != null) {
+        await _refineWithAI(
+          instructionOverride: instruction,
+          confirmBetaChapterId: e.chapterId,
+        );
       }
     } catch (e) {
       if (mounted) {
@@ -265,6 +318,9 @@ class _StudyPlanCreateScreenState extends State<StudyPlanCreateScreen> {
           ));
         }
       }
+
+      // Fire-and-forget cloud sync — never blocks the local save.
+      unawaited(StudyPlanSyncService.instance.pushPlan(planId));
 
       // Schedule / cancel reminder
       if (_reminderEnabled) {

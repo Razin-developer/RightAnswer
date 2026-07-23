@@ -100,7 +100,14 @@ class RichAnswerView extends StatelessWidget {
         case 'svg':
           return _SvgBlock(block: rawBlock, isDark: isDark);
         case 'image':
-          return _ImageBlock(block: rawBlock, isDark: isDark);
+          // Deliberately not rendered: the model has no real image URLs,
+          // so an "image" block here is necessarily hallucinated/wrong.
+          // The backend already strips these server-side (defense in
+          // depth — see extract_rich_envelope); real page images come
+          // exclusively from the retrieved `sources` and render via
+          // _SourceImageStrip in chat_screen.dart, never from model
+          // output.
+          return null;
         case 'code':
           return _CodeBlock(block: rawBlock, isDark: isDark);
         case 'quote':
@@ -185,7 +192,20 @@ class _MarkdownAnswer extends StatelessWidget {
         height: 1.65,
         color: isDark ? const Color(0xFFFAF9F5) : const Color(0xFF141413),
       ),
-      child: GptMarkdown(content),
+      child: GptMarkdown(_stripImageSyntax(content)),
+    );
+  }
+
+  /// The model has no real image URLs — any `![alt](url)` it writes into
+  /// its own markdown text is necessarily hallucinated/wrong (there's no
+  /// retrieval step that could have given it one). Strip the directive but
+  /// keep the alt text, so nothing meaningful is silently dropped; real
+  /// page images render separately from the retrieved `sources`, never
+  /// from model-authored text — see _SourceImageStrip in chat_screen.dart.
+  static String _stripImageSyntax(String markdown) {
+    return markdown.replaceAllMapped(
+      RegExp(r'!\[([^\]]*)\]\([^)]+\)'),
+      (match) => match.group(1) ?? '',
     );
   }
 }
@@ -667,27 +687,6 @@ class _SvgBlock extends StatelessWidget {
             return _MarkdownAnswer(content: '```svg\n$svg\n```', isDark: isDark);
           }
         },
-      ),
-    );
-  }
-}
-
-class _ImageBlock extends StatelessWidget {
-  final Map<String, dynamic> block;
-  final bool isDark;
-
-  const _ImageBlock({required this.block, required this.isDark});
-
-  @override
-  Widget build(BuildContext context) {
-    final url = block['url']?.toString() ?? block['imageUrl']?.toString();
-    if (url == null || url.isEmpty) return const SizedBox.shrink();
-    return _BlockFrame(
-      caption: block['caption']?.toString() ?? block['alt']?.toString(),
-      isDark: isDark,
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(8),
-        child: Image.network(url, fit: BoxFit.contain),
       ),
     );
   }

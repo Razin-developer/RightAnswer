@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -12,7 +14,9 @@ import '../services/cloud_sync_service.dart';
 import '../services/connectivity_service.dart';
 import '../services/import_export_service.dart';
 import '../services/notification_service.dart';
+import '../services/study_plan_sync_service.dart';
 import '../widgets/app_feedback.dart';
+import '../widgets/plan_gate.dart';
 import 'study_plan_create_screen.dart';
 import 'study_plan_detail_screen.dart';
 
@@ -121,6 +125,7 @@ class _StudyPlanScreenState extends State<StudyPlanScreen> {
     await _taskRepo.deleteByPlan(plan.id);
     await _dayRepo.deleteByPlan(plan.id);
     await _planRepo.delete(plan.id);
+    unawaited(StudyPlanSyncService.instance.deletePlan(plan.id));
     if (mounted) _load();
   }
 
@@ -228,6 +233,28 @@ class _StudyPlanScreenState extends State<StudyPlanScreen> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
+
+    final plan = AuthService.instance.currentUser?.plan ?? 'hobby';
+    if (plan == 'hobby') {
+      return Scaffold(
+        backgroundColor: theme.scaffoldBackgroundColor,
+        appBar: AppBar(
+          title: Text(
+            'Study Plans',
+            style: GoogleFonts.playfairDisplay(
+              fontSize: 20,
+              letterSpacing: -0.3,
+            ),
+          ),
+          centerTitle: false,
+        ),
+        body: const PlanGate(
+          featureName: 'Study Plans',
+          description:
+              'Personalized study schedules are available on Pro and Scholar. Upgrade to build a plan for your exams.',
+        ),
+      );
+    }
 
     return Scaffold(
       backgroundColor: theme.scaffoldBackgroundColor,

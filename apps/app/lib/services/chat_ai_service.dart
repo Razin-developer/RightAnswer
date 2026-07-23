@@ -223,27 +223,11 @@ class ChatAIService {
 
   Future<String> generateChatName(String firstMessage) async {
     try {
-      final model =
-          await _settingsRepo.get(SettingKeys.openAiModel) ?? 'gpt-4o-mini';
-      final resp = await AIBackendService.postChatCompletions(
-        payload: {
-          'model': model,
-          'messages': [
-            {
-              'role': 'user',
-              'content': AppPrompts.buildChatTitlePrompt(firstMessage),
-            },
-          ],
-          'max_tokens': 20,
-          'temperature': 0.3,
-        },
-        timeout: const Duration(seconds: 90),
+      final title = await AIBackendService.generateTitle(
+        firstMessage,
+        timeout: const Duration(seconds: 20),
       );
-      if (resp.statusCode != 200) {
-        return _truncate(firstMessage, 40);
-      }
-      final data = jsonDecode(resp.body) as Map<String, dynamic>;
-      return (data['choices'][0]['message']['content'] as String).trim();
+      return title ?? _truncate(firstMessage, 40);
     } catch (_) {
       return _truncate(firstMessage, 40);
     }

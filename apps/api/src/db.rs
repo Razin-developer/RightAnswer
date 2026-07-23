@@ -6,7 +6,9 @@ use uuid::Uuid;
 
 use crate::{
     content_policy::{is_chapter_enabled, ChapterInfo},
-    models::{CachedAnswer, Chat, ChatMessage, ContentShare, ShareLink, User},
+    models::{
+        CachedAnswer, Chat, ChatMessage, ContentShare, Payment, ShareLink, SyncedRecord, User,
+    },
 };
 
 /// 24 random bytes, base64url-encoded (no padding) — matches the
@@ -134,7 +136,7 @@ impl Database {
             r#"
             INSERT INTO users (email, password_hash, name)
             VALUES ($1, $2, $3)
-            RETURNING id, email, password_hash, name, role, created_at
+            RETURNING id, email, password_hash, name, role, plan, created_at
             "#,
         )
         .bind(email)
@@ -146,7 +148,7 @@ impl Database {
 
     pub async fn user_by_email(&self, email: &str) -> Result<Option<User>, sqlx::Error> {
         sqlx::query_as::<_, User>(
-            "SELECT id, email, password_hash, name, role, created_at FROM users WHERE email = $1",
+            "SELECT id, email, password_hash, name, role, plan, created_at FROM users WHERE email = $1",
         )
         .bind(email)
         .fetch_optional(&self.pool)
@@ -155,9 +157,234 @@ impl Database {
 
     pub async fn user_by_id(&self, id: Uuid) -> Result<Option<User>, sqlx::Error> {
         sqlx::query_as::<_, User>(
-            "SELECT id, email, password_hash, name, role, created_at FROM users WHERE id = $1",
+            "SELECT id, email, password_hash, name, role, plan, created_at FROM users WHERE id = $1",
         )
         .bind(id)
+        .fetch_optional(&self.pool)
+        .await
+    }
+
+    pub async fn update_user_name(&self, user_id: Uuid, name: &str) -> Result<User, sqlx::Error> {
+        sqlx::query_as::<_, User>(
+            r#"
+            UPDATE users SET name = $2 WHERE id = $1
+            RETURNING id, email, password_hash, name, role, plan, created_at
+            "#,
+        )
+        .bind(user_id)
+        .bind(name)
+        .fetch_one(&self.pool)
+        .await
+    }
+
+    pub async fn update_user_password(
+        &self,
+        user_id: Uuid,
+        password_hash: &str,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query("UPDATE users SET password_hash = $2 WHERE id = $1")
+            .bind(user_id)
+            .bind(password_hash)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    // ── Exam / study-plan sync ──────────────────────────────────────────────
+    // Both follow the identical shape (see SyncedRecord) — one row per
+    // local record, upserted wholesale on every local save.
+
+    pub async fn upsert_exam(
+        &self,
+        owner_id: Uuid,
+        local_id: &str,
+        name: &str,
+        data: &serde_json::Value,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            r#"
+            INSERT INTO exams (owner_id, local_id, name, data)
+            VALUES ($1, $2, $3, $4)
+            ON CONFLICT (owner_id, local_id)
+              DO UPDATE SET name = $3, data = $4, updated_at = now()
+            "#,
+        )
+        .bind(owner_id)
+        .bind(local_id)
+        .bind(name)
+        .bind(data)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn list_exams(&self, owner_id: Uuid) -> Result<Vec<SyncedRecord>, sqlx::Error> {
+        sqlx::query_as::<_, SyncedRecord>(
+            "SELECT local_id, name, data, updated_at FROM exams WHERE owner_id = $1 ORDER BY updated_at DESC",
+        )
+        .bind(owner_id)
+        .fetch_all(&self.pool)
+        .await
+    }
+
+    pub async fn delete_exam(&self, owner_id: Uuid, local_id: &str) -> Result<(), sqlx::Error> {
+        sqlx::query("DELETE FROM exams WHERE owner_id = $1 AND local_id = $2")
+            .bind(owner_id)
+            .bind(local_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn upsert_study_plan(
+        &self,
+        owner_id: Uuid,
+        local_id: &str,
+        name: &str,
+        data: &serde_json::Value,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            r#"
+            INSERT INTO study_plans (owner_id, local_id, name, data)
+            VALUES ($1, $2, $3, $4)
+            ON CONFLICT (owner_id, local_id)
+              DO UPDATE SET name = $3, data = $4, updated_at = now()
+            "#,
+        )
+        .bind(owner_id)
+        .bind(local_id)
+        .bind(name)
+        .bind(data)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn list_study_plans(&self, owner_id: Uuid) -> Result<Vec<SyncedRecord>, sqlx::Error> {
+        sqlx::query_as::<_, SyncedRecord>(
+            "SELECT local_id, name, data, updated_at FROM study_plans WHERE owner_id = $1 ORDER BY updated_at DESC",
+        )
+        .bind(owner_id)
+        .fetch_all(&self.pool)
+        .await
+    }
+
+    pub async fn delete_study_plan(
+        &self,
+        owner_id: Uuid,
+        local_id: &str,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query("DELETE FROM study_plans WHERE owner_id = $1 AND local_id = $2")
+            .bind(owner_id)
+            .bind(local_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    // ── Plans / usage / payments ────────────────────────────────────────────
+
+    pub async fn user_credit_balance(&self, user_id: Uuid) -> Result<f64, sqlx::Error> {
+        sqlx::query_scalar::<_, f64>("SELECT credit_balance_usd FROM users WHERE id = $1")
+            .bind(user_id)
+            .fetch_one(&self.pool)
+            .await
+    }
+
+    /// Number of `/api/ai/chat`-family requests (i.e. questions asked) by
+    /// this user since UTC midnight today.
+    pub async fn count_questions_today(&self, user_id: Uuid) -> Result<i64, sqlx::Error> {
+        sqlx::query_scalar::<_, i64>(
+            r#"
+            SELECT COUNT(*) FROM ai_usage_events
+            WHERE user_id = $1
+              AND route IN ('/api/ai/chat', '/api/ai/chat/stream')
+              AND created_at >= date_trunc('day', now())
+            "#,
+        )
+        .bind(user_id)
+        .fetch_one(&self.pool)
+        .await
+    }
+
+    /// Total estimated OpenRouter/HackAI spend by this user since the start
+    /// of the current ISO week (Monday, UTC) — the basis for the weekly
+    /// credit limit.
+    pub async fn sum_cost_this_week(&self, user_id: Uuid) -> Result<f64, sqlx::Error> {
+        sqlx::query_scalar::<_, f64>(
+            r#"
+            SELECT COALESCE(SUM(estimated_cost_usd), 0) FROM ai_usage_events
+            WHERE user_id = $1
+              AND created_at >= date_trunc('week', now())
+            "#,
+        )
+        .bind(user_id)
+        .fetch_one(&self.pool)
+        .await
+    }
+
+    pub async fn set_user_plan(&self, user_id: Uuid, plan: &str) -> Result<(), sqlx::Error> {
+        sqlx::query("UPDATE users SET plan = $2 WHERE id = $1")
+            .bind(user_id)
+            .bind(plan)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn add_credits(&self, user_id: Uuid, amount_usd: f64) -> Result<(), sqlx::Error> {
+        sqlx::query("UPDATE users SET credit_balance_usd = credit_balance_usd + $2 WHERE id = $1")
+            .bind(user_id)
+            .bind(amount_usd)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn create_payment(
+        &self,
+        user_id: Uuid,
+        plan: &str,
+        amount_inr: i64,
+        credits_usd: f64,
+    ) -> Result<Payment, sqlx::Error> {
+        sqlx::query_as::<_, Payment>(
+            r#"
+            INSERT INTO payments (user_id, plan, amount_inr, credits_usd)
+            VALUES ($1, $2, $3, $4)
+            RETURNING id, user_id, plan, amount_inr, credits_usd, status,
+              provider, provider_ref, created_at, completed_at
+            "#,
+        )
+        .bind(user_id)
+        .bind(plan)
+        .bind(amount_inr)
+        .bind(credits_usd)
+        .fetch_one(&self.pool)
+        .await
+    }
+
+    /// Marks a pending payment success/failed. Only ever transitions a
+    /// `pending` row (idempotent against double-submits/retries of the
+    /// mock success/failure buttons) — already-completed payments are left
+    /// untouched and the caller gets back `None`.
+    pub async fn complete_payment(
+        &self,
+        payment_id: Uuid,
+        user_id: Uuid,
+        status: &str,
+    ) -> Result<Option<Payment>, sqlx::Error> {
+        sqlx::query_as::<_, Payment>(
+            r#"
+            UPDATE payments SET status = $3, completed_at = now()
+            WHERE id = $1 AND user_id = $2 AND status = 'pending'
+            RETURNING id, user_id, plan, amount_inr, credits_usd, status,
+              provider, provider_ref, created_at, completed_at
+            "#,
+        )
+        .bind(payment_id)
+        .bind(user_id)
+        .bind(status)
         .fetch_optional(&self.pool)
         .await
     }
@@ -384,6 +611,48 @@ impl Database {
             "#,
         )
         .bind(content_id)
+        .fetch_optional(&self.pool)
+        .await
+    }
+
+    /// Partial update — only fields that are `Some` are changed. Returns
+    /// `None` if no chat with this owner/local_id exists (not a distinct
+    /// error case; the caller decides whether that's a 404).
+    #[allow(clippy::too_many_arguments)]
+    pub async fn update_chat_fields(
+        &self,
+        owner_id: Uuid,
+        local_id: &str,
+        name: Option<&str>,
+        subject_id: Option<&str>,
+        subject_name: Option<&str>,
+        chapter_ids: Option<&[String]>,
+        chapter_names: Option<&[String]>,
+        is_pinned: Option<bool>,
+    ) -> Result<Option<Chat>, sqlx::Error> {
+        sqlx::query_as::<_, Chat>(
+            r#"
+            UPDATE chats SET
+              name = COALESCE($3, name),
+              subject_id = COALESCE($4, subject_id),
+              subject_name = COALESCE($5, subject_name),
+              chapter_ids = COALESCE($6, chapter_ids),
+              chapter_names = COALESCE($7, chapter_names),
+              is_pinned = COALESCE($8, is_pinned),
+              updated_at = now()
+            WHERE owner_id = $1 AND local_id = $2
+            RETURNING id, owner_id, local_id, name, subject_id, subject_name,
+              chapter_ids, chapter_names, is_temporary, is_pinned, created_at, updated_at
+            "#,
+        )
+        .bind(owner_id)
+        .bind(local_id)
+        .bind(name)
+        .bind(subject_id)
+        .bind(subject_name)
+        .bind(chapter_ids)
+        .bind(chapter_names)
+        .bind(is_pinned)
         .fetch_optional(&self.pool)
         .await
     }

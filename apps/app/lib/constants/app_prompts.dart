@@ -126,10 +126,6 @@ RESOURCE BLOCK
 $contextBlock''';
   }
 
-  static String buildChatTitlePrompt(String firstMessage) =>
-      'Create a concise 3-5 word chat title for this first user message. '
-      'Use plain words only. Reply with ONLY the title, with no quotes, no numbering, and no punctuation.\n"$firstMessage"';
-
   static const String imageExtractionSystemPrompt =
       '''You convert textbook, notes, worksheet, and study-material images into clean, reliable study text.
 

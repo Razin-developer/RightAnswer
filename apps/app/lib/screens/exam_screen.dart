@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -10,6 +12,7 @@ import '../repositories/exam_repository.dart';
 import '../services/auth_service.dart';
 import '../services/cloud_sync_service.dart';
 import '../services/connectivity_service.dart';
+import '../services/exam_sync_service.dart';
 import '../services/import_export_service.dart';
 import '../widgets/app_feedback.dart';
 import 'exam_attempt_screen.dart';
@@ -127,6 +130,7 @@ class _ExamScreenState extends State<ExamScreen> {
     await _messageRepo.deleteByExam(exam.id);
     await _questionRepo.deleteByExam(exam.id);
     await _examRepo.delete(exam.id);
+    unawaited(ExamSyncService.instance.deleteExam(exam.id));
     _load();
   }
 

@@ -4,6 +4,7 @@ import 'package:http/http.dart' as http;
 import 'package:uuid/uuid.dart';
 
 import '../models/app_exception.dart';
+import '../models/beta_confirmation_exception.dart';
 import '../models/usage_log.dart';
 import '../repositories/settings_repository.dart';
 import '../repositories/usage_log_repository.dart';
@@ -75,6 +76,10 @@ class StudyPlanAIService {
     // picker. Scopes backend Qdrant retrieval to just this chapter; null or
     // empty preserves the existing global-search behavior.
     List<String>? chapterIds,
+    // Set when the user tapped "Yes" on the beta-chapter confirmation
+    // dialog for a previous attempt — see BetaConfirmationRequiredException
+    // and study_plan_create_screen.dart's confirmation flow.
+    String? confirmBetaChapterId,
   }) async {
     AIBackendService.requireChatApiKey();
     final model =
@@ -138,12 +143,18 @@ Return ONLY valid JSON — no markdown, no explanation:
         'response_format': {'type': 'json_object'},
         if (chapterIds != null && chapterIds.isNotEmpty)
           'chapterIds': chapterIds,
+        'confirmBetaChapterId': ?confirmBetaChapterId,
       },
       timeout: const Duration(seconds: 120),
     );
     if (resp.statusCode != 200) throw _buildException(resp);
 
     final data = jsonDecode(resp.body) as Map<String, dynamic>;
+    final betaConfirmation = BetaConfirmationRequiredException.fromResponse(
+      data,
+    );
+    if (betaConfirmation != null) throw betaConfirmation;
+
     await _logUsage(data, 'study_plan_generate');
     final draft = _parse(data['choices'][0]['message']['content'] as String);
     return _runCreationHarness(
@@ -157,6 +168,7 @@ Return ONLY valid JSON — no markdown, no explanation:
   Future<StudyPlanDraft> refinePlan({
     required StudyPlanDraft current,
     required String instruction,
+    String? confirmBetaChapterId,
   }) async {
     AIBackendService.requireChatApiKey();
     final model =
@@ -184,12 +196,18 @@ ${_draftToJson(current)}''';
         'temperature': 0.4,
         'max_tokens': 6000,
         'response_format': {'type': 'json_object'},
+        'confirmBetaChapterId': ?confirmBetaChapterId,
       },
       timeout: const Duration(seconds: 120),
     );
     if (resp.statusCode != 200) throw _buildException(resp);
 
     final data = jsonDecode(resp.body) as Map<String, dynamic>;
+    final betaConfirmation = BetaConfirmationRequiredException.fromResponse(
+      data,
+    );
+    if (betaConfirmation != null) throw betaConfirmation;
+
     await _logUsage(data, 'study_plan_refine');
     return _parse(data['choices'][0]['message']['content'] as String);
   }

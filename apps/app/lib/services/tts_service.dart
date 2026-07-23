@@ -3,24 +3,32 @@ import 'dart:convert';
 import 'package:flutter_tts/flutter_tts.dart';
 
 import '../constants/app_languages.dart';
+import '../repositories/settings_repository.dart';
 
 class TtsService {
   static final TtsService instance = TtsService._();
   TtsService._();
 
   final FlutterTts _tts = FlutterTts();
+  final _settingsRepo = SettingsRepository();
   bool _speaking = false;
+  double _speechRate = 0.5;
 
   // How much of the current streaming message's cleaned text has already
   // been queued for speech (see speakStreamingUpdate/finishStreaming).
   int _spokenLength = 0;
 
   bool get isSpeaking => _speaking;
+  double get speechRate => _speechRate;
 
   Future<void> initialize() async {
     try {
+      final saved = await _settingsRepo.get(SettingKeys.ttsSpeechRate);
+      final rate = double.tryParse(saved ?? '');
+      _speechRate = (rate != null && rate >= 0.25 && rate <= 1.0) ? rate : 0.5;
+
       await _tts.setLanguage(defaultSpeechLocale);
-      await _tts.setSpeechRate(0.5);
+      await _tts.setSpeechRate(_speechRate);
       await _tts.setVolume(1.0);
       await _tts.setPitch(1.0);
       _tts.setCompletionHandler(() => _speaking = false);
@@ -28,6 +36,21 @@ class TtsService {
     } catch (_) {
       _speaking = false;
     }
+  }
+
+  /// Persists and applies a new reading speed (0.25x-1.0x). Values outside
+  /// that range are clamped rather than rejected, so a slider that somehow
+  /// reports an out-of-range value (rounding, a future UI change) can never
+  /// hand the plugin a rate it might reject.
+  Future<void> setSpeechRate(double rate) async {
+    _speechRate = rate.clamp(0.25, 1.0);
+    try {
+      await _tts.setSpeechRate(_speechRate);
+    } catch (_) {
+      // Non-fatal — the rate still applies to the next speak() call's
+      // setLanguage/setSpeechRate cycle even if this immediate call failed.
+    }
+    await _settingsRepo.set(SettingKeys.ttsSpeechRate, _speechRate.toString());
   }
 
   Future<void> speak(String text, {String? language}) async {

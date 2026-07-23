@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 import 'package:uuid/uuid.dart';
 
 import '../models/app_exception.dart';
+import '../models/beta_confirmation_exception.dart';
 import '../models/exam_message.dart';
 import '../models/exam_question.dart';
 import '../models/usage_log.dart';
@@ -44,6 +45,10 @@ class ExamAIService {
     // picker. Scopes backend Qdrant retrieval to just this chapter; null or
     // empty preserves the existing global-search behavior.
     List<String>? chapterIds,
+    // Set when the user tapped "Yes" on the beta-chapter confirmation
+    // dialog for a previous attempt — see BetaConfirmationRequiredException
+    // and exam_create_screen.dart's confirmation flow.
+    String? confirmBetaChapterId,
   }) async {
     AIBackendService.requireChatApiKey();
     final model =
@@ -73,12 +78,18 @@ class ExamAIService {
         'response_format': {'type': 'json_object'},
         if (chapterIds != null && chapterIds.isNotEmpty)
           'chapterIds': chapterIds,
+        'confirmBetaChapterId': ?confirmBetaChapterId,
       },
       timeout: const Duration(seconds: 120),
     );
     if (resp.statusCode != 200) throw _buildException(resp);
 
     final data = jsonDecode(resp.body) as Map<String, dynamic>;
+    final betaConfirmation = BetaConfirmationRequiredException.fromResponse(
+      data,
+    );
+    if (betaConfirmation != null) throw betaConfirmation;
+
     final content = data['choices'][0]['message']['content'] as String;
     await _logUsage(data, 'exam_generate');
 
@@ -104,6 +115,7 @@ class ExamAIService {
     required List<ExamQuestion> currentQuestions,
     required List<ExamMessage> history,
     String? imagePath,
+    String? confirmBetaChapterId,
   }) async {
     AIBackendService.requireChatApiKey();
     final model =
@@ -141,12 +153,18 @@ class ExamAIService {
         'temperature': 0.4,
         'max_tokens': 4000,
         'response_format': {'type': 'json_object'},
+        'confirmBetaChapterId': ?confirmBetaChapterId,
       },
       timeout: const Duration(seconds: 120),
     );
     if (resp.statusCode != 200) throw _buildException(resp);
 
     final data = jsonDecode(resp.body) as Map<String, dynamic>;
+    final betaConfirmation = BetaConfirmationRequiredException.fromResponse(
+      data,
+    );
+    if (betaConfirmation != null) throw betaConfirmation;
+
     final content = data['choices'][0]['message']['content'] as String;
     await _logUsage(data, 'exam_edit');
 

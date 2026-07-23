@@ -11,6 +11,7 @@ pub struct User {
     pub password_hash: String,
     pub name: String,
     pub role: String,
+    pub plan: String,
     pub created_at: DateTime<Utc>,
 }
 
@@ -20,6 +21,7 @@ pub struct AuthUser {
     pub email: String,
     pub name: String,
     pub role: String,
+    pub plan: String,
 }
 
 impl From<User> for AuthUser {
@@ -29,6 +31,7 @@ impl From<User> for AuthUser {
             email: user.email,
             name: user.name,
             role: user.role,
+            plan: user.plan,
         }
     }
 }
@@ -92,6 +95,38 @@ pub struct ContentShare {
     pub bytes: Vec<u8>,
     #[allow(dead_code)]
     pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, FromRow)]
+#[serde(rename_all = "camelCase")]
+pub struct Payment {
+    pub id: Uuid,
+    #[allow(dead_code)]
+    #[serde(skip_serializing)]
+    pub user_id: Uuid,
+    pub plan: String,
+    pub amount_inr: i64,
+    pub credits_usd: f64,
+    pub status: String,
+    #[allow(dead_code)]
+    pub provider: String,
+    #[allow(dead_code)]
+    pub provider_ref: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub completed_at: Option<DateTime<Utc>>,
+}
+
+/// One synced exam or study plan — the full local record (exam+questions,
+/// or plan+days+tasks) stored opaquely in `data`, matching the client's
+/// own local SQLite shape rather than a normalized server schema. See
+/// migrations/0004_exams_study_plans.sql.
+#[derive(Debug, Clone, Serialize, FromRow)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncedRecord {
+    pub local_id: String,
+    pub name: String,
+    pub data: serde_json::Value,
+    pub updated_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

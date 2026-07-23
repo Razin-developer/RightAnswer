@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 
 import '../constants/app_languages.dart';
@@ -5,11 +7,18 @@ import '../database/database_helper.dart';
 import '../repositories/settings_repository.dart';
 import '../repositories/usage_log_repository.dart';
 import '../services/auth_service.dart';
+import '../services/catalog_sync_service.dart';
+import '../services/connectivity_service.dart';
+import '../services/exam_sync_service.dart';
 import '../services/notification_service.dart';
+import '../services/study_plan_sync_service.dart';
+import '../services/tts_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/app_feedback.dart';
 import '../widgets/language_picker_sheet.dart';
 import 'login_screen.dart';
+import 'plans_screen.dart';
+import 'profile_screen.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -30,9 +39,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
   String _gradeLevel = 'Grade 10';
   String _tone = 'normal';
   String _outputLength = 'medium';
+  String _reasoningLevel = 'mid';
   String _themeMode = 'system';
+  double _speechRate = 0.5;
 
   bool _loading = true;
+  bool _syncing = false;
   Map<String, dynamic> _usage = {};
 
   bool _notifyOnComplete = true;
@@ -73,7 +85,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _gradeLevel = all[SettingKeys.defaultGradeLevel] ?? 'Grade 10';
       _tone = all[SettingKeys.defaultTone] ?? 'normal';
       _outputLength = all[SettingKeys.defaultOutputLength] ?? 'medium';
+      _reasoningLevel = all[SettingKeys.defaultReasoningLevel] ?? 'mid';
       _themeMode = all[SettingKeys.themeMode] ?? 'system';
+      _speechRate = TtsService.instance.speechRate;
       _inputPriceCtrl.text = all[SettingKeys.inputTokenPrice] ?? '0.0005';
       _outputPriceCtrl.text = all[SettingKeys.outputTokenPrice] ?? '0.0015';
       _tokenLimitCtrl.text = all[SettingKeys.chatDailyTokenLimit] ?? '0';
@@ -146,6 +160,26 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
+  Future<void> _syncNow() async {
+    if (!ConnectivityService.instance.isOnline) {
+      AppFeedback.showToast(context, 'You are offline');
+      return;
+    }
+    setState(() => _syncing = true);
+    try {
+      await Future.wait([
+        CatalogSyncService.instance.syncInBackground(),
+        ExamSyncService.instance.pullMissing(),
+        StudyPlanSyncService.instance.pullMissing(),
+      ]);
+      if (mounted) AppFeedback.showSuccessToast(context, 'Synced');
+    } catch (_) {
+      if (mounted) AppFeedback.showErrorToast(context, 'Sync failed — try again shortly');
+    } finally {
+      if (mounted) setState(() => _syncing = false);
+    }
+  }
+
   Future<void> _clearData() async {
     final ok = await showDialog<bool>(
       context: context,
@@ -175,6 +209,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
+  /// The profile photo is never uploaded server-side, so it's the one
+  /// piece of account-identifying data left on-device after logout —
+  /// clear it so a different account signing in on the same device
+  /// doesn't inherit the previous user's photo.
+  Future<void> _clearLocalAvatar() async {
+    try {
+      final path = await _settingsRepo.get(SettingKeys.profileAvatarPath);
+      if (path == null) return;
+      final file = File(path);
+      if (await file.exists()) await file.delete();
+      await _settingsRepo.set(SettingKeys.profileAvatarPath, '');
+    } catch (_) {
+      // Best-effort cleanup — never block logout on this.
+    }
+  }
+
   Future<void> _logout() async {
     final ok = await showDialog<bool>(
       context: context,
@@ -195,6 +245,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
     if (ok != true) return;
     await AuthService.instance.logout();
+    await _clearLocalAvatar();
     if (!mounted) return;
     Navigator.of(context).pushAndRemoveUntil(
       MaterialPageRoute(builder: (_) => const LoginScreen()),
@@ -242,6 +293,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 },
                 theme,
               ),
+              const SizedBox(height: 14),
+              _dropdownRow('Reasoning Depth', _reasoningLevel, [
+                'low',
+                'mid',
+                'high',
+              ], (value) {
+                setState(() => _reasoningLevel = value!);
+                _save(SettingKeys.defaultReasoningLevel, value!);
+              }, theme),
             ],
           ),
           const SizedBox(height: 20),
@@ -255,6 +315,44 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   const Spacer(),
                   _themeToggle(theme),
                 ],
+              ),
+            ],
+          ),
+          const SizedBox(height: 20),
+          _sectionTitle('Voice & Reading', Icons.record_voice_over_outlined, theme),
+          _card(
+            theme,
+            children: [
+              Row(
+                children: [
+                  Text('Reading speed', style: _labelStyle(theme)),
+                  const Spacer(),
+                  Text(
+                    '${_speechRate.toStringAsFixed(2)}x',
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                      color: theme.colorScheme.primary,
+                    ),
+                  ),
+                ],
+              ),
+              Slider(
+                value: _speechRate,
+                min: 0.25,
+                max: 1.0,
+                divisions: 15,
+                label: '${_speechRate.toStringAsFixed(2)}x',
+                onChanged: (value) => setState(() => _speechRate = value),
+                onChangeEnd: (value) =>
+                    TtsService.instance.setSpeechRate(value),
+              ),
+              Text(
+                'Controls how fast "Read" speaks chat answers aloud.',
+                style: TextStyle(
+                  fontSize: 11,
+                  color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
+                ),
               ),
             ],
           ),
@@ -442,6 +540,26 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
           if (AuthService.instance.isLoggedIn) ...[
             const SizedBox(height: 20),
+            _sectionTitle('Plan', Icons.workspace_premium_outlined, theme),
+            _card(
+              theme,
+              children: [
+                _actionTile(
+                  icon: Icons.workspace_premium_outlined,
+                  color: theme.colorScheme.primary,
+                  label: _planDisplayName(
+                    AuthService.instance.currentUser?.plan ?? 'hobby',
+                  ),
+                  subtitle: 'View plans, usage, and upgrade options',
+                  onTap: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const PlansScreen()),
+                  ),
+                  theme: theme,
+                ),
+              ],
+            ),
+            const SizedBox(height: 20),
             _sectionTitle('Account', Icons.person_outline, theme),
             _card(
               theme,
@@ -494,6 +612,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ),
                 Divider(color: theme.dividerColor, height: 24),
                 _actionTile(
+                  icon: Icons.person_outline,
+                  color: theme.colorScheme.primary,
+                  label: 'Edit Profile',
+                  subtitle: 'Name, photo, and password',
+                  onTap: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const ProfileScreen()),
+                  ),
+                  theme: theme,
+                ),
+                Divider(color: theme.dividerColor, height: 1),
+                _actionTile(
                   icon: Icons.logout_rounded,
                   color: Colors.red,
                   label: 'Log Out',
@@ -505,6 +635,57 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
           ],
           const SizedBox(height: 20),
+          if (AuthService.instance.isLoggedIn) ...[
+            _sectionTitle('Cloud Sync', Icons.cloud_sync_outlined, theme),
+            _card(
+              theme,
+              children: [
+                Row(
+                  children: [
+                    Icon(
+                      ConnectivityService.instance.isOnline
+                          ? Icons.cloud_done_outlined
+                          : Icons.cloud_off_outlined,
+                      size: 18,
+                      color: ConnectivityService.instance.isOnline
+                          ? const Color(0xFF059669)
+                          : theme.colorScheme.onSurface.withValues(alpha: 0.4),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        ConnectivityService.instance.isOnline
+                            ? 'Chats, exams, and study plans sync automatically'
+                            : 'Offline — changes will sync once reconnected',
+                        style: TextStyle(
+                          fontSize: 12.5,
+                          color: theme.colorScheme.onSurface.withValues(
+                            alpha: 0.65,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    onPressed: _syncing ? null : _syncNow,
+                    icon: _syncing
+                        ? const SizedBox(
+                            width: 14,
+                            height: 14,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.sync_rounded, size: 16),
+                    label: Text(_syncing ? 'Syncing…' : 'Sync Now'),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 20),
+          ],
           _sectionTitle('Data', Icons.storage_outlined, theme),
           _card(
             theme,
@@ -537,6 +718,46 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 onTap: () =>
                     AppFeedback.showToast(context, 'Import coming soon'),
                 theme: theme,
+              ),
+            ],
+          ),
+          const SizedBox(height: 20),
+          _sectionTitle('About', Icons.info_outline, theme),
+          _card(
+            theme,
+            children: [
+              Row(
+                children: [
+                  Text('App', style: _labelStyle(theme)),
+                  const Spacer(),
+                  Text(
+                    'RightAnswer',
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: theme.colorScheme.onSurface.withValues(
+                        alpha: 0.75,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  Text('Version', style: _labelStyle(theme)),
+                  const Spacer(),
+                  Text(
+                    '1.0.0',
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: theme.colorScheme.onSurface.withValues(
+                        alpha: 0.75,
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ],
           ),
@@ -843,6 +1064,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
       ),
     );
   }
+
+  String _planDisplayName(String plan) => switch (plan) {
+    'pro' => 'Pro Plan',
+    'scholar' => 'Scholar Plan',
+    _ => 'Hobby Plan (Free)',
+  };
 
   TextStyle _labelStyle(ThemeData theme) => TextStyle(
     fontSize: 13,

@@ -32,7 +32,9 @@ class SettingKeys {
   static const String defaultGradeLevel = 'default_grade_level';
   static const String defaultTone = 'default_tone';
   static const String defaultOutputLength = 'default_output_length';
+  static const String defaultReasoningLevel = 'default_reasoning_level';
   static const String themeMode = 'theme_mode';
+  static const String ttsSpeechRate = 'tts_speech_rate';
   static const String inputTokenPrice = 'input_token_price';
   static const String outputTokenPrice = 'output_token_price';
   static const String openAiModel = 'openai_model';
@@ -44,4 +46,8 @@ class SettingKeys {
   static const String dailyReminderMinute = 'daily_reminder_minute';
   // Chat
   static const String chatDailyTokenLimit = 'chat_daily_token_limit';
+  // Profile — the photo itself is never uploaded anywhere (no S3/R2, no
+  // server round trip); only the local file path is persisted, and only
+  // this device ever renders it.
+  static const String profileAvatarPath = 'profile_avatar_path';
 }

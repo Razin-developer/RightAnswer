@@ -268,24 +268,24 @@ class _ChapterPickerSheetState extends State<_ChapterPickerSheet> {
                 ),
               ),
               const SizedBox(height: 10),
-              Flexible(
-                child: ConstrainedBox(
-                  constraints: const BoxConstraints(maxHeight: 440),
-                  child: _loading
-                      ? const Padding(
-                          padding: EdgeInsets.symmetric(vertical: 32),
-                          child: Center(
-                            child: SizedBox(
-                              width: 22,
-                              height: 22,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            ),
-                          ),
-                        )
-                      : _subjects.isEmpty
-                      ? _EmptyCatalog(theme: theme)
-                      : _buildList(theme, query),
-                ),
+              // Fixed height regardless of how many subjects/parts/chapters
+              // are showing — a picker whose sheet height jumped around
+              // with content (a handful of subjects vs. a full chapter
+              // list) felt unstable. Short content just leaves empty space
+              // below it; long content scrolls within this box.
+              SizedBox(
+                height: 440,
+                child: _loading
+                    ? const Center(
+                        child: SizedBox(
+                          width: 22,
+                          height: 22,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                      )
+                    : _subjects.isEmpty
+                    ? _EmptyCatalog(theme: theme)
+                    : _buildList(theme, query),
               ),
             ],
           ),
@@ -336,7 +336,15 @@ class _ChapterPickerSheetState extends State<_ChapterPickerSheet> {
       }
 
       final subject = _drilldownSubject!;
-      if (_drilldownPart == null) {
+      // `_drilldownPart == null` is ambiguous on its own: it means both
+      // "haven't picked a part yet" AND "this subject's only part has no
+      // label" (Malayalam ET/BET, ICT, ... — one book, not split into
+      // parts). Only show the part-picker when there's actually more than
+      // one part to choose from — otherwise a single-part subject would
+      // show a dead-end "All chapters" tile whose tap sets _drilldownPart
+      // to the same null value, so the UI never advances.
+      final needsPartChoice = _drilldownPart == null && _hasMultipleParts(subject);
+      if (needsPartChoice) {
         final parts = _partsFor(subject);
         return ListView.separated(
           shrinkWrap: true,

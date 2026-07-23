@@ -8,7 +8,7 @@ use axum::{
         sse::{Event, KeepAlive, KeepAliveStream, Sse},
         IntoResponse, Response,
     },
-    routing::{get, post},
+    routing::{get, post, put},
     Json, Router,
 };
 use futures_util::Stream;
@@ -23,11 +23,11 @@ use uuid::Uuid;
 
 use crate::{
     admin,
-    auth::{hash_password, require_user, sign_token, user_from_headers, verify_password},
+    auth::{hash_password, require_user, sign_token, verify_password},
     config::Config,
     db::Database,
     error::ApiError,
-    models::{AiAnswer, AiChatRequest, AuthUser, CachedAnswer, Chat},
+    models::{AiAnswer, AiChatRequest, AuthUser, CachedAnswer, Chat, ChatMessage},
     openrouter::AiGateway,
     qdrant::QdrantGateway,
     rag::{select_contexts, ContextsOutcome},
@@ -80,26 +80,57 @@ pub fn api_router(state: Arc<AppState>) -> Router {
         .route("/auth/register", post(register))
         .route("/auth/signup", post(register))
         .route("/auth/login", post(login))
+        .route("/auth/change-password", post(change_password))
         .layer(governed_layer(1, 5));
 
     let ai_routes = Router::new()
         .route("/ai/chat", post(ai_chat))
         .route("/ai/chat/stream", post(ai_chat_stream))
+        .route("/ai/title", post(ai_title))
         .route("/ai/embeddings", post(embeddings))
         .route("/ai/rerank", post(rerank))
         .layer(governed_layer(1, 10));
 
+    // Authenticated CRUD/data endpoints — not cost-bearing like ai_routes,
+    // but every one of these previously had no rate limit at all beyond
+    // whatever the client naturally does, so a compromised token (or a
+    // buggy client stuck in a retry loop) could hammer the DB unbounded.
+    // Generous limits since normal use (saving a chat message, syncing an
+    // exam) is legitimately bursty.
+    let data_routes = Router::new()
+        .route("/chats", get(list_chats).post(upsert_chat))
+        .route("/chats/by-local/{local_id}", put(update_chat))
+        .route(
+            "/chats/by-local/{local_id}/messages",
+            post(add_chat_message),
+        )
+        .route("/chats/by-local/{local_id}/share", post(share_chat))
+        .route("/content", post(upload_content))
+        .route("/exams", get(list_exams))
+        .route(
+            "/exams/by-local/{local_id}",
+            put(upsert_exam).delete(delete_exam),
+        )
+        .route("/study-plans", get(list_study_plans))
+        .route(
+            "/study-plans/by-local/{local_id}",
+            put(upsert_study_plan).delete(delete_study_plan),
+        )
+        .route("/usage/me", get(usage_me))
+        .route("/plans/checkout", post(plans_checkout))
+        .route("/plans/payments/{id}/complete", post(complete_payment))
+        .layer(governed_layer(5, 20));
+
     Router::new()
         .route("/health", get(health))
         .route("/catalog", get(catalog))
-        .route("/auth/me", get(me))
-        .route("/chats", get(list_chats).post(upsert_chat))
-        .route("/chats/by-local/{local_id}/share", post(share_chat))
+        .route("/auth/me", get(me).put(update_profile))
         .route("/share/{token}", get(resolve_share))
-        .route("/content", post(upload_content))
+        .route("/plans", get(list_plans))
         .route("/admin/metrics", get(admin::metrics))
         .merge(auth_routes)
         .merge(ai_routes)
+        .merge(data_routes)
         .with_state(state)
 }
 
@@ -185,12 +216,348 @@ async fn me(
     Ok(ok(json!({ "user": user })))
 }
 
+#[derive(Deserialize)]
+struct UpdateProfileRequest {
+    name: Option<String>,
+}
+
+async fn update_profile(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(body): Json<UpdateProfileRequest>,
+) -> Result<Json<ApiResponse<serde_json::Value>>, ApiError> {
+    let user = require_user(&state, &headers).await?;
+    let name = body
+        .name
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| ApiError::BadRequest("name is required".into()))?;
+    if name.chars().count() > 100 {
+        return Err(ApiError::BadRequest(
+            "name must be 100 characters or fewer".into(),
+        ));
+    }
+    let updated = AuthUser::from(state.db.update_user_name(user.id, name).await?);
+    Ok(ok(json!({ "user": updated })))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ChangePasswordRequest {
+    old_password: String,
+    new_password: String,
+}
+
+/// Requires the current password before setting a new one — this route is
+/// rate-limited via `auth_routes`'s governed_layer for the same reason
+/// login is, since it's brute-forceable against a known account.
+async fn change_password(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(body): Json<ChangePasswordRequest>,
+) -> Result<Json<ApiResponse<serde_json::Value>>, ApiError> {
+    let user = require_user(&state, &headers).await?;
+    if body.new_password.len() < 6 {
+        return Err(ApiError::BadRequest(
+            "New password must be at least 6 characters".into(),
+        ));
+    }
+    let full_user = state
+        .db
+        .user_by_id(user.id)
+        .await?
+        .ok_or_else(|| ApiError::Unauthorized("Authentication required".into()))?;
+    if !verify_password(&body.old_password, &full_user.password_hash) {
+        return Err(ApiError::Unauthorized(
+            "Current password is incorrect".into(),
+        ));
+    }
+    let new_hash = hash_password(&body.new_password)?;
+    state.db.update_user_password(user.id, &new_hash).await?;
+    Ok(ok(json!({ "success": true })))
+}
+
+/// Public plan catalog — pricing/limits come straight from `PlanConfig`
+/// (env-driven), so the client never hardcodes a price that could drift
+/// from what the server actually charges/enforces.
+async fn list_plans(State(state): State<Arc<AppState>>) -> Json<ApiResponse<serde_json::Value>> {
+    let limits = &state.config.plans;
+    ok(json!({
+        "plans": [
+            {
+                "id": "hobby",
+                "name": "Hobby",
+                "priceInr": 0,
+                "creditsUsd": 0.0,
+                "dailyQuestionLimit": limits.hobby_daily_question_limit,
+                "weeklyCreditUsd": limits.hobby_weekly_credit_usd,
+                "studyPlans": false,
+            },
+            {
+                "id": "pro",
+                "name": "Pro",
+                "priceInr": limits.pro_price_inr,
+                "creditsUsd": limits.pro_credits_usd,
+                "dailyQuestionLimit": limits.pro_daily_question_limit,
+                "weeklyCreditUsd": limits.pro_weekly_credit_usd,
+                "studyPlans": true,
+            },
+            {
+                "id": "scholar",
+                "name": "Scholar",
+                "priceInr": limits.scholar_price_inr,
+                "creditsUsd": limits.scholar_credits_usd,
+                "dailyQuestionLimit": limits.scholar_daily_question_limit,
+                "weeklyCreditUsd": limits.scholar_weekly_credit_usd,
+                "studyPlans": true,
+            },
+        ]
+    }))
+}
+
+fn plan_limits(config: &Config, plan: &str) -> (i64, f64) {
+    let limits = &config.plans;
+    match plan {
+        "scholar" => (
+            limits.scholar_daily_question_limit,
+            limits.scholar_weekly_credit_usd,
+        ),
+        "pro" => (
+            limits.pro_daily_question_limit,
+            limits.pro_weekly_credit_usd,
+        ),
+        _ => (
+            limits.hobby_daily_question_limit,
+            limits.hobby_weekly_credit_usd,
+        ),
+    }
+}
+
+/// Usage snapshot for the current billing period — daily question count
+/// and weekly credit spend against the caller's plan, plus whether the
+/// client should show the "getting close to your limit" warning banner.
+async fn usage_me(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Json<ApiResponse<serde_json::Value>>, ApiError> {
+    let user = require_user(&state, &headers).await?;
+    let (daily_limit, weekly_credit) = plan_limits(&state.config, &user.plan);
+
+    let questions_today = state.db.count_questions_today(user.id).await?;
+    let spent_this_week = state.db.sum_cost_this_week(user.id).await?;
+    let credit_balance = state.db.user_credit_balance(user.id).await?;
+    let weekly_allowance = weekly_credit + credit_balance;
+
+    let daily_percent = if daily_limit > 0 {
+        (questions_today as f64 / daily_limit as f64) * 100.0
+    } else {
+        0.0
+    };
+    let weekly_percent = if weekly_allowance > 0.0 {
+        (spent_this_week / weekly_allowance) * 100.0
+    } else {
+        0.0
+    };
+    let usage_percent = daily_percent.max(weekly_percent);
+    let threshold = state.config.plans.usage_warning_threshold_percent;
+
+    Ok(ok(json!({
+        "plan": user.plan,
+        "dailyQuestionsUsed": questions_today,
+        "dailyQuestionLimit": daily_limit,
+        "weeklyCreditUsedUsd": spent_this_week,
+        "weeklyCreditLimitUsd": weekly_allowance,
+        "creditBalanceUsd": credit_balance,
+        "usagePercent": usage_percent,
+        "warningThresholdPercent": threshold,
+        "showWarning": usage_percent >= threshold,
+    })))
+}
+
+#[derive(Deserialize)]
+struct CheckoutRequest {
+    plan: String,
+}
+
+/// Starts a plan purchase — creates a `pending` payment row and returns
+/// the amount to charge. Deliberately provider-agnostic: today only the
+/// mock payment screen's Success/Failure buttons ever complete this (see
+/// `complete_payment`), but the shape (a pending row a separate step
+/// finalizes) is the same one a real gateway webhook would use.
+async fn plans_checkout(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(body): Json<CheckoutRequest>,
+) -> Result<Json<ApiResponse<serde_json::Value>>, ApiError> {
+    let user = require_user(&state, &headers).await?;
+    let (amount_inr, credits_usd) = match body.plan.as_str() {
+        "pro" => (
+            state.config.plans.pro_price_inr,
+            state.config.plans.pro_credits_usd,
+        ),
+        "scholar" => (
+            state.config.plans.scholar_price_inr,
+            state.config.plans.scholar_credits_usd,
+        ),
+        _ => {
+            return Err(ApiError::BadRequest(
+                "plan must be \"pro\" or \"scholar\"".into(),
+            ))
+        }
+    };
+    let payment = state
+        .db
+        .create_payment(user.id, &body.plan, amount_inr, credits_usd)
+        .await?;
+    Ok(ok(json!({ "payment": payment })))
+}
+
+#[derive(Deserialize)]
+struct CompletePaymentRequest {
+    status: String,
+}
+
+/// Finalizes a pending payment. Stands in for a real gateway's
+/// success/failure webhook — the mock payment screen calls this directly
+/// with whichever button the user tapped. On success, upgrades the user's
+/// plan and grants the purchased credits; on failure, the payment is just
+/// marked failed and nothing else changes.
+async fn complete_payment(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(payment_id): Path<Uuid>,
+    Json(body): Json<CompletePaymentRequest>,
+) -> Result<Json<ApiResponse<serde_json::Value>>, ApiError> {
+    let user = require_user(&state, &headers).await?;
+    if body.status != "success" && body.status != "failed" {
+        return Err(ApiError::BadRequest(
+            "status must be \"success\" or \"failed\"".into(),
+        ));
+    }
+    let payment = state
+        .db
+        .complete_payment(payment_id, user.id, &body.status)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("Payment not found, or already completed".into()))?;
+
+    if payment.status == "success" {
+        state.db.set_user_plan(user.id, &payment.plan).await?;
+        state.db.add_credits(user.id, payment.credits_usd).await?;
+    }
+
+    Ok(ok(json!({ "payment": payment })))
+}
+
+#[derive(Deserialize)]
+struct UpsertSyncedRecordRequest {
+    name: String,
+    data: serde_json::Value,
+}
+
+async fn list_exams(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Json<ApiResponse<serde_json::Value>>, ApiError> {
+    let user = require_user(&state, &headers).await?;
+    let exams = state.db.list_exams(user.id).await?;
+    Ok(ok(json!({ "exams": exams })))
+}
+
+async fn upsert_exam(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(local_id): Path<String>,
+    Json(body): Json<UpsertSyncedRecordRequest>,
+) -> Result<Json<ApiResponse<serde_json::Value>>, ApiError> {
+    let user = require_user(&state, &headers).await?;
+    state
+        .db
+        .upsert_exam(user.id, &local_id, &body.name, &body.data)
+        .await?;
+    Ok(ok(json!({ "success": true })))
+}
+
+async fn delete_exam(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(local_id): Path<String>,
+) -> Result<Json<ApiResponse<serde_json::Value>>, ApiError> {
+    let user = require_user(&state, &headers).await?;
+    state.db.delete_exam(user.id, &local_id).await?;
+    Ok(ok(json!({ "success": true })))
+}
+
+async fn list_study_plans(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Json<ApiResponse<serde_json::Value>>, ApiError> {
+    let user = require_user(&state, &headers).await?;
+    let plans = state.db.list_study_plans(user.id).await?;
+    Ok(ok(json!({ "studyPlans": plans })))
+}
+
+async fn upsert_study_plan(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(local_id): Path<String>,
+    Json(body): Json<UpsertSyncedRecordRequest>,
+) -> Result<Json<ApiResponse<serde_json::Value>>, ApiError> {
+    let user = require_user(&state, &headers).await?;
+    state
+        .db
+        .upsert_study_plan(user.id, &local_id, &body.name, &body.data)
+        .await?;
+    Ok(ok(json!({ "success": true })))
+}
+
+async fn delete_study_plan(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(local_id): Path<String>,
+) -> Result<Json<ApiResponse<serde_json::Value>>, ApiError> {
+    let user = require_user(&state, &headers).await?;
+    state.db.delete_study_plan(user.id, &local_id).await?;
+    Ok(ok(json!({ "success": true })))
+}
+
+/// Blocks the request before any embedding/cache/AI work happens if the
+/// user has hit their plan's daily question count or weekly credit spend.
+/// Anonymous requests (no valid session) are left unrestricted here, same
+/// as the rest of `ai_chat`'s auth handling — this only tightens things
+/// for signed-in users.
+async fn enforce_plan_limits(state: &AppState, user: Option<&AuthUser>) -> Result<(), ApiError> {
+    let Some(user) = user else {
+        return Ok(());
+    };
+    let (daily_limit, weekly_credit) = plan_limits(&state.config, &user.plan);
+
+    let questions_today = state.db.count_questions_today(user.id).await?;
+    if questions_today >= daily_limit {
+        return Err(ApiError::LimitExceeded(
+            "You've reached today's question limit for your plan. Upgrade your plan or try again tomorrow.".into(),
+        ));
+    }
+
+    let spent_this_week = state.db.sum_cost_this_week(user.id).await?;
+    let credit_balance = state.db.user_credit_balance(user.id).await?;
+    if spent_this_week >= weekly_credit + credit_balance {
+        return Err(ApiError::LimitExceeded(
+            "You've used this week's plan credit. Upgrade your plan or wait for the weekly reset."
+                .into(),
+        ));
+    }
+
+    Ok(())
+}
+
 async fn ai_chat(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Json(body): Json<AiChatRequest>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>, ApiError> {
-    let user = user_from_headers(&state, &headers).await?;
+    let user = Some(require_user(&state, &headers).await?);
+    enforce_plan_limits(&state, user.as_ref()).await?;
     let question = body
         .question
         .as_deref()
@@ -390,6 +757,67 @@ async fn ai_chat(
     })))
 }
 
+#[derive(Deserialize)]
+struct TitleRequest {
+    message: Option<String>,
+}
+
+/// Generates a short chat title from a first message. Deliberately isolated
+/// from the tutoring pipeline (`ai_chat`) — no embedding call, no RAG
+/// retrieval, no beta-gate, no answer cache. Reusing `ai_chat` for this
+/// (as the client used to) ran the user's opening message through the full
+/// subject/chapter retrieval flow, which could hit the beta-confirmation
+/// short-circuit and return a response shape with no `content` field —
+/// silently breaking title generation with nothing logged server-side,
+/// since that path returns 200 rather than an error.
+async fn ai_title(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(body): Json<TitleRequest>,
+) -> Result<Json<ApiResponse<serde_json::Value>>, ApiError> {
+    let user = Some(require_user(&state, &headers).await?);
+    let message = body
+        .message
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| ApiError::BadRequest("message is required".into()))?;
+
+    // A title only needs the opening context, not the whole message — kept
+    // short enough to stay on the fast model tier (choose_model treats
+    // long questions as needing the reasoning model).
+    let truncated: String = message.chars().take(200).collect();
+
+    let title_request = AiChatRequest {
+        question: Some(truncated),
+        system_prompt: Some(
+            "You write short chat titles. Read the user's message and reply with ONLY a \
+             concise 3-5 word title summarizing its topic — no quotes, no punctuation, no \
+             preamble, no explanation. Reply in the same language as the message."
+                .to_string(),
+        ),
+        max_tokens: Some(32),
+        temperature: Some(0.3),
+        ..Default::default()
+    };
+
+    let answer = state.ai.chat(&title_request, &[]).await?;
+    let _ = state
+        .db
+        .record_usage(
+            user.map(|u| u.id),
+            "/api/ai/title",
+            &answer.provider,
+            &answer.model,
+            answer.input_tokens,
+            answer.output_tokens,
+            &answer.served_from,
+        )
+        .await;
+
+    Ok(ok(json!({ "title": answer.content.trim() })))
+}
+
 /// SSE counterpart to `ai_chat`: same cache/beta-gate/retrieval pipeline,
 /// but the actual generation streams real text deltas as they arrive from
 /// the provider instead of waiting for the full response. Event types sent
@@ -412,7 +840,8 @@ async fn ai_chat_stream(
     headers: HeaderMap,
     Json(body): Json<AiChatRequest>,
 ) -> Result<Sse<KeepAliveStream<BoxedEventStream>>, ApiError> {
-    let user = user_from_headers(&state, &headers).await?;
+    let user = Some(require_user(&state, &headers).await?);
+    enforce_plan_limits(&state, user.as_ref()).await?;
     let question = body
         .question
         .as_deref()
@@ -751,7 +1180,7 @@ async fn embeddings(
         .text
         .or(body.input)
         .ok_or_else(|| ApiError::BadRequest("text is required".into()))?;
-    let user = user_from_headers(&state, &headers).await?;
+    let user = Some(require_user(&state, &headers).await?);
     let (embedding, input_tokens) = state.ai.embed(&text).await?;
     let _ = state
         .db
@@ -778,10 +1207,17 @@ struct RerankRequest {
     documents: Vec<String>,
 }
 
+/// Previously had no authentication at all — anyone who found the URL
+/// could call it for free with no rate limit beyond the shared per-IP
+/// governed_layer. Requiring a session closes that off; usage isn't
+/// tracked/billed here since NVIDIA rerank is currently free (see
+/// AiGateway::rerank), so this is purely an abuse guard, not billing.
 async fn rerank(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Json(body): Json<RerankRequest>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>, ApiError> {
+    require_user(&state, &headers).await?;
     let question = body
         .question
         .or(body.query)
@@ -829,6 +1265,90 @@ async fn upsert_chat(
         )
         .await?;
     Ok(ok(json!({ "chat": chat })))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateChatRequest {
+    name: Option<String>,
+    subject_id: Option<String>,
+    subject_name: Option<String>,
+    chapter_ids: Option<Vec<String>>,
+    chapter_names: Option<Vec<String>>,
+    is_pinned: Option<bool>,
+}
+
+/// Partial update for a chat's own fields (name, classification, pin
+/// state) — used to push local-only changes (e.g. an AI-generated chat
+/// name) up to the server. This route previously didn't exist even though
+/// the Flutter client has always called it, so every one of these updates
+/// was silently failing with a 404 the client swallows.
+async fn update_chat(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(local_id): Path<String>,
+    Json(body): Json<UpdateChatRequest>,
+) -> Result<Json<ApiResponse<serde_json::Value>>, ApiError> {
+    let user = require_user(&state, &headers).await?;
+    let chat = state
+        .db
+        .update_chat_fields(
+            user.id,
+            &local_id,
+            body.name.as_deref(),
+            body.subject_id.as_deref(),
+            body.subject_name.as_deref(),
+            body.chapter_ids.as_deref(),
+            body.chapter_names.as_deref(),
+            body.is_pinned,
+        )
+        .await?
+        .ok_or_else(|| ApiError::NotFound("Chat not found".into()))?;
+    Ok(ok(json!({ "chat": chat })))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AddMessageRequest {
+    local_id: String,
+    role: String,
+    content: String,
+    #[serde(default)]
+    token_count: Option<i32>,
+    #[serde(default)]
+    source_chunks: Option<Vec<String>>,
+}
+
+/// Appends a message to a chat identified by its local_id — used by the
+/// share flow to sync messages before creating a share link. Like
+/// `update_chat` above, this route didn't exist even though the client has
+/// always called it, so sharing a chat always 404'd partway through
+/// syncing its messages.
+async fn add_chat_message(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(local_id): Path<String>,
+    Json(body): Json<AddMessageRequest>,
+) -> Result<Json<ApiResponse<serde_json::Value>>, ApiError> {
+    let user = require_user(&state, &headers).await?;
+    let chat = state
+        .db
+        .find_chat_by_local_id(user.id, &local_id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("Chat not found".into()))?;
+    let message: ChatMessage = state
+        .db
+        .insert_message(
+            user.id,
+            chat.id,
+            &body.local_id,
+            &body.role,
+            &body.content,
+            body.token_count.unwrap_or(0),
+            &body.source_chunks.unwrap_or_default(),
+        )
+        .await?;
+    Ok(ok(json!({ "message": message })))
 }
 
 fn share_url(app_url: &str, token: &str) -> String {

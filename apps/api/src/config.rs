@@ -29,6 +29,68 @@ pub struct Config {
     pub qdrant_api_key: Option<String>,
     pub qdrant_collection: String,
     pub semantic_cache_threshold: f32,
+    pub plans: PlanConfig,
+}
+
+/// Per-tier limits and pricing for the plan system — every value is
+/// env-overridable (settable over SSH without a redeploy needing a code
+/// change) so pricing/limits can be tuned as real usage data comes in.
+#[derive(Clone, Debug)]
+pub struct PlanConfig {
+    pub hobby_daily_question_limit: i64,
+    pub hobby_weekly_credit_usd: f64,
+    pub pro_daily_question_limit: i64,
+    pub pro_weekly_credit_usd: f64,
+    pub pro_price_inr: i64,
+    pub pro_credits_usd: f64,
+    pub scholar_daily_question_limit: i64,
+    pub scholar_weekly_credit_usd: f64,
+    pub scholar_price_inr: i64,
+    pub scholar_credits_usd: f64,
+    /// Percent of the tighter of (daily question limit, weekly credit
+    /// limit) at which the client should show a dismissible usage warning
+    /// banner — e.g. 90 means "warn once 90% used / 10% remaining".
+    pub usage_warning_threshold_percent: f64,
+}
+
+impl PlanConfig {
+    fn from_env() -> Self {
+        Self {
+            hobby_daily_question_limit: read("PLAN_HOBBY_DAILY_QUESTION_LIMIT")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(15),
+            hobby_weekly_credit_usd: read("PLAN_HOBBY_WEEKLY_CREDIT_USD")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0.5),
+            pro_daily_question_limit: read("PLAN_PRO_DAILY_QUESTION_LIMIT")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(150),
+            pro_weekly_credit_usd: read("PLAN_PRO_WEEKLY_CREDIT_USD")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(5.0),
+            pro_price_inr: read("PLAN_PRO_PRICE_INR")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(200),
+            pro_credits_usd: read("PLAN_PRO_CREDITS_USD")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(5.0),
+            scholar_daily_question_limit: read("PLAN_SCHOLAR_DAILY_QUESTION_LIMIT")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(400),
+            scholar_weekly_credit_usd: read("PLAN_SCHOLAR_WEEKLY_CREDIT_USD")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(15.0),
+            scholar_price_inr: read("PLAN_SCHOLAR_PRICE_INR")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(1000),
+            scholar_credits_usd: read("PLAN_SCHOLAR_CREDITS_USD")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(25.0),
+            usage_warning_threshold_percent: read("USAGE_WARNING_THRESHOLD_PERCENT")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(90.0),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -131,6 +193,7 @@ impl Config {
             semantic_cache_threshold: read("SEMANTIC_CACHE_THRESHOLD")
                 .and_then(|value| value.parse().ok())
                 .unwrap_or(0.90),
+            plans: PlanConfig::from_env(),
         })
     }
 
