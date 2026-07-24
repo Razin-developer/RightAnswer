@@ -98,15 +98,25 @@ class _ExamCreateScreenState extends State<ExamCreateScreen> {
 
   // ── Helpers ──────────────────────────────────────────────────────────────────
 
-  int get _qCount => int.tryParse(_questionCountCtrl.text) ?? 10;
+  // Every numeric field is parsed defensively (tryParse, never a throwing
+  // parse/cast) and clamped to a sane range — an empty, non-numeric, or
+  // out-of-range value (a stray "-5" or "99999") falls back to a safe
+  // default instead of producing a nonsensical exam (negative question
+  // count feeding List.generate would throw a RangeError) or a silently
+  // broken one (0 marks-per-question breaking totalMarks math).
+  int get _qCount =>
+      (int.tryParse(_questionCountCtrl.text) ?? 10).clamp(1, 100);
   int? get _timeLimit {
     final v = int.tryParse(_timeLimitCtrl.text.trim());
-    return (v != null && v > 0) ? v : null;
+    return (v != null && v > 0) ? v.clamp(1, 600) : null;
   }
 
-  double get _marksPerQ => double.tryParse(_marksPerQCtrl.text) ?? 1.0;
-  double get _passMark => double.tryParse(_passMarkCtrl.text) ?? 60.0;
-  int get _maxAttempts => int.tryParse(_maxAttemptsCtrl.text) ?? 0;
+  double get _marksPerQ =>
+      (double.tryParse(_marksPerQCtrl.text) ?? 1.0).clamp(0.5, 100.0);
+  double get _passMark =>
+      (double.tryParse(_passMarkCtrl.text) ?? 60.0).clamp(0.0, 100.0);
+  int get _maxAttempts =>
+      (int.tryParse(_maxAttemptsCtrl.text) ?? 0).clamp(0, 50);
 
   Exam _buildExam(String? existingId) {
     final now = DateTime.now();

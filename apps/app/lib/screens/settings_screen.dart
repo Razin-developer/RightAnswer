@@ -485,7 +485,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         ),
                       ),
                       onSubmitted: (v) {
-                        final n = int.tryParse(v.trim()) ?? 0;
+                        // Never negative — a negative limit would silently
+                        // block all chat, since usage >= limit always holds.
+                        final n = (int.tryParse(v.trim()) ?? 0).clamp(0, 1 << 30);
                         _save(SettingKeys.chatDailyTokenLimit, n.toString());
                       },
                     ),
