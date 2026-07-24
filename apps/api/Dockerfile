@@ -5,7 +5,13 @@ COPY apps/api/Cargo.lock apps/api/Cargo.lock
 COPY apps/api/src apps/api/src
 COPY apps/api/migrations apps/api/migrations
 WORKDIR /app/apps/api
-RUN cargo build --release --bins
+# Single job, not cargo's default (num_cpus=2) — the VPS this builds on
+# has only 2GB RAM shared with 5 other running containers (postgres,
+# redis, qdrant, api, web); parallel codegen units under that pressure
+# has silently OOM-killed the build mid-compile, leaving deploy.sh
+# looking "stuck" with no error and the old image still running. Slower,
+# but reliable — this only affects the deploy-time build, not runtime.
+RUN cargo build --release --bins --jobs 1
 
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl && rm -rf /var/lib/apt/lists/*
