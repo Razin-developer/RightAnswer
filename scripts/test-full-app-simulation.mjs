@@ -57,14 +57,11 @@ function record(name, ok, detail) {
 }
 
 async function api(method, path, body, { auth = true } = {}) {
-  // The data_routes rate limiter refills at 5 req/sec (200ms/token) with a
-  // 20-token burst. A long test script firing many sequential requests can
-  // burn through that burst faster than it refills even with per-step
-  // pauses, leaving the bucket in persistent deficit by the time later
-  // sections (app reopen, payments) run. Space every single request by
-  // >200ms so the whole run stays under the sustained rate instead of
-  // relying on burst capacity.
-  await sleep(350);
+  // data_routes/ai_routes are keyed per authenticated session now (see
+  // routes.rs AuthOrIpKeyExtractor), so this test's own token has its own
+  // bucket independent of any other traffic on the host. A little spacing
+  // still keeps a long sequential run under its own 5 req/sec refill rate.
+  await sleep(120);
   const headers = { "Content-Type": "application/json" };
   if (auth && token) headers.Authorization = `Bearer ${token}`;
   const res = await fetch(`${BASE_URL}${path}`, {

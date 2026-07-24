@@ -17,7 +17,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use tower_governor::{
-    governor::GovernorConfigBuilder, key_extractor::SmartIpKeyExtractor, GovernorLayer,
+    errors::GovernorError,
+    governor::GovernorConfigBuilder,
+    key_extractor::{KeyExtractor, SmartIpKeyExtractor},
+    GovernorLayer,
 };
 use uuid::Uuid;
 
@@ -47,16 +50,50 @@ pub struct ApiResponse<T> {
     data: T,
 }
 
-/// Rate limits brute-forceable / cost-bearing endpoints (auth and AI calls) by
-/// client IP. Keeps credential stuffing and anonymous AI-cost abuse bounded
-/// without touching the rest of the router.
+/// Keys rate-limit buckets by the caller's bearer token instead of IP,
+/// falling back to `SmartIpKeyExtractor` when no token is present.
 ///
-/// Uses `SmartIpKeyExtractor` (reads `X-Forwarded-For`/`X-Real-IP`/`Forwarded`,
-/// falling back to the TCP peer address) rather than `PeerIpKeyExtractor`.
-/// The API always sits behind nginx proxying from 127.0.0.1 (see
-/// deploy/nginx/rightanswer.conf), so `PeerIpKeyExtractor` saw nginx's own
-/// loopback address for every request — collapsing the limit into a single
-/// bucket shared by the entire user base instead of one per real client.
+/// This host (Hack Club Nest) NATs all inbound traffic through a single
+/// internal gateway address before it ever reaches nginx, so *every*
+/// request — from every real user, on every route — arrives with the same
+/// source IP. Neither `PeerIpKeyExtractor` nor `SmartIpKeyExtractor` (which
+/// reads `X-Forwarded-For`/`X-Real-IP`, headers nginx can only fill from
+/// that same NATed address) can recover the true client IP here; both
+/// collapse into one bucket shared by the entire user base, so one user's
+/// burst of requests 429s everyone else. Every route this key extractor is
+/// used on requires auth in its handler anyway, so keying by the token
+/// itself gives each logged-in session its own bucket regardless of what
+/// the network layer reports.
+#[derive(Clone)]
+struct AuthOrIpKeyExtractor;
+
+impl KeyExtractor for AuthOrIpKeyExtractor {
+    type Key = String;
+
+    fn extract<T>(&self, req: &axum::http::Request<T>) -> Result<Self::Key, GovernorError> {
+        let bearer = req
+            .headers()
+            .get(header::AUTHORIZATION)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.strip_prefix("Bearer "))
+            .filter(|token| !token.is_empty());
+
+        if let Some(token) = bearer {
+            return Ok(format!("auth:{token}"));
+        }
+
+        // No token — this request is going to be rejected by the handler's
+        // own auth check regardless, so a shared fallback bucket here is
+        // low-risk.
+        SmartIpKeyExtractor
+            .extract(req)
+            .map(|ip| format!("ip:{ip}"))
+    }
+}
+
+/// Rate limits brute-forceable / cost-bearing endpoints (auth and AI calls).
+/// Keeps credential stuffing and anonymous AI-cost abuse bounded without
+/// touching the rest of the router.
 fn governed_layer(
     per_second: u64,
     burst_size: u32,
@@ -83,13 +120,48 @@ fn governed_layer(
     GovernorLayer::new(config)
 }
 
+/// Same as [`governed_layer`] but keyed by [`AuthOrIpKeyExtractor`] — use for
+/// routes that require auth in the handler, so each session gets its own
+/// bucket instead of sharing one with every other user behind this host's
+/// NAT (see that extractor's docs).
+fn governed_layer_by_auth(
+    per_second: u64,
+    burst_size: u32,
+) -> GovernorLayer<AuthOrIpKeyExtractor, NoOpMiddleware, axum::body::Body> {
+    let config = Arc::new(
+        GovernorConfigBuilder::default()
+            .key_extractor(AuthOrIpKeyExtractor)
+            .per_second(per_second)
+            .burst_size(burst_size)
+            .finish()
+            .expect("valid governor config"),
+    );
+
+    let cleanup_config = config.clone();
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(Duration::from_secs(60)).await;
+            cleanup_config.limiter().retain_recent();
+        }
+    });
+
+    GovernorLayer::new(config)
+}
+
 pub fn api_router(state: Arc<AppState>) -> Router {
+    // Unauthenticated — no bearer token exists yet, so these must stay
+    // IP-keyed (shared bucket, per AuthOrIpKeyExtractor's docs above).
     let auth_routes = Router::new()
         .route("/auth/register", post(register))
         .route("/auth/signup", post(register))
         .route("/auth/login", post(login))
-        .route("/auth/change-password", post(change_password))
         .layer(governed_layer(1, 5));
+
+    // Authenticated — key by bearer token so one user's traffic can't 429
+    // every other user sharing this host's NATed IP.
+    let authed_auth_routes = Router::new()
+        .route("/auth/change-password", post(change_password))
+        .layer(governed_layer_by_auth(1, 5));
 
     let ai_routes = Router::new()
         .route("/ai/chat", post(ai_chat))
@@ -97,7 +169,7 @@ pub fn api_router(state: Arc<AppState>) -> Router {
         .route("/ai/title", post(ai_title))
         .route("/ai/embeddings", post(embeddings))
         .route("/ai/rerank", post(rerank))
-        .layer(governed_layer(1, 10));
+        .layer(governed_layer_by_auth(1, 10));
 
     // Authenticated CRUD/data endpoints — not cost-bearing like ai_routes,
     // but every one of these previously had no rate limit at all beyond
@@ -127,7 +199,7 @@ pub fn api_router(state: Arc<AppState>) -> Router {
         .route("/usage/me", get(usage_me))
         .route("/plans/checkout", post(plans_checkout))
         .route("/plans/payments/{id}/complete", post(complete_payment))
-        .layer(governed_layer(5, 20));
+        .layer(governed_layer_by_auth(5, 20));
 
     Router::new()
         .route("/health", get(health))
@@ -137,6 +209,7 @@ pub fn api_router(state: Arc<AppState>) -> Router {
         .route("/plans", get(list_plans))
         .route("/admin/metrics", get(admin::metrics))
         .merge(auth_routes)
+        .merge(authed_auth_routes)
         .merge(ai_routes)
         .merge(data_routes)
         .with_state(state)
