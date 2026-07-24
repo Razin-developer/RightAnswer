@@ -287,6 +287,12 @@ class _StudyPlanCreateScreenState extends State<StudyPlanCreateScreen> {
       );
 
       if (_isEdit) {
+        // Cancel notifications tied to the days being replaced before they
+        // (and their ids) are gone.
+        final oldDays = await _dayRepo.getByPlan(planId);
+        await NotificationService.instance
+            .cancelStudyPlanNotifications(oldDays);
+
         await _planRepo.update(plan);
         await _taskRepo.deleteByPlan(planId);
         await _dayRepo.deleteByPlan(planId);
@@ -294,6 +300,8 @@ class _StudyPlanCreateScreenState extends State<StudyPlanCreateScreen> {
         await _planRepo.insert(plan);
       }
 
+      final newDays = <StudyDay>[];
+      final newTasks = <StudyTask>[];
       for (final dayDraft in _draft!.days) {
         final dayId = const Uuid().v4();
         final day = StudyDay(
@@ -302,10 +310,11 @@ class _StudyPlanCreateScreenState extends State<StudyPlanCreateScreen> {
           date: dayDraft.date,
         );
         await _dayRepo.insert(day);
+        newDays.add(day);
 
         for (var i = 0; i < dayDraft.tasks.length; i++) {
           final t = dayDraft.tasks[i];
-          await _taskRepo.insert(StudyTask(
+          final task = StudyTask(
             id: const Uuid().v4(),
             planId: planId,
             dayId: dayId,
@@ -315,24 +324,25 @@ class _StudyPlanCreateScreenState extends State<StudyPlanCreateScreen> {
             chapterName: t.chapterName,
             durationMinutes: t.durationMinutes,
             sortOrder: i,
-          ));
+          );
+          await _taskRepo.insert(task);
+          newTasks.add(task);
         }
       }
 
       // Fire-and-forget cloud sync — never blocks the local save.
       unawaited(StudyPlanSyncService.instance.pushPlan(planId));
 
-      // Schedule / cancel reminder
+      // Schedule the full per-day notification set (upcoming-task reminder
+      // + end-of-day missed check-in for every remaining day), or leave it
+      // cancelled if reminders are off.
       if (_reminderEnabled) {
         await NotificationService.instance.requestPermission();
-        await NotificationService.instance.scheduleStudyPlanReminder(
-          planId: planId,
-          planName: plan.name,
-          hour: _reminderTime.hour,
-          minute: _reminderTime.minute,
+        await NotificationService.instance.scheduleStudyPlanNotifications(
+          plan: plan,
+          days: newDays,
+          tasks: newTasks,
         );
-      } else if (_isEdit && widget.existingPlan!.hasReminder) {
-        await NotificationService.instance.cancelStudyPlanReminder(planId);
       }
 
       if (mounted) {

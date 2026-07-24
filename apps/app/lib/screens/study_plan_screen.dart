@@ -120,7 +120,8 @@ class _StudyPlanScreenState extends State<StudyPlanScreen> {
     );
     if (!confirmed) return;
     if (plan.hasReminder) {
-      await NotificationService.instance.cancelStudyPlanReminder(plan.id);
+      final days = await _dayRepo.getByPlan(plan.id);
+      await NotificationService.instance.cancelStudyPlanNotifications(days);
     }
     await _taskRepo.deleteByPlan(plan.id);
     await _dayRepo.deleteByPlan(plan.id);

@@ -291,14 +291,13 @@ impl Database {
             .await
     }
 
-    /// Number of `/api/ai/chat`-family requests (i.e. questions asked) by
-    /// this user since UTC midnight today.
-    pub async fn count_questions_today(&self, user_id: Uuid) -> Result<i64, sqlx::Error> {
-        sqlx::query_scalar::<_, i64>(
+    /// Total estimated OpenRouter/HackAI spend by this user since UTC
+    /// midnight today — the basis for the daily credit limit.
+    pub async fn sum_cost_today(&self, user_id: Uuid) -> Result<f64, sqlx::Error> {
+        sqlx::query_scalar::<_, f64>(
             r#"
-            SELECT COUNT(*) FROM ai_usage_events
+            SELECT COALESCE(SUM(estimated_cost_usd), 0) FROM ai_usage_events
             WHERE user_id = $1
-              AND route IN ('/api/ai/chat', '/api/ai/chat/stream')
               AND created_at >= date_trunc('day', now())
             "#,
         )

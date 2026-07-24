@@ -371,7 +371,7 @@ async fn list_plans(State(state): State<Arc<AppState>>) -> Json<ApiResponse<serd
                 "name": "Hobby",
                 "priceInr": 0,
                 "creditsUsd": 0.0,
-                "dailyQuestionLimit": limits.hobby_daily_question_limit,
+                "dailyCreditUsd": limits.hobby_daily_credit_usd,
                 "weeklyCreditUsd": limits.hobby_weekly_credit_usd,
                 "studyPlans": false,
             },
@@ -380,7 +380,7 @@ async fn list_plans(State(state): State<Arc<AppState>>) -> Json<ApiResponse<serd
                 "name": "Pro",
                 "priceInr": limits.pro_price_inr,
                 "creditsUsd": limits.pro_credits_usd,
-                "dailyQuestionLimit": limits.pro_daily_question_limit,
+                "dailyCreditUsd": limits.pro_daily_credit_usd,
                 "weeklyCreditUsd": limits.pro_weekly_credit_usd,
                 "studyPlans": true,
             },
@@ -389,7 +389,7 @@ async fn list_plans(State(state): State<Arc<AppState>>) -> Json<ApiResponse<serd
                 "name": "Scholar",
                 "priceInr": limits.scholar_price_inr,
                 "creditsUsd": limits.scholar_credits_usd,
-                "dailyQuestionLimit": limits.scholar_daily_question_limit,
+                "dailyCreditUsd": limits.scholar_daily_credit_usd,
                 "weeklyCreditUsd": limits.scholar_weekly_credit_usd,
                 "studyPlans": true,
             },
@@ -397,41 +397,41 @@ async fn list_plans(State(state): State<Arc<AppState>>) -> Json<ApiResponse<serd
     }))
 }
 
-fn plan_limits(config: &Config, plan: &str) -> (i64, f64) {
+fn plan_limits(config: &Config, plan: &str) -> (f64, f64) {
     let limits = &config.plans;
     match plan {
         "scholar" => (
-            limits.scholar_daily_question_limit,
+            limits.scholar_daily_credit_usd,
             limits.scholar_weekly_credit_usd,
         ),
-        "pro" => (
-            limits.pro_daily_question_limit,
-            limits.pro_weekly_credit_usd,
-        ),
+        "pro" => (limits.pro_daily_credit_usd, limits.pro_weekly_credit_usd),
         _ => (
-            limits.hobby_daily_question_limit,
+            limits.hobby_daily_credit_usd,
             limits.hobby_weekly_credit_usd,
         ),
     }
 }
 
-/// Usage snapshot for the current billing period — daily question count
-/// and weekly credit spend against the caller's plan, plus whether the
-/// client should show the "getting close to your limit" warning banner.
+/// Usage snapshot for the current billing period — dollar spend today and
+/// this week against the caller's plan, plus whether the client should
+/// show the "getting close to your limit" warning banner. Purely
+/// credit-based: no separate per-question count limit.
 async fn usage_me(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> Result<Json<ApiResponse<serde_json::Value>>, ApiError> {
     let user = require_user(&state, &headers).await?;
-    let (daily_limit, weekly_credit) = plan_limits(&state.config, &user.plan);
+    let (daily_credit, weekly_credit) = plan_limits(&state.config, &user.plan);
 
-    let questions_today = state.db.count_questions_today(user.id).await?;
+    let spent_today = state.db.sum_cost_today(user.id).await?;
     let spent_this_week = state.db.sum_cost_this_week(user.id).await?;
     let credit_balance = state.db.user_credit_balance(user.id).await?;
+    // Purchased/granted credit tops up the weekly allowance only — daily
+    // pacing still applies so a top-up can't be blown through in one day.
     let weekly_allowance = weekly_credit + credit_balance;
 
-    let daily_percent = if daily_limit > 0 {
-        (questions_today as f64 / daily_limit as f64) * 100.0
+    let daily_percent = if daily_credit > 0.0 {
+        (spent_today / daily_credit) * 100.0
     } else {
         0.0
     };
@@ -445,8 +445,8 @@ async fn usage_me(
 
     Ok(ok(json!({
         "plan": user.plan,
-        "dailyQuestionsUsed": questions_today,
-        "dailyQuestionLimit": daily_limit,
+        "dailyCreditUsedUsd": spent_today,
+        "dailyCreditLimitUsd": daily_credit,
         "weeklyCreditUsedUsd": spent_this_week,
         "weeklyCreditLimitUsd": weekly_allowance,
         "creditBalanceUsd": credit_balance,
@@ -603,20 +603,21 @@ async fn delete_study_plan(
 }
 
 /// Blocks the request before any embedding/cache/AI work happens if the
-/// user has hit their plan's daily question count or weekly credit spend.
-/// Anonymous requests (no valid session) are left unrestricted here, same
-/// as the rest of `ai_chat`'s auth handling — this only tightens things
-/// for signed-in users.
+/// user has hit their plan's daily or weekly dollar credit spend. Purely
+/// credit-based — no separate per-question count limit. Anonymous
+/// requests (no valid session) are left unrestricted here, same as the
+/// rest of `ai_chat`'s auth handling — this only tightens things for
+/// signed-in users.
 async fn enforce_plan_limits(state: &AppState, user: Option<&AuthUser>) -> Result<(), ApiError> {
     let Some(user) = user else {
         return Ok(());
     };
-    let (daily_limit, weekly_credit) = plan_limits(&state.config, &user.plan);
+    let (daily_credit, weekly_credit) = plan_limits(&state.config, &user.plan);
 
-    let questions_today = state.db.count_questions_today(user.id).await?;
-    if questions_today >= daily_limit {
+    let spent_today = state.db.sum_cost_today(user.id).await?;
+    if spent_today >= daily_credit {
         return Err(ApiError::LimitExceeded(
-            "You've reached today's question limit for your plan. Upgrade your plan or try again tomorrow.".into(),
+            "You've used today's plan credit. Upgrade your plan or try again tomorrow.".into(),
         ));
     }
 

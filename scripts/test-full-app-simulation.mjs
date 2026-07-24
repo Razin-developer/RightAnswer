@@ -295,7 +295,7 @@ await step("GET /api/usage/me reflects hobby limits", async () => {
   const res = await api("GET", "/api/usage/me");
   if (!res.ok) throw new Error(`status=${res.status} body=${JSON.stringify(res.json)}`);
   const usage = res.json.data;
-  if (usage.plan !== "hobby" || typeof usage.dailyQuestionLimit !== "number") {
+  if (usage.plan !== "hobby" || typeof usage.dailyCreditLimitUsd !== "number") {
     throw new Error(`unexpected usage shape: ${JSON.stringify(usage)}`);
   }
   record("GET /api/usage/me reflects hobby limits", true, JSON.stringify(usage));

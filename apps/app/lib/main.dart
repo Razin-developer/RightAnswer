@@ -194,6 +194,9 @@ void main() async {
       // StudyPlanSyncService.
       unawaited(ExamSyncService.instance.pullMissing());
       unawaited(StudyPlanSyncService.instance.pullMissing());
+      // AlarmManager-backed schedules don't survive a device reboot, so
+      // re-derive every active plan's notifications on every launch.
+      unawaited(NotificationService.instance.rescheduleAllActiveStudyPlans());
     },
     (error, stack) => _logBootstrapFailure('uncaught (zone)', error, stack),
   );

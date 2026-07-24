@@ -116,7 +116,7 @@ class _PlanCard extends StatelessWidget {
     final theme = Theme.of(context);
     final isFree = plan.priceInr == 0;
     final features = [
-      '${plan.dailyQuestionLimit} questions per day',
+      '\$${plan.dailyCreditUsd.toStringAsFixed(2)} AI credit per day',
       '\$${plan.weeklyCreditUsd.toStringAsFixed(2)} AI credit per week',
       plan.studyPlans
           ? 'Full Study Plan access'

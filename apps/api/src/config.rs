@@ -37,34 +37,34 @@ pub struct Config {
 /// change) so pricing/limits can be tuned as real usage data comes in.
 #[derive(Clone, Debug)]
 pub struct PlanConfig {
-    pub hobby_daily_question_limit: i64,
+    pub hobby_daily_credit_usd: f64,
     pub hobby_weekly_credit_usd: f64,
-    pub pro_daily_question_limit: i64,
+    pub pro_daily_credit_usd: f64,
     pub pro_weekly_credit_usd: f64,
     pub pro_price_inr: i64,
     pub pro_credits_usd: f64,
-    pub scholar_daily_question_limit: i64,
+    pub scholar_daily_credit_usd: f64,
     pub scholar_weekly_credit_usd: f64,
     pub scholar_price_inr: i64,
     pub scholar_credits_usd: f64,
-    /// Percent of the tighter of (daily question limit, weekly credit
-    /// limit) at which the client should show a dismissible usage warning
-    /// banner — e.g. 90 means "warn once 90% used / 10% remaining".
+    /// Percent of the tighter of (daily credit spend, weekly credit spend)
+    /// at which the client should show a dismissible usage warning banner
+    /// — e.g. 90 means "warn once 90% used / 10% remaining".
     pub usage_warning_threshold_percent: f64,
 }
 
 impl PlanConfig {
     fn from_env() -> Self {
         Self {
-            hobby_daily_question_limit: read("PLAN_HOBBY_DAILY_QUESTION_LIMIT")
+            hobby_daily_credit_usd: read("PLAN_HOBBY_DAILY_CREDIT_USD")
                 .and_then(|v| v.parse().ok())
-                .unwrap_or(15),
+                .unwrap_or(0.10),
             hobby_weekly_credit_usd: read("PLAN_HOBBY_WEEKLY_CREDIT_USD")
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(0.5),
-            pro_daily_question_limit: read("PLAN_PRO_DAILY_QUESTION_LIMIT")
+            pro_daily_credit_usd: read("PLAN_PRO_DAILY_CREDIT_USD")
                 .and_then(|v| v.parse().ok())
-                .unwrap_or(150),
+                .unwrap_or(1.0),
             pro_weekly_credit_usd: read("PLAN_PRO_WEEKLY_CREDIT_USD")
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(5.0),
@@ -74,9 +74,9 @@ impl PlanConfig {
             pro_credits_usd: read("PLAN_PRO_CREDITS_USD")
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(5.0),
-            scholar_daily_question_limit: read("PLAN_SCHOLAR_DAILY_QUESTION_LIMIT")
+            scholar_daily_credit_usd: read("PLAN_SCHOLAR_DAILY_CREDIT_USD")
                 .and_then(|v| v.parse().ok())
-                .unwrap_or(400),
+                .unwrap_or(3.0),
             scholar_weekly_credit_usd: read("PLAN_SCHOLAR_WEEKLY_CREDIT_USD")
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(15.0),

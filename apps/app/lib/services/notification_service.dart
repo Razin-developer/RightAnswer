@@ -4,6 +4,12 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:timezone/timezone.dart' as tz;
 import 'package:timezone/data/latest.dart' as tz_data;
 import '../constants/tool_types.dart';
+import '../models/study_day.dart';
+import '../models/study_plan.dart';
+import '../models/study_task.dart';
+import '../repositories/study_day_repository.dart';
+import '../repositories/study_plan_repository.dart';
+import '../repositories/study_task_repository.dart';
 
 /// Handles all local push notifications for RightAnswer.
 class NotificationService {
@@ -165,43 +171,137 @@ class NotificationService {
     await _plugin.cancel(idDailyReminder);
   }
 
-  // ── Per-plan study reminders ───────────────────────────────────────────────
+  // ── Per-plan, per-day study notifications ──────────────────────────────────
+  //
+  // Two notifications per remaining day of a plan:
+  //  - an "upcoming" one at the plan's own reminder time, naming that day's
+  //    actual tasks (not a generic ping)
+  //  - a "missed" check-in later the same day, cancelled the instant the
+  //    user finishes that day's tasks in-app (see cancelDayMissedCheck)
+  // plus one immediate congratulations notification when a plan's last
+  // task is completed.
 
-  Future<void> scheduleStudyPlanReminder({
+  static const int _missedCheckHour = 20;
+  static const int _missedCheckMinute = 30;
+
+  int _dayUpcomingId(String dayId) => 5000 + dayId.hashCode.abs() % 4000;
+  int _dayMissedId(String dayId) => 10000 + dayId.hashCode.abs() % 4000;
+  int _planCompletedId(String planId) => 15000 + planId.hashCode.abs() % 4000;
+
+  /// Schedules the full notification set for a plan. Call after the plan,
+  /// its days, and its tasks are all saved — and after cancelling any
+  /// previous schedule for this plan (e.g. on edit).
+  Future<void> scheduleStudyPlanNotifications({
+    required StudyPlan plan,
+    required List<StudyDay> days,
+    required List<StudyTask> tasks,
+  }) async {
+    if (!_initialized || kIsWeb || !plan.hasReminder) return;
+
+    final tasksByDay = <String, List<StudyTask>>{};
+    for (final t in tasks) {
+      tasksByDay.putIfAbsent(t.dayId, () => []).add(t);
+    }
+
+    final nowTz = tz.TZDateTime.now(tz.local);
+
+    for (final day in days) {
+      if (day.isPast || day.isCompleted) continue;
+      final dayTasks = tasksByDay[day.id] ?? const <StudyTask>[];
+      if (dayTasks.isEmpty) continue;
+
+      final date = day.date;
+      final preview = dayTasks.length == 1
+          ? dayTasks.first.title
+          : '${dayTasks.first.title} + ${dayTasks.length - 1} more';
+
+      final reminderAt = tz.TZDateTime(tz.local, date.year, date.month,
+          date.day, plan.reminderHour!, plan.reminderMinute!);
+      if (reminderAt.isAfter(nowTz)) {
+        await _plugin.zonedSchedule(
+          _dayUpcomingId(day.id),
+          "Today's plan: ${plan.name} 📚",
+          preview,
+          reminderAt,
+          _details(_chReminder, Importance.defaultImportance),
+          androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
+          uiLocalNotificationDateInterpretation:
+              UILocalNotificationDateInterpretation.absoluteTime,
+          payload: 'study_plan:${plan.id}',
+        );
+      }
+
+      final missedAt = tz.TZDateTime(tz.local, date.year, date.month,
+          date.day, _missedCheckHour, _missedCheckMinute);
+      if (missedAt.isAfter(nowTz)) {
+        await _plugin.zonedSchedule(
+          _dayMissedId(day.id),
+          "Don't break your streak! ⏰",
+          '${dayTasks.length} task${dayTasks.length == 1 ? '' : 's'} left in "${plan.name}" today',
+          missedAt,
+          _details(_chReminder, Importance.defaultImportance),
+          androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
+          uiLocalNotificationDateInterpretation:
+              UILocalNotificationDateInterpretation.absoluteTime,
+          payload: 'study_plan:${plan.id}',
+        );
+      }
+    }
+  }
+
+  /// Cancels every scheduled notification for a plan's days — call on
+  /// delete, or right before rescheduling on edit.
+  Future<void> cancelStudyPlanNotifications(List<StudyDay> days) async {
+    if (!_initialized || kIsWeb) return;
+    for (final day in days) {
+      await _plugin.cancel(_dayUpcomingId(day.id));
+      await _plugin.cancel(_dayMissedId(day.id));
+    }
+  }
+
+  /// Cancels just one day's end-of-day "tasks left" check-in — call the
+  /// moment that day's tasks all become complete so the reminder doesn't
+  /// fire for something already finished.
+  Future<void> cancelDayMissedCheck(String dayId) async {
+    if (!_initialized || kIsWeb) return;
+    await _plugin.cancel(_dayMissedId(dayId));
+  }
+
+  /// Immediate (not scheduled) congratulations when a plan's last task is
+  /// completed.
+  Future<void> showStudyPlanCompleted({
     required String planId,
     required String planName,
-    required int hour,
-    required int minute,
   }) async {
     if (!_initialized || kIsWeb) return;
-    final id = _studyPlanNotifId(planId);
-    await _plugin.cancel(id);
-
-    final now = tz.TZDateTime.now(tz.local);
-    var next =
-        tz.TZDateTime(tz.local, now.year, now.month, now.day, hour, minute);
-    if (next.isBefore(now)) next = next.add(const Duration(days: 1));
-
-    await _plugin.zonedSchedule(
-      id,
-      'Time to study! 📚',
-      'Keep your streak — open $planName',
-      next,
-      _details(_chReminder, Importance.defaultImportance),
-      androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
-      uiLocalNotificationDateInterpretation:
-          UILocalNotificationDateInterpretation.absoluteTime,
-      matchDateTimeComponents: DateTimeComponents.time,
-      payload: 'study_plan:$planId',
+    await _plugin.show(
+      _planCompletedId(planId),
+      'Plan complete! 🎉',
+      'You finished every task in "$planName" — best wishes for the exam!',
+      _details(_chReminder, Importance.high),
+      payload: 'saved_outputs',
     );
   }
 
-  Future<void> cancelStudyPlanReminder(String planId) async {
+  /// Re-derives and re-schedules every active plan's day notifications from
+  /// scratch. Android AlarmManager entries don't survive a device reboot
+  /// (RECEIVE_BOOT_COMPLETED alone doesn't re-register them for this
+  /// plugin), so this runs once on every app launch as a cheap safety net —
+  /// re-scheduling with the same deterministic IDs just overwrites whatever
+  /// was there.
+  Future<void> rescheduleAllActiveStudyPlans() async {
     if (!_initialized || kIsWeb) return;
-    await _plugin.cancel(_studyPlanNotifId(planId));
+    final plans = await StudyPlanRepository().getAll();
+    final dayRepo = StudyDayRepository();
+    final taskRepo = StudyTaskRepository();
+    for (final plan in plans) {
+      if (!plan.isActive || !plan.hasReminder) continue;
+      final days = await dayRepo.getByPlan(plan.id);
+      final tasks = await taskRepo.getByPlan(plan.id);
+      await scheduleStudyPlanNotifications(
+          plan: plan, days: days, tasks: tasks);
+    }
   }
-
-  int _studyPlanNotifId(String planId) => 2000 + planId.hashCode.abs() % 999;
 
   Future<void> cancelAll() async {
     if (!_initialized || kIsWeb) return;

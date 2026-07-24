@@ -2,11 +2,12 @@ import 'api_service.dart';
 
 /// Usage snapshot for the signed-in user's current plan — mirrors
 /// GET /api/usage/me. See routes::usage_me on the backend for how each
-/// field is computed (daily question count, weekly credit spend).
+/// field is computed (dollar spend today, dollar spend this week). Purely
+/// credit-based — there is no separate per-question count limit.
 class UsageSnapshot {
   final String plan;
-  final int dailyQuestionsUsed;
-  final int dailyQuestionLimit;
+  final double dailyCreditUsedUsd;
+  final double dailyCreditLimitUsd;
   final double weeklyCreditUsedUsd;
   final double weeklyCreditLimitUsd;
   final double creditBalanceUsd;
@@ -16,8 +17,8 @@ class UsageSnapshot {
 
   const UsageSnapshot({
     required this.plan,
-    required this.dailyQuestionsUsed,
-    required this.dailyQuestionLimit,
+    required this.dailyCreditUsedUsd,
+    required this.dailyCreditLimitUsd,
     required this.weeklyCreditUsedUsd,
     required this.weeklyCreditLimitUsd,
     required this.creditBalanceUsd,
@@ -28,8 +29,8 @@ class UsageSnapshot {
 
   factory UsageSnapshot.fromJson(Map<String, dynamic> j) => UsageSnapshot(
     plan: j['plan'] as String? ?? 'hobby',
-    dailyQuestionsUsed: (j['dailyQuestionsUsed'] as num?)?.toInt() ?? 0,
-    dailyQuestionLimit: (j['dailyQuestionLimit'] as num?)?.toInt() ?? 0,
+    dailyCreditUsedUsd: (j['dailyCreditUsedUsd'] as num?)?.toDouble() ?? 0,
+    dailyCreditLimitUsd: (j['dailyCreditLimitUsd'] as num?)?.toDouble() ?? 0,
     weeklyCreditUsedUsd: (j['weeklyCreditUsedUsd'] as num?)?.toDouble() ?? 0,
     weeklyCreditLimitUsd: (j['weeklyCreditLimitUsd'] as num?)?.toDouble() ?? 0,
     creditBalanceUsd: (j['creditBalanceUsd'] as num?)?.toDouble() ?? 0,
@@ -73,7 +74,7 @@ class PlanInfo {
   final String name;
   final int priceInr;
   final double creditsUsd;
-  final int dailyQuestionLimit;
+  final double dailyCreditUsd;
   final double weeklyCreditUsd;
   final bool studyPlans;
 
@@ -82,7 +83,7 @@ class PlanInfo {
     required this.name,
     required this.priceInr,
     required this.creditsUsd,
-    required this.dailyQuestionLimit,
+    required this.dailyCreditUsd,
     required this.weeklyCreditUsd,
     required this.studyPlans,
   });
@@ -92,7 +93,7 @@ class PlanInfo {
     name: j['name'] as String,
     priceInr: (j['priceInr'] as num).toInt(),
     creditsUsd: (j['creditsUsd'] as num).toDouble(),
-    dailyQuestionLimit: (j['dailyQuestionLimit'] as num).toInt(),
+    dailyCreditUsd: (j['dailyCreditUsd'] as num).toDouble(),
     weeklyCreditUsd: (j['weeklyCreditUsd'] as num).toDouble(),
     studyPlans: j['studyPlans'] as bool? ?? false,
   );

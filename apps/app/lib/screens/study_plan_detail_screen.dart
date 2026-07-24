@@ -8,6 +8,7 @@ import '../models/study_task.dart';
 import '../repositories/study_day_repository.dart';
 import '../repositories/study_plan_repository.dart';
 import '../repositories/study_task_repository.dart';
+import '../services/notification_service.dart';
 import '../widgets/app_feedback.dart';
 import 'study_plan_create_screen.dart';
 
@@ -99,6 +100,10 @@ class _StudyPlanDetailScreenState extends State<StudyPlanDetailScreen> {
     if (allDone != day.isCompleted) {
       final updatedDay = day.copyWith(isCompleted: allDone);
       await _dayRepo.update(updatedDay);
+      // The day just finished — no need to nag the user about it tonight.
+      if (allDone) {
+        await NotificationService.instance.cancelDayMissedCheck(day.id);
+      }
     }
 
     // Check if entire plan is done
@@ -109,6 +114,10 @@ class _StudyPlanDetailScreenState extends State<StudyPlanDetailScreen> {
 
     if (totalCount > 0 && doneCount == totalCount && _plan!.status == 'active') {
       await _planRepo.updateStatus(widget.planId, 'completed');
+      await NotificationService.instance.showStudyPlanCompleted(
+        planId: _plan!.id,
+        planName: _plan!.name,
+      );
     }
 
     _load();
