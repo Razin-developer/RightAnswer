@@ -153,7 +153,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
                             ),
                             const SizedBox(height: 4),
                             Text(
-                              'Grants \$${(payment?.creditsUsd ?? 0).toStringAsFixed(2)} in AI credits',
+                              'Includes a boost of extra AI credit',
                               style: TextStyle(
                                 fontSize: 12,
                                 color: theme.colorScheme.onSurface.withValues(

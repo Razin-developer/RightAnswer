@@ -29,8 +29,6 @@ class SettingsRepository {
 // Well-known setting keys
 class SettingKeys {
   static const String defaultLanguage = 'default_language';
-  static const String defaultGradeLevel = 'default_grade_level';
-  static const String defaultTone = 'default_tone';
   static const String defaultOutputLength = 'default_output_length';
   static const String defaultReasoningLevel = 'default_reasoning_level';
   static const String themeMode = 'theme_mode';

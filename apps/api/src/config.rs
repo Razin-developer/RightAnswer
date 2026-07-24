@@ -56,36 +56,40 @@ pub struct PlanConfig {
 impl PlanConfig {
     fn from_env() -> Self {
         Self {
+            // Usage limits halved and prices ~doubled (then charm-priced)
+            // across every tier — weekly_credit_usd * 4 weeks was landing
+            // well above what each tier actually charges (e.g. old Pro:
+            // $5/week * 4 ~= $20/mo ~= ₹2000/mo of usage sold for ₹200).
             hobby_daily_credit_usd: read("PLAN_HOBBY_DAILY_CREDIT_USD")
                 .and_then(|v| v.parse().ok())
-                .unwrap_or(0.10),
+                .unwrap_or(0.05),
             hobby_weekly_credit_usd: read("PLAN_HOBBY_WEEKLY_CREDIT_USD")
                 .and_then(|v| v.parse().ok())
-                .unwrap_or(0.5),
+                .unwrap_or(0.25),
             pro_daily_credit_usd: read("PLAN_PRO_DAILY_CREDIT_USD")
                 .and_then(|v| v.parse().ok())
-                .unwrap_or(1.0),
+                .unwrap_or(0.5),
             pro_weekly_credit_usd: read("PLAN_PRO_WEEKLY_CREDIT_USD")
                 .and_then(|v| v.parse().ok())
-                .unwrap_or(5.0),
+                .unwrap_or(2.5),
             pro_price_inr: read("PLAN_PRO_PRICE_INR")
                 .and_then(|v| v.parse().ok())
-                .unwrap_or(200),
+                .unwrap_or(399),
             pro_credits_usd: read("PLAN_PRO_CREDITS_USD")
                 .and_then(|v| v.parse().ok())
-                .unwrap_or(5.0),
+                .unwrap_or(2.5),
             scholar_daily_credit_usd: read("PLAN_SCHOLAR_DAILY_CREDIT_USD")
                 .and_then(|v| v.parse().ok())
-                .unwrap_or(3.0),
+                .unwrap_or(1.5),
             scholar_weekly_credit_usd: read("PLAN_SCHOLAR_WEEKLY_CREDIT_USD")
                 .and_then(|v| v.parse().ok())
-                .unwrap_or(15.0),
+                .unwrap_or(7.5),
             scholar_price_inr: read("PLAN_SCHOLAR_PRICE_INR")
                 .and_then(|v| v.parse().ok())
-                .unwrap_or(1000),
+                .unwrap_or(1999),
             scholar_credits_usd: read("PLAN_SCHOLAR_CREDITS_USD")
                 .and_then(|v| v.parse().ok())
-                .unwrap_or(25.0),
+                .unwrap_or(12.5),
             usage_warning_threshold_percent: read("USAGE_WARNING_THRESHOLD_PERCENT")
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(90.0),

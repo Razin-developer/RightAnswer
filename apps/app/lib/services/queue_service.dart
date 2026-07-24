@@ -111,6 +111,11 @@ Future<int> processQueueItems({
   final pending = await queueRepo.getPending();
   int processed = 0;
 
+  final settingsRepo = SettingsRepository();
+  final notifyOnComplete =
+      (await settingsRepo.get(SettingKeys.notifyOnComplete) ?? 'true') ==
+      'true';
+
   for (final req in pending) {
     try {
       await queueRepo.updateStatus(req.id, 'processing');
@@ -146,6 +151,12 @@ Future<int> processQueueItems({
 
       await queueRepo.updateStatus(req.id, 'done');
       processed++;
+      if (notifyOnComplete) {
+        await NotificationService.instance.showGenerationComplete(
+          toolType: req.toolType,
+          chapterTitle: req.chapterTitle ?? req.subjectName ?? 'Chapter',
+        );
+      }
     } catch (e) {
       final appError = AppException.from(e);
       await queueRepo.updateStatus(req.id, 'failed', error: appError.message);

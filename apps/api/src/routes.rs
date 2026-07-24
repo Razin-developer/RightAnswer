@@ -393,7 +393,13 @@ async fn list_plans(State(state): State<Arc<AppState>>) -> Json<ApiResponse<serd
                 "weeklyCreditUsd": limits.scholar_weekly_credit_usd,
                 "studyPlans": true,
             },
-        ]
+        ],
+        // Informational only (model names, not per-token pricing) — shown
+        // in the app's Usage settings so users know what's answering them.
+        "models": {
+            "simple": state.config.simple_model,
+            "reasoning": state.config.reasoning_model,
+        },
     }))
 }
 
@@ -451,6 +457,10 @@ async fn usage_me(
         "weeklyCreditLimitUsd": weekly_allowance,
         "creditBalanceUsd": credit_balance,
         "usagePercent": usage_percent,
+        // Clamped separately so the client can render two independent
+        // progress bars without ever needing the raw dollar figures above.
+        "dailyPercent": daily_percent.min(100.0),
+        "weeklyPercent": weekly_percent.min(100.0),
         "warningThresholdPercent": threshold,
         "showWarning": usage_percent >= threshold,
     })))

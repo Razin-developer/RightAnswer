@@ -3,14 +3,13 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 
 import '../constants/app_languages.dart';
-import '../database/database_helper.dart';
 import '../repositories/settings_repository.dart';
-import '../repositories/usage_log_repository.dart';
 import '../services/auth_service.dart';
 import '../services/catalog_sync_service.dart';
 import '../services/connectivity_service.dart';
 import '../services/exam_sync_service.dart';
 import '../services/notification_service.dart';
+import '../services/plans_service.dart';
 import '../services/study_plan_sync_service.dart';
 import '../services/tts_service.dart';
 import '../theme/app_theme.dart';
@@ -29,45 +28,23 @@ class SettingsScreen extends StatefulWidget {
 
 class _SettingsScreenState extends State<SettingsScreen> {
   final _settingsRepo = SettingsRepository();
-  final _usageRepo = UsageLogRepository();
-
-  final _inputPriceCtrl = TextEditingController();
-  final _outputPriceCtrl = TextEditingController();
-  final _tokenLimitCtrl = TextEditingController();
 
   String _language = 'English';
-  String _gradeLevel = 'Grade 10';
-  String _tone = 'normal';
-  String _outputLength = 'medium';
+  String _outputLength = 'normal';
   String _reasoningLevel = 'mid';
   String _themeMode = 'system';
   double _speechRate = 0.5;
 
   bool _loading = true;
   bool _syncing = false;
-  Map<String, dynamic> _usage = {};
+  UsageSnapshot? _usage;
+  ActiveModels? _models;
 
   bool _notifyOnComplete = true;
   bool _notifyOnQueueProcessed = true;
   bool _dailyReminderEnabled = false;
   int _reminderHour = 8;
   int _reminderMinute = 0;
-
-  static const _grades = [
-    'Grade 1',
-    'Grade 2',
-    'Grade 3',
-    'Grade 4',
-    'Grade 5',
-    'Grade 6',
-    'Grade 7',
-    'Grade 8',
-    'Grade 9',
-    'Grade 10',
-    'Grade 11',
-    'Grade 12',
-    'University',
-  ];
 
   @override
   void initState() {
@@ -77,20 +54,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Future<void> _load() async {
     final all = await _settingsRepo.getAll();
-    final usage = await _usageRepo.getSummary();
     if (!mounted) return;
 
     setState(() {
       _language = all[SettingKeys.defaultLanguage] ?? 'English';
-      _gradeLevel = all[SettingKeys.defaultGradeLevel] ?? 'Grade 10';
-      _tone = all[SettingKeys.defaultTone] ?? 'normal';
-      _outputLength = all[SettingKeys.defaultOutputLength] ?? 'medium';
+      _outputLength = all[SettingKeys.defaultOutputLength] ?? 'normal';
       _reasoningLevel = all[SettingKeys.defaultReasoningLevel] ?? 'mid';
       _themeMode = all[SettingKeys.themeMode] ?? 'system';
       _speechRate = TtsService.instance.speechRate;
-      _inputPriceCtrl.text = all[SettingKeys.inputTokenPrice] ?? '0.0005';
-      _outputPriceCtrl.text = all[SettingKeys.outputTokenPrice] ?? '0.0015';
-      _tokenLimitCtrl.text = all[SettingKeys.chatDailyTokenLimit] ?? '0';
       _notifyOnComplete =
           (all[SettingKeys.notifyOnComplete] ?? 'true') == 'true';
       _notifyOnQueueProcessed =
@@ -100,9 +71,28 @@ class _SettingsScreenState extends State<SettingsScreen> {
           int.tryParse(all[SettingKeys.dailyReminderHour] ?? '8') ?? 8;
       _reminderMinute =
           int.tryParse(all[SettingKeys.dailyReminderMinute] ?? '0') ?? 0;
-      _usage = usage;
       _loading = false;
     });
+
+    if (AuthService.instance.isLoggedIn) _loadUsage();
+  }
+
+  /// Best-effort — the usage bar and model line are a soft nudge, not core
+  /// functionality, so a failed fetch here just leaves that section hidden.
+  Future<void> _loadUsage() async {
+    try {
+      final results = await Future.wait([
+        PlansService.getUsage(),
+        PlansService.getActiveModels(),
+      ]);
+      if (!mounted) return;
+      setState(() {
+        _usage = results[0] as UsageSnapshot;
+        _models = results[1] as ActiveModels;
+      });
+    } catch (_) {
+      // Leave _usage/_models null — the section just won't render.
+    }
   }
 
   Future<void> _save(String key, String value) => _settingsRepo.set(key, value);
@@ -180,35 +170,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
-  Future<void> _clearData() async {
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('Clear All Data'),
-        content: const Text(
-          'This deletes all subjects, chapters, chunks, and saved outputs. Settings are kept and this cannot be undone.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext, false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: Colors.red),
-            onPressed: () => Navigator.pop(dialogContext, true),
-            child: const Text('Clear'),
-          ),
-        ],
-      ),
-    );
-
-    if (ok != true) return;
-    await DatabaseHelper.instance.clearAllData();
-    if (mounted) {
-      AppFeedback.showToast(context, 'All data cleared');
-    }
-  }
-
   /// The profile photo is never uploaded server-side, so it's the one
   /// piece of account-identifying data left on-device after logout —
   /// clear it so a different account signing in on the same device
@@ -271,27 +232,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
             children: [
               _languagePickerRow(theme),
               const SizedBox(height: 14),
-              _dropdownRow('Grade / Class', _gradeLevel, _grades, (value) {
-                setState(() => _gradeLevel = value!);
-                _save(SettingKeys.defaultGradeLevel, value!);
-              }, theme),
-              const SizedBox(height: 14),
-              _dropdownRow('Tone', _tone, ['simple', 'normal', 'detailed'], (
-                value,
-              ) {
-                setState(() => _tone = value!);
-                _save(SettingKeys.defaultTone, value!);
-              }, theme),
-              const SizedBox(height: 14),
               _dropdownRow(
                 'Output Length',
                 _outputLength,
-                ['short', 'medium', 'long'],
+                const ['small', 'normal', 'large'],
                 (value) {
                   setState(() => _outputLength = value!);
                   _save(SettingKeys.defaultOutputLength, value!);
                 },
                 theme,
+                labels: const {
+                  'small': 'Concise',
+                  'normal': 'Balanced',
+                  'large': 'Detailed',
+                },
               ),
               const SizedBox(height: 14),
               _dropdownRow('Reasoning Depth', _reasoningLevel, [
@@ -440,106 +394,42 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ],
             ],
           ),
-          const SizedBox(height: 20),
-          _sectionTitle('Chat Limits', Icons.speed_outlined, theme),
-          _card(
-            theme,
-            children: [
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'Daily Output Token Limit',
-                          style: _labelStyle(theme),
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          'Set 0 for unlimited. Chat stops when the limit is reached.',
+          if (AuthService.instance.isLoggedIn && _usage != null) ...[
+            const SizedBox(height: 20),
+            _sectionTitle('Usage', Icons.bar_chart_outlined, theme),
+            _card(
+              theme,
+              children: [
+                _usageBar(theme, "Today's usage", _usage!.dailyPercent),
+                const SizedBox(height: 14),
+                _usageBar(theme, "This week's usage", _usage!.weeklyPercent),
+                if (_models != null) ...[
+                  const SizedBox(height: 14),
+                  Divider(color: theme.dividerColor),
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [
+                      Icon(
+                        Icons.auto_awesome_outlined,
+                        size: 15,
+                        color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'Answering with ${_models!.simple} · deep reasoning with ${_models!.reasoning}',
                           style: TextStyle(
-                            fontSize: 11,
-                            color: theme.colorScheme.onSurface.withValues(
-                              alpha: 0.5,
-                            ),
+                            fontSize: 11.5,
+                            color: theme.colorScheme.onSurface.withValues(alpha: 0.55),
                           ),
                         ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  SizedBox(
-                    width: 100,
-                    child: TextField(
-                      controller: _tokenLimitCtrl,
-                      keyboardType: TextInputType.number,
-                      decoration: const InputDecoration(
-                        labelText: 'tokens',
-                        isDense: true,
-                        border: OutlineInputBorder(),
-                        contentPadding: EdgeInsets.symmetric(
-                          horizontal: 10,
-                          vertical: 8,
-                        ),
                       ),
-                      onSubmitted: (v) {
-                        // Never negative — a negative limit would silently
-                        // block all chat, since usage >= limit always holds.
-                        final n = (int.tryParse(v.trim()) ?? 0).clamp(0, 1 << 30);
-                        _save(SettingKeys.chatDailyTokenLimit, n.toString());
-                      },
-                    ),
+                    ],
                   ),
                 ],
-              ),
-            ],
-          ),
-          const SizedBox(height: 20),
-          _sectionTitle('Usage & Pricing', Icons.bar_chart_outlined, theme),
-          _card(
-            theme,
-            children: [
-              Row(
-                children: [
-                  Expanded(
-                    child: TextField(
-                      controller: _inputPriceCtrl,
-                      keyboardType: const TextInputType.numberWithOptions(
-                        decimal: true,
-                      ),
-                      decoration: const InputDecoration(
-                        labelText: r'$ / 1K input tokens',
-                        isDense: true,
-                      ),
-                      onSubmitted: (value) =>
-                          _save(SettingKeys.inputTokenPrice, value),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: TextField(
-                      controller: _outputPriceCtrl,
-                      keyboardType: const TextInputType.numberWithOptions(
-                        decimal: true,
-                      ),
-                      decoration: const InputDecoration(
-                        labelText: r'$ / 1K output tokens',
-                        isDense: true,
-                      ),
-                      onSubmitted: (value) =>
-                          _save(SettingKeys.outputTokenPrice, value),
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 16),
-              Divider(color: theme.dividerColor),
-              const SizedBox(height: 10),
-              _usageGrid(theme),
-            ],
-          ),
+              ],
+            ),
+          ],
           if (AuthService.instance.isLoggedIn) ...[
             const SizedBox(height: 20),
             _sectionTitle('Plan', Icons.workspace_premium_outlined, theme),
@@ -688,42 +578,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             const SizedBox(height: 20),
           ],
-          _sectionTitle('Data', Icons.storage_outlined, theme),
-          _card(
-            theme,
-            children: [
-              _actionTile(
-                icon: Icons.delete_forever_outlined,
-                color: Colors.red,
-                label: 'Clear All Local Data',
-                subtitle:
-                    'Removes subjects, chapters, chunks, and saved outputs',
-                onTap: _clearData,
-                theme: theme,
-              ),
-              Divider(color: theme.dividerColor, height: 1),
-              _actionTile(
-                icon: Icons.upload_file_outlined,
-                color: theme.colorScheme.onSurface.withValues(alpha: 0.35),
-                label: 'Export Data',
-                subtitle: 'Coming soon',
-                onTap: () =>
-                    AppFeedback.showToast(context, 'Export coming soon'),
-                theme: theme,
-              ),
-              Divider(color: theme.dividerColor, height: 1),
-              _actionTile(
-                icon: Icons.download_outlined,
-                color: theme.colorScheme.onSurface.withValues(alpha: 0.35),
-                label: 'Import Data',
-                subtitle: 'Coming soon',
-                onTap: () =>
-                    AppFeedback.showToast(context, 'Import coming soon'),
-                theme: theme,
-              ),
-            ],
-          ),
-          const SizedBox(height: 20),
           _sectionTitle('About', Icons.info_outline, theme),
           _card(
             theme,
@@ -826,51 +680,43 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  Widget _usageGrid(ThemeData theme) {
-    final stats = [
-      ('Today - Tokens In', '${_usage['todayInputTokens']}'),
-      ('Today - Tokens Out', '${_usage['todayOutputTokens']}'),
-      (
-        'Today - Cost',
-        '\$${(_usage['todayCost'] as double).toStringAsFixed(5)}',
-      ),
-      ('All Time - Tokens In', '${_usage['allInputTokens']}'),
-      ('All Time - Tokens Out', '${_usage['allOutputTokens']}'),
-      (
-        'All Time - Cost',
-        '\$${(_usage['allCost'] as double).toStringAsFixed(4)}',
-      ),
-    ];
-
+  /// Relative-only usage meter — a percentage and a bar, deliberately never
+  /// the underlying dollar figures (see UsageSnapshot.dailyPercent docs).
+  Widget _usageBar(ThemeData theme, String label, double percent) {
+    final clamped = percent.clamp(0, 100).toDouble();
+    final color = clamped >= 90
+        ? const Color(0xFFDC2626)
+        : clamped >= 70
+        ? const Color(0xFFD97706)
+        : theme.colorScheme.primary;
     return Column(
-      children: stats
-          .map(
-            (stat) => Padding(
-              padding: const EdgeInsets.symmetric(vertical: 5),
-              child: Row(
-                children: [
-                  Text(
-                    stat.$1,
-                    style: TextStyle(
-                      fontSize: 13,
-                      color: theme.colorScheme.onSurface.withValues(
-                        alpha: 0.65,
-                      ),
-                    ),
-                  ),
-                  const Spacer(),
-                  Text(
-                    stat.$2,
-                    style: const TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ],
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Text(label, style: _labelStyle(theme)),
+            const Spacer(),
+            Text(
+              '${clamped.toStringAsFixed(0)}%',
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+                color: color,
               ),
             ),
-          )
-          .toList(),
+          ],
+        ),
+        const SizedBox(height: 6),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(6),
+          child: LinearProgressIndicator(
+            value: clamped / 100,
+            minHeight: 7,
+            backgroundColor: theme.colorScheme.surfaceContainerHighest,
+            valueColor: AlwaysStoppedAnimation(color),
+          ),
+        ),
+      ],
     );
   }
 
@@ -937,8 +783,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
     String value,
     List<String> options,
     ValueChanged<String?> onChanged,
-    ThemeData theme,
-  ) {
+    ThemeData theme, {
+    Map<String, String>? labels,
+  }) {
     return Row(
       children: [
         SizedBox(width: 120, child: Text(label, style: _labelStyle(theme))),
@@ -955,7 +802,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 .map(
                   (option) => DropdownMenuItem(
                     value: option,
-                    child: Text(option, style: const TextStyle(fontSize: 13)),
+                    child: Text(
+                      labels?[option] ?? option,
+                      style: const TextStyle(fontSize: 13),
+                    ),
                   ),
                 )
                 .toList(),
@@ -1079,11 +929,4 @@ class _SettingsScreenState extends State<SettingsScreen> {
     color: theme.colorScheme.onSurface.withValues(alpha: 0.75),
   );
 
-  @override
-  void dispose() {
-    _inputPriceCtrl.dispose();
-    _outputPriceCtrl.dispose();
-    _tokenLimitCtrl.dispose();
-    super.dispose();
-  }
 }

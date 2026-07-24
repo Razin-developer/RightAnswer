@@ -86,14 +86,22 @@ class _ChatScreenState extends State<ChatScreen> {
     super.initState();
     _loadAllChats();
     _tts.initialize();
-    _loadDefaultReasoningLevel();
+    _loadDefaults();
   }
 
-  Future<void> _loadDefaultReasoningLevel() async {
-    final saved = await _settingsRepo.get(SettingKeys.defaultReasoningLevel);
-    if (!mounted || saved == null) return;
-    if (saved != 'low' && saved != 'mid' && saved != 'high') return;
-    setState(() => _reasoningLevel = saved);
+  Future<void> _loadDefaults() async {
+    final all = await _settingsRepo.getAll();
+    if (!mounted) return;
+    final reasoning = all[SettingKeys.defaultReasoningLevel];
+    final length = all[SettingKeys.defaultOutputLength];
+    setState(() {
+      if (reasoning == 'low' || reasoning == 'mid' || reasoning == 'high') {
+        _reasoningLevel = reasoning!;
+      }
+      if (length == 'small' || length == 'normal' || length == 'large') {
+        _responseLength = length!;
+      }
+    });
   }
 
   @override

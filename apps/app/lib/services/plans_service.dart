@@ -12,6 +12,11 @@ class UsageSnapshot {
   final double weeklyCreditLimitUsd;
   final double creditBalanceUsd;
   final double usagePercent;
+  // Pre-clamped to [0, 100] server-side — safe to feed straight into a
+  // LinearProgressIndicator without ever needing the raw dollar fields
+  // above in the UI.
+  final double dailyPercent;
+  final double weeklyPercent;
   final double warningThresholdPercent;
   final bool showWarning;
 
@@ -23,6 +28,8 @@ class UsageSnapshot {
     required this.weeklyCreditLimitUsd,
     required this.creditBalanceUsd,
     required this.usagePercent,
+    required this.dailyPercent,
+    required this.weeklyPercent,
     required this.warningThresholdPercent,
     required this.showWarning,
   });
@@ -35,9 +42,26 @@ class UsageSnapshot {
     weeklyCreditLimitUsd: (j['weeklyCreditLimitUsd'] as num?)?.toDouble() ?? 0,
     creditBalanceUsd: (j['creditBalanceUsd'] as num?)?.toDouble() ?? 0,
     usagePercent: (j['usagePercent'] as num?)?.toDouble() ?? 0,
+    dailyPercent: (j['dailyPercent'] as num?)?.toDouble() ?? 0,
+    weeklyPercent: (j['weeklyPercent'] as num?)?.toDouble() ?? 0,
     warningThresholdPercent:
         (j['warningThresholdPercent'] as num?)?.toDouble() ?? 90,
     showWarning: j['showWarning'] as bool? ?? false,
+  );
+}
+
+/// Which AI models are currently answering questions — informational only,
+/// no per-token pricing shown (see PlansScreen for why: plan cards and the
+/// usage bar deliberately never surface exact dollar figures).
+class ActiveModels {
+  final String simple;
+  final String reasoning;
+
+  const ActiveModels({required this.simple, required this.reasoning});
+
+  factory ActiveModels.fromJson(Map<String, dynamic> j) => ActiveModels(
+    simple: j['simple'] as String? ?? 'default',
+    reasoning: j['reasoning'] as String? ?? 'default',
   );
 }
 
@@ -110,6 +134,13 @@ class PlansService {
         .whereType<Map>()
         .map((m) => PlanInfo.fromJson(m.map((k, v) => MapEntry(k.toString(), v))))
         .toList();
+  }
+
+  static Future<ActiveModels> getActiveModels() async {
+    final data = await ApiService.instance.get('/api/plans');
+    final raw = data['models'];
+    if (raw is! Map) return const ActiveModels(simple: 'default', reasoning: 'default');
+    return ActiveModels.fromJson(raw.map((k, v) => MapEntry(k.toString(), v)));
   }
 
   static Future<UsageSnapshot> getUsage() async {

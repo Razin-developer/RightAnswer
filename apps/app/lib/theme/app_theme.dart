@@ -290,4 +290,27 @@ ThemeData _base(ColorScheme cs, Color displayColor, Color bodyColor) => ThemeDat
           (s) => s.contains(WidgetState.selected) ? _coral : cs.surfaceContainerHighest,
         ),
       ),
+      navigationBarTheme: NavigationBarThemeData(
+        height: 66,
+        backgroundColor: cs.surface,
+        surfaceTintColor: Colors.transparent,
+        indicatorColor: _coral.withValues(alpha: 0.16),
+        indicatorShape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(14),
+        ),
+        labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
+        iconTheme: WidgetStateProperty.resolveWith(
+          (s) => IconThemeData(
+            size: 24,
+            color: s.contains(WidgetState.selected) ? _coral : cs.onSurfaceVariant,
+          ),
+        ),
+        labelTextStyle: WidgetStateProperty.resolveWith(
+          (s) => _inter(
+            size: 11.5,
+            weight: s.contains(WidgetState.selected) ? FontWeight.w700 : FontWeight.w500,
+            color: s.contains(WidgetState.selected) ? _coral : cs.onSurfaceVariant,
+          ),
+        ),
+      ),
     );

@@ -15,6 +15,7 @@ import '../services/connectivity_service.dart';
 import '../services/exam_sync_service.dart';
 import '../services/import_export_service.dart';
 import '../widgets/app_feedback.dart';
+import '../widgets/plan_gate.dart';
 import 'exam_attempt_screen.dart';
 import 'exam_create_screen.dart';
 
@@ -262,6 +263,25 @@ class _ExamScreenState extends State<ExamScreen> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
+
+    final plan = AuthService.instance.currentUser?.plan ?? 'hobby';
+    if (plan == 'hobby') {
+      return Scaffold(
+        backgroundColor: theme.scaffoldBackgroundColor,
+        appBar: AppBar(
+          title: Text(
+            'Exams',
+            style: GoogleFonts.playfairDisplay(fontSize: 20, letterSpacing: -0.3),
+          ),
+          centerTitle: false,
+        ),
+        body: const PlanGate(
+          featureName: 'Exams',
+          description:
+              'AI-generated practice exams are available on Pro and Scholar. Upgrade to start testing yourself.',
+        ),
+      );
+    }
 
     return Scaffold(
       backgroundColor: theme.scaffoldBackgroundColor,
