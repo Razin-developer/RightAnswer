@@ -61,7 +61,7 @@ async function api(method, path, body, { auth = true } = {}) {
   // routes.rs AuthOrIpKeyExtractor), so this test's own token has its own
   // bucket independent of any other traffic on the host. A little spacing
   // still keeps a long sequential run under its own 5 req/sec refill rate.
-  await sleep(120);
+  await sleep(210);
   const headers = { "Content-Type": "application/json" };
   if (auth && token) headers.Authorization = `Bearer ${token}`;
   const res = await fetch(`${BASE_URL}${path}`, {
@@ -607,6 +607,13 @@ await step("app reopen: fresh session (new token) still sees all synced data", a
 
 // ── 9. Mock payment / plan upgrade ───────────────────────────────────────
 
+// By this point ~35 requests have gone out on this same session's rate-limit
+// bucket (5 req/sec, 20 burst). Even at a per-request pace under the
+// refill rate, real network jitter can still tip the running average over
+// the edge across such a long sequential run. Give the bucket a clean
+// window to fully refill before the payment section's own checks.
+await sleep(5000);
+
 await step("mock payment upgrades plan to pro", async () => {
   const checkout = await api("POST", "/api/plans/checkout", { plan: "pro" });
   if (!checkout.ok || !checkout.json?.data?.payment?.id) {
@@ -648,6 +655,8 @@ await step("paying twice for the same pending payment is idempotent (second call
   }
   record("paying twice for the same pending payment is idempotent (second call is a no-op)", true);
 });
+
+await sleep(8000);
 
 await step("failed mock payment does not change plan", async () => {
   const checkout = await api("POST", "/api/plans/checkout", { plan: "pro" });
