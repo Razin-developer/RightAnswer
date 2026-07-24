@@ -57,6 +57,14 @@ function record(name, ok, detail) {
 }
 
 async function api(method, path, body, { auth = true } = {}) {
+  // The data_routes rate limiter refills at 5 req/sec (200ms/token) with a
+  // 20-token burst. A long test script firing many sequential requests can
+  // burn through that burst faster than it refills even with per-step
+  // pauses, leaving the bucket in persistent deficit by the time later
+  // sections (app reopen, payments) run. Space every single request by
+  // >200ms so the whole run stays under the sustained rate instead of
+  // relying on burst capacity.
+  await sleep(350);
   const headers = { "Content-Type": "application/json" };
   if (auth && token) headers.Authorization = `Bearer ${token}`;
   const res = await fetch(`${BASE_URL}${path}`, {
@@ -79,6 +87,52 @@ async function step(name, fn) {
   } catch (error) {
     record(name, false, error?.message ?? String(error));
   }
+  // A small pause between steps — this script otherwise fires dozens of
+  // requests back to back with zero delay, far faster than any real app
+  // user, which trips the very rate limiter that's supposed to stop
+  // exactly that kind of abuse. Real usage is naturally paced by UI
+  // interaction; this keeps the simulation honest about that instead of
+  // needing to loosen a legitimate security control just to make an
+  // artificial burst pass.
+  await sleep(120);
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Calls /api/ai/chat with a system prompt that asks for JSON, and — like
+ * the real exam/study-plan screens do after the user taps "Yes" on the
+ * beta-chapter dialog — transparently retries once with
+ * confirmBetaChapterId if the backend's beta gate intercepts the request
+ * instead of answering. Without this, a generic prompt landing on a real
+ * (correctly) gated chapter looks like a broken AI call instead of the
+ * gate working as designed. */
+async function generateJson(question, systemPrompt) {
+  const first = await api("POST", "/api/ai/chat", {
+    question,
+    systemPrompt,
+    responseFormat: "json",
+  });
+  if (!first.ok) throw new Error(`status=${first.status} body=${JSON.stringify(first.json)}`);
+
+  if (first.json?.data?.needsBetaConfirmation) {
+    const chapterId = first.json.data.chapterId;
+    const retry = await api("POST", "/api/ai/chat", {
+      question,
+      systemPrompt,
+      responseFormat: "json",
+      confirmBetaChapterId: chapterId,
+    });
+    if (!retry.ok) throw new Error(`status=${retry.status} body=${JSON.stringify(retry.json)}`);
+    const content = retry.json?.data?.content;
+    if (!content) throw new Error(`no content after beta confirmation: ${JSON.stringify(retry.json)}`);
+    return JSON.parse(content);
+  }
+
+  const content = first.json?.data?.content;
+  if (!content) throw new Error(`no content: ${JSON.stringify(first.json)}`);
+  return JSON.parse(content);
 }
 
 /** True if every key/value in `expected` is present and equal in `actual`
@@ -275,7 +329,7 @@ await step("chat: create, sync round trip (list matches push)", async () => {
   // Simulate reopening the app: list chats and confirm what was just
   // pushed comes back with the same name.
   const list = await api("GET", "/api/chats");
-  const found = list.json?.data?.chats?.find((c) => c.localId === chatLocalId);
+  const found = list.json?.data?.chats?.find((c) => c.local_id === chatLocalId);
   if (!list.ok || !found) throw new Error(`chat not found after push: ${JSON.stringify(list.json)}`);
   if (found.name !== "Simulation Chat") throw new Error(`name mismatch: ${found.name}`);
   record("chat: create, sync round trip (list matches push)", true);
@@ -288,7 +342,7 @@ await step("chat: rename via PUT persists (this route was previously missing ent
   if (!rename.ok) throw new Error(`rename status=${rename.status} body=${JSON.stringify(rename.json)}`);
 
   const list = await api("GET", "/api/chats");
-  const found = list.json?.data?.chats?.find((c) => c.localId === chatLocalId);
+  const found = list.json?.data?.chats?.find((c) => c.local_id === chatLocalId);
   if (!found || found.name !== "Renamed Simulation Chat") {
     throw new Error(`rename did not persist: ${JSON.stringify(found)}`);
   }
@@ -358,14 +412,10 @@ await step("content share: upload + public resolve returns identical bytes", asy
 
 let examJson = null;
 await step("exam method A (AI-generated): AI call returns valid question JSON", async () => {
-  const res = await api("POST", "/api/ai/chat", {
-    question: "Generate 2 questions.",
-    systemPrompt:
-      'You are an expert exam creator. Return ONLY valid JSON: {"title": "...", "questions": [{"id":"1","type":"mcq","question":"...","options":["A","B","C","D"],"correctAnswer":"A","explanation":"..."}]}',
-    responseFormat: "json",
-  });
-  if (!res.ok) throw new Error(`status=${res.status} body=${JSON.stringify(res.json)}`);
-  examJson = JSON.parse(res.json?.data?.content);
+  examJson = await generateJson(
+    "Generate 2 questions.",
+    'You are an expert exam creator. Return ONLY valid JSON: {"title": "...", "questions": [{"id":"1","type":"mcq","question":"...","options":["A","B","C","D"],"correctAnswer":"A","explanation":"..."}]}',
+  );
   if (!Array.isArray(examJson.questions) || examJson.questions.length === 0) {
     throw new Error(`no questions parsed`);
   }
@@ -446,14 +496,10 @@ await step("exam: delete removes it from the next pull", async () => {
 
 let planJson = null;
 await step("study plan method A (AI-generated): AI call returns valid JSON", async () => {
-  const res = await api("POST", "/api/ai/chat", {
-    question: "Generate my study plan for: Simulation Plan",
-    systemPrompt:
-      'You are an expert study planner. Return ONLY valid JSON: {"planName": "...", "days": [{"date": "2026-08-01", "tasks": [{"title": "...", "description": "...", "chapterName": "...", "durationMinutes": 60}]}]}',
-    responseFormat: "json",
-  });
-  if (!res.ok) throw new Error(`status=${res.status} body=${JSON.stringify(res.json)}`);
-  planJson = JSON.parse(res.json?.data?.content);
+  planJson = await generateJson(
+    "Generate my study plan for: Simulation Plan",
+    'You are an expert study planner. Return ONLY valid JSON: {"planName": "...", "days": [{"date": "2026-08-01", "tasks": [{"title": "...", "description": "...", "chapterName": "...", "durationMinutes": 60}]}]}',
+  );
   if (!Array.isArray(planJson.days) || planJson.days.length === 0) {
     throw new Error(`no days parsed`);
   }
@@ -537,6 +583,10 @@ await step("app reopen: fresh session (new token) still sees all synced data", a
   const freshToken = loginRes.json.data.token;
 
   const check = async (path, dataKey, predicate, label) => {
+    // Real app-open sync fires these as separate, independently-paced
+    // requests (each service's own background sync call), not a
+    // zero-delay burst — space them out the same way.
+    await sleep(250);
     const res = await fetch(`${BASE_URL}${path}`, {
       headers: { Authorization: `Bearer ${freshToken}` },
     });
@@ -547,7 +597,7 @@ await step("app reopen: fresh session (new token) still sees all synced data", a
     }
   };
 
-  await check("/api/chats", "chats", (c) => c.localId === chatLocalId, "chat");
+  await check("/api/chats", "chats", (c) => c.local_id === chatLocalId, "chat");
   await check("/api/exams", "exams", (e) => e.localId === examLocalIdManual, "exam");
   await check(
     "/api/study-plans",
@@ -566,11 +616,13 @@ await step("mock payment upgrades plan to pro", async () => {
     throw new Error(`checkout status=${checkout.status} body=${JSON.stringify(checkout.json)}`);
   }
   const paymentId = checkout.json.data.payment.id;
+  await sleep(250);
 
   const complete = await api("POST", `/api/plans/payments/${paymentId}/complete`, {
     status: "success",
   });
   if (!complete.ok) throw new Error(`complete status=${complete.status} body=${JSON.stringify(complete.json)}`);
+  await sleep(250);
 
   const me = await api("GET", "/api/auth/me");
   if (me.json?.data?.user?.plan !== "pro") {
@@ -583,12 +635,15 @@ await step("paying twice for the same pending payment is idempotent (second call
   const checkout = await api("POST", "/api/plans/checkout", { plan: "scholar" });
   const paymentId = checkout.json?.data?.payment?.id;
   if (!checkout.ok || !paymentId) throw new Error(`checkout status=${checkout.status}`);
+  await sleep(250);
 
   const first = await api("POST", `/api/plans/payments/${paymentId}/complete`, { status: "success" });
   if (!first.ok) throw new Error(`first complete status=${first.status}`);
+  await sleep(250);
 
   const second = await api("POST", `/api/plans/payments/${paymentId}/complete`, { status: "success" });
   if (second.ok) throw new Error(`expected second completion to be rejected, got ${second.status}`);
+  await sleep(250);
 
   const me = await api("GET", "/api/auth/me");
   if (me.json?.data?.user?.plan !== "scholar") {
@@ -601,9 +656,11 @@ await step("failed mock payment does not change plan", async () => {
   const checkout = await api("POST", "/api/plans/checkout", { plan: "pro" });
   const paymentId = checkout.json?.data?.payment?.id;
   if (!checkout.ok || !paymentId) throw new Error(`checkout status=${checkout.status}`);
+  await sleep(250);
 
   const complete = await api("POST", `/api/plans/payments/${paymentId}/complete`, { status: "failed" });
   if (!complete.ok) throw new Error(`complete status=${complete.status}`);
+  await sleep(250);
 
   const me = await api("GET", "/api/auth/me");
   if (me.json?.data?.user?.plan !== "scholar") {

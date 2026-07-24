@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use tower_governor::{
-    governor::GovernorConfigBuilder, key_extractor::PeerIpKeyExtractor, GovernorLayer,
+    governor::GovernorConfigBuilder, key_extractor::SmartIpKeyExtractor, GovernorLayer,
 };
 use uuid::Uuid;
 
@@ -48,14 +48,22 @@ pub struct ApiResponse<T> {
 }
 
 /// Rate limits brute-forceable / cost-bearing endpoints (auth and AI calls) by
-/// peer IP. Keeps credential stuffing and anonymous AI-cost abuse bounded
+/// client IP. Keeps credential stuffing and anonymous AI-cost abuse bounded
 /// without touching the rest of the router.
+///
+/// Uses `SmartIpKeyExtractor` (reads `X-Forwarded-For`/`X-Real-IP`/`Forwarded`,
+/// falling back to the TCP peer address) rather than `PeerIpKeyExtractor`.
+/// The API always sits behind nginx proxying from 127.0.0.1 (see
+/// deploy/nginx/rightanswer.conf), so `PeerIpKeyExtractor` saw nginx's own
+/// loopback address for every request — collapsing the limit into a single
+/// bucket shared by the entire user base instead of one per real client.
 fn governed_layer(
     per_second: u64,
     burst_size: u32,
-) -> GovernorLayer<PeerIpKeyExtractor, NoOpMiddleware, axum::body::Body> {
+) -> GovernorLayer<SmartIpKeyExtractor, NoOpMiddleware, axum::body::Body> {
     let config = Arc::new(
         GovernorConfigBuilder::default()
+            .key_extractor(SmartIpKeyExtractor)
             .per_second(per_second)
             .burst_size(burst_size)
             .finish()
