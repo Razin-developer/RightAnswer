@@ -1,6 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Compose v2.3x+ defaults to "Compose Bake" for `docker compose build`,
+# which resolves and builds the *entire* project's bake graph concurrently
+# even when you pass a single service name — silently defeating the
+# sequential `build api` / `build web` split below (confirmed via a build
+# log showing both services' steps interleaved from the very first line
+# despite requesting only one). Force the classic builder so each build
+# command actually builds only the service named and nothing else at the
+# same time.
+export COMPOSE_BAKE=false
+
 COMPOSE="docker compose --env-file .env.production -f docker-compose.prod.yml"
 
 if [[ ! -f .env.production ]]; then
