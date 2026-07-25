@@ -118,6 +118,32 @@ pub async fn select_contexts(
 
     let explicit_chapter_ids = request.chapter_ids.clone().unwrap_or_default();
     let confirmed_chapter_id = request.confirm_beta_chapter_id.clone();
+    // The chat screen's quick-action buttons ("Summarize this chapter",
+    // "Key points of", "Learning objectives for", "Explain", "Solve")
+    // insert these exact prefixes verbatim (see ChatScreen._insertQuickAction).
+    // They're broad, self-referential whole-chapter instructions with no
+    // specific factual content of their own, so even a much wider
+    // out-of-chapter margin (below) isn't reliably enough to stop them
+    // scoring, essentially by chance, against generic boilerplate-like
+    // text (e.g. a "Learning Objectives" heading) in some *other* chapter —
+    // the same structural false-positive Front Matter causes for the beta
+    // gate. There's no valid "wrong chapter" reading of "summarize THIS
+    // chapter" when a chapter is explicitly selected, so skip the
+    // out-of-chapter check entirely for these known prefixes rather than
+    // continuing to chase the margin.
+    const WHOLE_CHAPTER_TOOL_PREFIXES: [&str; 5] = [
+        "summarize this chapter",
+        "key points of",
+        "learning objectives for",
+        "explain",
+        "solve",
+    ];
+    let is_whole_chapter_tool = {
+        let lower = question.trim().to_lowercase();
+        WHOLE_CHAPTER_TOOL_PREFIXES
+            .iter()
+            .any(|prefix| lower.starts_with(prefix))
+    };
 
     let owned_embedding;
     let embedding = if let Some(embedding) = question_embedding {
@@ -221,6 +247,7 @@ pub async fn select_contexts(
                 } else if !explicit_chapter_ids.is_empty()
                     && !explicit_chapter_ids.contains(&info.chapter_id)
                     && dominates_enabled_scope
+                    && !is_whole_chapter_tool
                 {
                     // Ready content exists, but not in the chapter the user
                     // scoped to — the selected chapter just doesn't cover
