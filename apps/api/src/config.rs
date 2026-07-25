@@ -42,11 +42,9 @@ pub struct PlanConfig {
     pub pro_daily_credit_usd: f64,
     pub pro_weekly_credit_usd: f64,
     pub pro_price_inr: i64,
-    pub pro_credits_usd: f64,
     pub scholar_daily_credit_usd: f64,
     pub scholar_weekly_credit_usd: f64,
     pub scholar_price_inr: i64,
-    pub scholar_credits_usd: f64,
     /// Percent of the tighter of (daily credit spend, weekly credit spend)
     /// at which the client should show a dismissible usage warning banner
     /// — e.g. 90 means "warn once 90% used / 10% remaining".
@@ -75,9 +73,6 @@ impl PlanConfig {
             pro_price_inr: read("PLAN_PRO_PRICE_INR")
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(399),
-            pro_credits_usd: read("PLAN_PRO_CREDITS_USD")
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(2.5),
             scholar_daily_credit_usd: read("PLAN_SCHOLAR_DAILY_CREDIT_USD")
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(1.5),
@@ -87,9 +82,6 @@ impl PlanConfig {
             scholar_price_inr: read("PLAN_SCHOLAR_PRICE_INR")
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(1999),
-            scholar_credits_usd: read("PLAN_SCHOLAR_CREDITS_USD")
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(12.5),
             usage_warning_threshold_percent: read("USAGE_WARNING_THRESHOLD_PERCENT")
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(90.0),

@@ -148,6 +148,19 @@ pub async fn select_contexts(
     // score by this margin to count as "actually better", not just present.
     const BETA_GATE_MARGIN: f32 = 0.03;
 
+    // The out-of-chapter check (below) needs a much wider margin than the
+    // beta gate. Broad, self-referential chat requests — "summarize this
+    // chapter", "key points of", "learning objectives for" (the chat
+    // screen's quick-action buttons) — embed as generic instructions with
+    // no specific factual content, so they score similarly against
+    // boilerplate-like text in *many* chapters almost by chance. With the
+    // beta gate's tight margin this bounced nearly every chapter-tool
+    // request to a different, essentially-random "better" chapter instead
+    // of ever answering. The user's explicit chapter selection deserves a
+    // much stronger benefit of the doubt: only override it when another
+    // chapter is dominantly, unambiguously better, not just a hair ahead.
+    const OUT_OF_CHAPTER_MARGIN: f32 = 0.15;
+
     let search_scope: Vec<String> = if !explicit_chapter_ids.is_empty() {
         explicit_chapter_ids.clone()
     } else {
@@ -196,6 +209,7 @@ pub async fn select_contexts(
         let already_confirmed = confirmed_chapter_id.is_some()
             && confirmed_chapter_id.as_deref() == top.chapter_id.as_deref();
         let beats_enabled_scope = top.score > enabled_top_score + BETA_GATE_MARGIN;
+        let dominates_enabled_scope = top.score > enabled_top_score + OUT_OF_CHAPTER_MARGIN;
         if !already_confirmed && beats_enabled_scope {
             if let Some(info) = top.chapter_id.as_deref().and_then(|id| index_by_id.get(id)) {
                 if !info.enabled {
@@ -206,6 +220,7 @@ pub async fn select_contexts(
                     }));
                 } else if !explicit_chapter_ids.is_empty()
                     && !explicit_chapter_ids.contains(&info.chapter_id)
+                    && dominates_enabled_scope
                 {
                     // Ready content exists, but not in the chapter the user
                     // scoped to — the selected chapter just doesn't cover

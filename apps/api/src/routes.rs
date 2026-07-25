@@ -375,7 +375,6 @@ async fn list_plans(State(state): State<Arc<AppState>>) -> impl IntoResponse {
                 "id": "hobby",
                 "name": "Hobby",
                 "priceInr": 0,
-                "creditsUsd": 0.0,
                 "dailyCreditUsd": limits.hobby_daily_credit_usd,
                 "weeklyCreditUsd": limits.hobby_weekly_credit_usd,
                 "studyPlans": false,
@@ -384,7 +383,6 @@ async fn list_plans(State(state): State<Arc<AppState>>) -> impl IntoResponse {
                 "id": "pro",
                 "name": "Pro",
                 "priceInr": limits.pro_price_inr,
-                "creditsUsd": limits.pro_credits_usd,
                 "dailyCreditUsd": limits.pro_daily_credit_usd,
                 "weeklyCreditUsd": limits.pro_weekly_credit_usd,
                 "studyPlans": true,
@@ -393,7 +391,6 @@ async fn list_plans(State(state): State<Arc<AppState>>) -> impl IntoResponse {
                 "id": "scholar",
                 "name": "Scholar",
                 "priceInr": limits.scholar_price_inr,
-                "creditsUsd": limits.scholar_credits_usd,
                 "dailyCreditUsd": limits.scholar_daily_credit_usd,
                 "weeklyCreditUsd": limits.scholar_weekly_credit_usd,
                 "studyPlans": true,
@@ -435,30 +432,34 @@ async fn usage_me(
     let spent_today = state.db.sum_cost_today(user.id).await?;
     let spent_this_week = state.db.sum_cost_this_week(user.id).await?;
     let credit_balance = state.db.user_credit_balance(user.id).await?;
-    // Purchased/granted credit tops up the weekly allowance only — daily
-    // pacing still applies so a top-up can't be blown through in one day.
-    let weekly_allowance = weekly_credit + credit_balance;
 
     let daily_percent = if daily_credit > 0.0 {
         (spent_today / daily_credit) * 100.0
     } else {
         0.0
     };
-    let weekly_percent = if weekly_allowance > 0.0 {
-        (spent_this_week / weekly_allowance) * 100.0
+    // Purchased credit is a *separate* reserve, spent only once the plan's
+    // own daily/weekly allowance runs out (see enforce_plan_limits) — never
+    // pooled into the weekly bar itself, so these percentages reflect only
+    // the plan allowance, not how much runway the credit balance adds.
+    let weekly_percent = if weekly_credit > 0.0 {
+        (spent_this_week / weekly_credit) * 100.0
     } else {
         0.0
     };
     let usage_percent = daily_percent.max(weekly_percent);
     let threshold = state.config.plans.usage_warning_threshold_percent;
+    let using_credit =
+        credit_balance > 0.0 && (spent_today >= daily_credit || spent_this_week >= weekly_credit);
 
     Ok(ok(json!({
         "plan": user.plan,
         "dailyCreditUsedUsd": spent_today,
         "dailyCreditLimitUsd": daily_credit,
         "weeklyCreditUsedUsd": spent_this_week,
-        "weeklyCreditLimitUsd": weekly_allowance,
+        "weeklyCreditLimitUsd": weekly_credit,
         "creditBalanceUsd": credit_balance,
+        "usingCredit": using_credit,
         "usagePercent": usage_percent,
         // Clamped separately so the client can render two independent
         // progress bars without ever needing the raw dollar figures above.
@@ -497,15 +498,12 @@ async fn plans_checkout(
     Json(body): Json<CheckoutRequest>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>, ApiError> {
     let user = require_user(&state, &headers).await?;
+    // credits_usd is 0.0 for a plan purchase — pro/scholar upgrade the plan
+    // tier only, never grant credit (see complete_payment); only a
+    // "credits" checkout actually adds to the balance.
     let (amount_inr, credits_usd) = match body.plan.as_str() {
-        "pro" => (
-            state.config.plans.pro_price_inr,
-            state.config.plans.pro_credits_usd,
-        ),
-        "scholar" => (
-            state.config.plans.scholar_price_inr,
-            state.config.plans.scholar_credits_usd,
-        ),
+        "pro" => (state.config.plans.pro_price_inr, 0.0),
+        "scholar" => (state.config.plans.scholar_price_inr, 0.0),
         "credits" => {
             let requested = body.credits_usd.unwrap_or(0.0);
             if !(MIN_CREDIT_TOPUP_USD..=MAX_CREDIT_TOPUP_USD).contains(&requested) {
@@ -539,9 +537,11 @@ struct CompletePaymentRequest {
 
 /// Finalizes a pending payment. Stands in for a real gateway's
 /// success/failure webhook — the mock payment screen calls this directly
-/// with whichever button the user tapped. On success, upgrades the user's
-/// plan and grants the purchased credits; on failure, the payment is just
-/// marked failed and nothing else changes.
+/// with whichever button the user tapped. On success: a "pro"/"scholar"
+/// payment upgrades the plan tier only (no credit granted — credit is a
+/// separate reserve, added only by an explicit "credits" top-up purchase);
+/// a "credits" payment adds to the balance only (never touches plan tier).
+/// On failure, the payment is just marked failed and nothing else changes.
 async fn complete_payment(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -561,12 +561,13 @@ async fn complete_payment(
         .ok_or_else(|| ApiError::NotFound("Payment not found, or already completed".into()))?;
 
     if payment.status == "success" {
-        // A standalone credit top-up ("credits") never changes the user's
-        // plan tier — only a real "pro"/"scholar" purchase does.
         if payment.plan == "pro" || payment.plan == "scholar" {
+            // Upgrading a plan tier never grants credit — only an explicit
+            // "credits" top-up purchase does (see plans_checkout).
             state.db.set_user_plan(user.id, &payment.plan).await?;
+        } else if payment.plan == "credits" {
+            state.db.add_credits(user.id, payment.credits_usd).await?;
         }
-        state.db.add_credits(user.id, payment.credits_usd).await?;
     }
 
     Ok(ok(json!({ "payment": payment })))
@@ -650,33 +651,58 @@ async fn delete_study_plan(
 /// requests (no valid session) are left unrestricted here, same as the
 /// rest of `ai_chat`'s auth handling — this only tightens things for
 /// signed-in users.
-async fn enforce_plan_limits(state: &AppState, user: Option<&AuthUser>) -> Result<(), ApiError> {
+/// Whether a request was covered by the caller's normal daily/weekly plan
+/// allowance, or only went through because their purchased credit balance
+/// covered it once that allowance ran out. Purchased credit is a *separate*
+/// reserve, spent only after the plan's own daily/weekly allowance is
+/// exhausted — never pooled together with it from the start (see
+/// enforce_plan_limits) — and only actually decremented (in
+/// Database::record_usage) when this is `UsingCredit`.
+#[derive(PartialEq, Eq, Clone, Copy)]
+enum PlanLimitCheck {
+    WithinPlan,
+    UsingCredit,
+}
+
+async fn enforce_plan_limits(
+    state: &AppState,
+    user: Option<&AuthUser>,
+) -> Result<PlanLimitCheck, ApiError> {
     let Some(user) = user else {
-        return Ok(());
+        return Ok(PlanLimitCheck::WithinPlan);
     };
     let (daily_credit, weekly_credit) = plan_limits(&state.config, &user.plan);
 
     let spent_today = state.db.sum_cost_today(user.id).await?;
-    if spent_today >= daily_credit {
-        return Err(ApiError::LimitExceeded {
-            message: "You've used today's plan credit. Upgrade your plan or try again tomorrow."
+    let spent_this_week = state.db.sum_cost_this_week(user.id).await?;
+    let daily_exceeded = spent_today >= daily_credit;
+    let weekly_exceeded = spent_this_week >= weekly_credit;
+
+    if !daily_exceeded && !weekly_exceeded {
+        return Ok(PlanLimitCheck::WithinPlan);
+    }
+
+    // The plan's own daily or weekly allowance is used up — fall back to
+    // purchased credit, if any is left.
+    let credit_balance = state.db.user_credit_balance(user.id).await?;
+    if credit_balance > 0.0 {
+        return Ok(PlanLimitCheck::UsingCredit);
+    }
+
+    if daily_exceeded {
+        Err(ApiError::LimitExceeded {
+            message: "You've used today's plan credit. Buy more credit or try again tomorrow."
                 .into(),
             reset_at: next_utc_midnight(),
-        });
-    }
-
-    let spent_this_week = state.db.sum_cost_this_week(user.id).await?;
-    let credit_balance = state.db.user_credit_balance(user.id).await?;
-    if spent_this_week >= weekly_credit + credit_balance {
-        return Err(ApiError::LimitExceeded {
+        })
+    } else {
+        Err(ApiError::LimitExceeded {
             message:
-                "You've used this week's plan credit. Upgrade your plan or wait for the weekly reset."
+                "You've used this week's plan credit. Buy more credit or wait for the weekly reset."
                     .into(),
             reset_at: next_utc_week_start(),
-        });
+        })
     }
-
-    Ok(())
 }
 
 /// Matches `date_trunc('day', now())` rolled forward one day — the moment
@@ -710,7 +736,8 @@ async fn ai_chat(
     Json(body): Json<AiChatRequest>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>, ApiError> {
     let user = Some(require_user(&state, &headers).await?);
-    enforce_plan_limits(&state, user.as_ref()).await?;
+    let draw_from_credit =
+        enforce_plan_limits(&state, user.as_ref()).await? == PlanLimitCheck::UsingCredit;
     let question = body
         .question
         .as_deref()
@@ -749,6 +776,7 @@ async fn ai_chat(
             question,
             &answer,
             &context_meta,
+            draw_from_credit,
         )
         .await?;
         return Ok(ok(json!({
@@ -778,6 +806,7 @@ async fn ai_chat(
             embed_input_tokens,
             0,
             "model",
+            draw_from_credit,
         )
         .await;
     let semantic_cached = if body.confirm_beta_chapter_id.is_some() {
@@ -811,6 +840,7 @@ async fn ai_chat(
             question,
             &answer,
             &context_meta,
+            draw_from_credit,
         )
         .await?;
         return Ok(ok(json!({
@@ -848,7 +878,7 @@ async fn ai_chat(
             // cache hit (see persist_ai_chat below, which still logs the
             // interaction at zero tokens/cost).
             let answer = out_of_chapter_answer(&out_of_chapter);
-            persist_ai_chat(&state, user.as_ref(), &body, question, &answer, &ContextMeta::default()).await?;
+            persist_ai_chat(&state, user.as_ref(), &body, question, &answer, &ContextMeta::default(), draw_from_credit).await?;
             return Ok(ok(json!({
                 "answer": answer,
                 "content": answer.content,
@@ -908,6 +938,7 @@ async fn ai_chat(
         question,
         &answer,
         &selected.primary_meta,
+        draw_from_credit,
     )
     .await?;
 
@@ -982,6 +1013,7 @@ async fn ai_title(
             answer.input_tokens,
             answer.output_tokens,
             &answer.served_from,
+            false,
         )
         .await;
 
@@ -1011,7 +1043,8 @@ async fn ai_chat_stream(
     Json(body): Json<AiChatRequest>,
 ) -> Result<Sse<KeepAliveStream<BoxedEventStream>>, ApiError> {
     let user = Some(require_user(&state, &headers).await?);
-    enforce_plan_limits(&state, user.as_ref()).await?;
+    let draw_from_credit =
+        enforce_plan_limits(&state, user.as_ref()).await? == PlanLimitCheck::UsingCredit;
     let question = body
         .question
         .as_deref()
@@ -1053,6 +1086,7 @@ async fn ai_chat_stream(
             &question,
             &answer,
             &context_meta,
+            draw_from_credit,
         )
         .await?;
         return Ok(
@@ -1073,6 +1107,7 @@ async fn ai_chat_stream(
             embed_input_tokens,
             0,
             "model",
+            draw_from_credit,
         )
         .await;
     let semantic_cached = if body.confirm_beta_chapter_id.is_some() {
@@ -1102,6 +1137,7 @@ async fn ai_chat_stream(
             &question,
             &answer,
             &context_meta,
+            draw_from_credit,
         )
         .await?;
         return Ok(
@@ -1138,7 +1174,7 @@ async fn ai_chat_stream(
             // chunk/done stream shape a cache hit uses (single_shot_stream),
             // so the client needs no special-case handling for it.
             let answer = out_of_chapter_answer(&out_of_chapter);
-            persist_ai_chat(&state, user.as_ref(), &body, &question, &answer, &ContextMeta::default()).await?;
+            persist_ai_chat(&state, user.as_ref(), &body, &question, &answer, &ContextMeta::default(), draw_from_credit).await?;
             return Ok(Sse::new(
                 Box::pin(single_shot_stream(answer, ContextMeta::default())) as BoxedEventStream,
             )
@@ -1152,6 +1188,7 @@ async fn ai_chat_stream(
     let stream_state = state.clone();
     let stream_body = body.clone();
     let stream_user = user.clone();
+    let stream_draw_from_credit = draw_from_credit;
     let primary_meta = selected.primary_meta.clone();
     let sources = selected.sources.clone();
     let page_images = selected.page_images.clone();
@@ -1213,7 +1250,7 @@ async fn ai_chat_stream(
             source_chunks,
             sources: sources.clone(),
         };
-        let _ = persist_ai_chat(&stream_state, stream_user.as_ref(), &stream_body, &question, &answer, &primary_meta).await;
+        let _ = persist_ai_chat(&stream_state, stream_user.as_ref(), &stream_body, &question, &answer, &primary_meta, stream_draw_from_credit).await;
 
         yield Ok(Event::default().event("done").data(
             json!({
@@ -1283,6 +1320,7 @@ async fn persist_ai_chat(
     question: &str,
     answer: &AiAnswer,
     context_meta: &crate::rag::ContextMeta,
+    draw_from_credit: bool,
 ) -> Result<(), ApiError> {
     state
         .db
@@ -1294,6 +1332,7 @@ async fn persist_ai_chat(
             answer.input_tokens,
             answer.output_tokens,
             &answer.served_from,
+            draw_from_credit,
         )
         .await?;
 
@@ -1399,6 +1438,7 @@ async fn embeddings(
             input_tokens,
             0,
             "model",
+            false,
         )
         .await;
     Ok(ok(json!({

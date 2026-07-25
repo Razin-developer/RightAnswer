@@ -693,6 +693,13 @@ impl Database {
     }
 
     #[allow(clippy::too_many_arguments)]
+    /// `draw_from_credit` is set when this request was only allowed because
+    /// the caller's daily/weekly plan allowance was already used up and
+    /// their purchased credit balance covered it instead (see
+    /// routes::enforce_plan_limits's PlanLimitCheck::UsingCredit) — in that
+    /// case this same call also deducts the request's real cost from
+    /// credit_balance_usd, in the same transaction as the usage-event
+    /// insert so the two never drift apart.
     pub async fn record_usage(
         &self,
         user_id: Option<Uuid>,
@@ -702,8 +709,10 @@ impl Database {
         input_tokens: i32,
         output_tokens: i32,
         served_from: &str,
+        draw_from_credit: bool,
     ) -> Result<(), sqlx::Error> {
         let estimated = estimate_cost(model, input_tokens, output_tokens);
+        let mut tx = self.pool.begin().await?;
         sqlx::query(
             r#"
             INSERT INTO ai_usage_events
@@ -719,8 +728,22 @@ impl Database {
         .bind(output_tokens)
         .bind(estimated)
         .bind(served_from)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await?;
+
+        if draw_from_credit {
+            if let Some(user_id) = user_id {
+                sqlx::query(
+                    "UPDATE users SET credit_balance_usd = GREATEST(credit_balance_usd - $2, 0) WHERE id = $1",
+                )
+                .bind(user_id)
+                .bind(estimated)
+                .execute(&mut *tx)
+                .await?;
+            }
+        }
+
+        tx.commit().await?;
         Ok(())
     }
 

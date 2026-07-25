@@ -15,6 +15,7 @@ import '../services/tts_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/app_feedback.dart';
 import '../widgets/language_picker_sheet.dart';
+import 'add_credits_screen.dart';
 import 'login_screen.dart';
 import 'plans_screen.dart';
 import 'profile_screen.dart';
@@ -396,25 +397,69 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 _usageBar(theme, "Today's usage", _usage!.dailyPercent),
                 const SizedBox(height: 14),
                 _usageBar(theme, "This week's usage", _usage!.weeklyPercent),
-                if (_usage!.creditBalanceUsd > 0) ...[
-                  const SizedBox(height: 14),
-                  Divider(color: theme.dividerColor),
-                  const SizedBox(height: 10),
-                  Row(
-                    children: [
-                      Text('Credit balance', style: _labelStyle(theme)),
-                      const Spacer(),
-                      Text(
-                        '\$${_usage!.creditBalanceUsd.toStringAsFixed(2)}',
-                        style: TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w700,
-                          color: theme.colorScheme.primary,
+                const SizedBox(height: 16),
+                Divider(color: theme.dividerColor, height: 1),
+                const SizedBox(height: 14),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('Credit balance', style: _labelStyle(theme)),
+                          const SizedBox(height: 4),
+                          Text(
+                            '\$${_usage!.creditBalanceUsd.toStringAsFixed(2)}',
+                            style: theme.textTheme.titleLarge?.copyWith(
+                              fontWeight: FontWeight.w800,
+                              color: theme.colorScheme.primary,
+                            ),
+                          ),
+                          if (_usage!.usingCredit) ...[
+                            const SizedBox(height: 6),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 9,
+                                vertical: 3,
+                              ),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFFD97706).withValues(
+                                  alpha: 0.14,
+                                ),
+                                borderRadius: BorderRadius.circular(20),
+                              ),
+                              child: const Text(
+                                'Plan limit reached — running on credit',
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w700,
+                                  color: Color(0xFFB45309),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                    OutlinedButton.icon(
+                      onPressed: () => Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => const AddCreditsScreen(),
                         ),
                       ),
-                    ],
-                  ),
-                ],
+                      icon: const Icon(Icons.add_card_outlined, size: 16),
+                      label: const Text('Add'),
+                      style: OutlinedButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 14,
+                          vertical: 8,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
               ],
             ),
           ],

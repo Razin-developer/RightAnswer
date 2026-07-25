@@ -19,6 +19,10 @@ class UsageSnapshot {
   final double weeklyPercent;
   final double warningThresholdPercent;
   final bool showWarning;
+  // True once the plan's own daily/weekly allowance is exhausted and
+  // purchased credit balance is covering requests instead — credit is a
+  // separate reserve, never pooled into dailyPercent/weeklyPercent above.
+  final bool usingCredit;
 
   const UsageSnapshot({
     required this.plan,
@@ -32,6 +36,7 @@ class UsageSnapshot {
     required this.weeklyPercent,
     required this.warningThresholdPercent,
     required this.showWarning,
+    required this.usingCredit,
   });
 
   factory UsageSnapshot.fromJson(Map<String, dynamic> j) => UsageSnapshot(
@@ -47,6 +52,7 @@ class UsageSnapshot {
     warningThresholdPercent:
         (j['warningThresholdPercent'] as num?)?.toDouble() ?? 90,
     showWarning: j['showWarning'] as bool? ?? false,
+    usingCredit: j['usingCredit'] as bool? ?? false,
   );
 }
 
@@ -82,7 +88,6 @@ class PlanInfo {
   final String id;
   final String name;
   final int priceInr;
-  final double creditsUsd;
   final double dailyCreditUsd;
   final double weeklyCreditUsd;
   final bool studyPlans;
@@ -91,7 +96,6 @@ class PlanInfo {
     required this.id,
     required this.name,
     required this.priceInr,
-    required this.creditsUsd,
     required this.dailyCreditUsd,
     required this.weeklyCreditUsd,
     required this.studyPlans,
@@ -101,7 +105,6 @@ class PlanInfo {
     id: j['id'] as String,
     name: j['name'] as String,
     priceInr: (j['priceInr'] as num).toInt(),
-    creditsUsd: (j['creditsUsd'] as num).toDouble(),
     dailyCreditUsd: (j['dailyCreditUsd'] as num).toDouble(),
     weeklyCreditUsd: (j['weeklyCreditUsd'] as num).toDouble(),
     studyPlans: j['studyPlans'] as bool? ?? false,
