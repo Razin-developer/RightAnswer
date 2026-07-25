@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../services/auth_service.dart';
 import '../services/plans_service.dart';
 import '../widgets/app_feedback.dart';
+import 'add_credits_screen.dart';
 import 'payment_screen.dart';
 
 const _coral = Color(0xFFCC785C);
@@ -94,6 +95,15 @@ class _PlansScreenState extends State<PlansScreen> {
                   ),
                   const SizedBox(height: 14),
                 ],
+                const SizedBox(height: 6),
+                OutlinedButton.icon(
+                  onPressed: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const AddCreditsScreen()),
+                  ),
+                  icon: const Icon(Icons.add_card_outlined, size: 18),
+                  label: const Text('Add Credits'),
+                ),
               ],
             ),
     );

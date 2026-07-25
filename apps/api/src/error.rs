@@ -1,4 +1,5 @@
 use axum::{http::StatusCode, response::IntoResponse, Json};
+use chrono::{DateTime, Utc};
 use serde::Serialize;
 
 #[derive(Debug, thiserror::Error)]
@@ -11,8 +12,14 @@ pub enum ApiError {
     Upstream(String),
     #[error("{0}")]
     NotFound(String),
-    #[error("{0}")]
-    LimitExceeded(String),
+    /// Plan credit exhausted (daily or weekly). Carries when it resets so
+    /// the client can tell the user exactly when they'll be able to ask
+    /// again, instead of just "try again later".
+    #[error("{message}")]
+    LimitExceeded {
+        message: String,
+        reset_at: DateTime<Utc>,
+    },
     #[error(transparent)]
     Sqlx(#[from] sqlx::Error),
     #[error(transparent)]
@@ -29,6 +36,8 @@ struct ErrorBody {
 struct ErrorPayload {
     code: &'static str,
     message: String,
+    #[serde(rename = "resetAt", skip_serializing_if = "Option::is_none")]
+    reset_at: Option<DateTime<Utc>>,
 }
 
 impl IntoResponse for ApiError {
@@ -38,7 +47,7 @@ impl IntoResponse for ApiError {
             ApiError::Unauthorized(_) => (StatusCode::UNAUTHORIZED, "AUTH_REQUIRED"),
             ApiError::Upstream(_) => (StatusCode::BAD_GATEWAY, "UPSTREAM_ERROR"),
             ApiError::NotFound(_) => (StatusCode::NOT_FOUND, "NOT_FOUND"),
-            ApiError::LimitExceeded(_) => (StatusCode::TOO_MANY_REQUESTS, "LIMIT_EXCEEDED"),
+            ApiError::LimitExceeded { .. } => (StatusCode::TOO_MANY_REQUESTS, "LIMIT_EXCEEDED"),
             ApiError::Sqlx(_) | ApiError::Anyhow(_) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, "INTERNAL_ERROR")
             }
@@ -62,9 +71,17 @@ impl IntoResponse for ApiError {
             }
         };
 
+        let reset_at = match &self {
+            ApiError::LimitExceeded { reset_at, .. } => Some(*reset_at),
+            _ => None,
+        };
         let body = ErrorBody {
             success: false,
-            error: ErrorPayload { code, message },
+            error: ErrorPayload {
+                code,
+                message,
+                reset_at,
+            },
         };
         (status, Json(body)).into_response()
     }

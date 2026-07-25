@@ -19,6 +19,20 @@ pub struct ContextMeta {
 pub struct SelectedContexts {
     pub sources: Vec<SourceInfo>,
     pub primary_meta: ContextMeta,
+    /// Every embedded illustration/table/graph for each unique page cited
+    /// among `sources` — real ingested assets (see Database::list_page_assets),
+    /// never anything the model itself produced. Grouped so the client can
+    /// dedupe by page instead of by (single-image-per-chunk) source entry.
+    pub page_images: Vec<PageImageGroup>,
+}
+
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PageImageGroup {
+    pub page_number: i32,
+    pub subject_name: String,
+    pub chapter_name: String,
+    pub image_urls: Vec<String>,
 }
 
 pub struct BetaConfirmation {
@@ -27,9 +41,21 @@ pub struct BetaConfirmation {
     pub subject_name: String,
 }
 
+/// The user explicitly scoped the question to one chapter, but the best
+/// global match lives in a *different*, already-ready chapter — the
+/// question just isn't about what they selected. Handled without ever
+/// calling the AI (see routes::ai_chat/ai_chat_stream).
+pub struct OutOfChapter {
+    pub selected_chapter_name: String,
+    pub selected_subject_name: String,
+    pub better_chapter_name: String,
+    pub better_subject_name: String,
+}
+
 pub enum ContextsOutcome {
     Ready(SelectedContexts),
     NeedsBetaConfirmation(BetaConfirmation),
+    OutOfChapter(OutOfChapter),
 }
 
 #[derive(Clone, Default)]
@@ -103,7 +129,7 @@ pub async fn select_contexts(
 
     if embedding.is_empty() {
         return Ok(ContextsOutcome::Ready(
-            finalize(direct_sources, Vec::new(), question, state).await,
+            finalize(direct_sources, Vec::new(), question, state, &[]).await,
         ));
     }
 
@@ -178,13 +204,33 @@ pub async fn select_contexts(
                         chapter_name: info.chapter_name.clone(),
                         subject_name: info.subject_name.clone(),
                     }));
+                } else if !explicit_chapter_ids.is_empty()
+                    && !explicit_chapter_ids.contains(&info.chapter_id)
+                {
+                    // Ready content exists, but not in the chapter the user
+                    // scoped to — the selected chapter just doesn't cover
+                    // this question. Never send this to the AI; the caller
+                    // returns a local "out of chapter" message instead.
+                    let selected = explicit_chapter_ids
+                        .first()
+                        .and_then(|id| index_by_id.get(id.as_str()));
+                    return Ok(ContextsOutcome::OutOfChapter(OutOfChapter {
+                        selected_chapter_name: selected
+                            .map(|s| s.chapter_name.clone())
+                            .unwrap_or_else(|| "the selected chapter".to_string()),
+                        selected_subject_name: selected
+                            .map(|s| s.subject_name.clone())
+                            .unwrap_or_default(),
+                        better_chapter_name: info.chapter_name.clone(),
+                        better_subject_name: info.subject_name.clone(),
+                    }));
                 }
             }
         }
     }
 
     Ok(ContextsOutcome::Ready(
-        finalize(direct_sources, enabled_scope_results, question, state).await,
+        finalize(direct_sources, enabled_scope_results, question, state, &chapter_index).await,
     ))
 }
 
@@ -193,6 +239,7 @@ async fn finalize(
     retrieved: Vec<RetrievedChunk>,
     question: &str,
     state: &AppState,
+    chapter_index: &[ChapterInfo],
 ) -> SelectedContexts {
     let mut meta_by_text: HashMap<String, ChunkMeta> = HashMap::new();
     let mut candidates: Vec<String> = Vec::with_capacity(direct_sources.len() + retrieved.len());
@@ -233,6 +280,7 @@ async fn finalize(
         return SelectedContexts {
             sources: vec![],
             primary_meta: ContextMeta::default(),
+            page_images: vec![],
         };
     }
 
@@ -265,8 +313,66 @@ async fn finalize(
         })
         .collect();
 
+    let page_images = collect_page_images(&top_texts, &meta_by_text, chapter_index, state).await;
+
     SelectedContexts {
         sources,
         primary_meta,
+        page_images,
     }
+}
+
+/// Every unique (chapter, page) cited among the selected sources, with
+/// every real embedded asset on that page — not just the one image_url
+/// whichever chunk happened to carry. Pages cited more than once (e.g. two
+/// selected chunks both from page 79) collapse to a single entry.
+async fn collect_page_images(
+    top_texts: &[String],
+    meta_by_text: &HashMap<String, ChunkMeta>,
+    chapter_index: &[ChapterInfo],
+    state: &AppState,
+) -> Vec<PageImageGroup> {
+    let index_by_id: HashMap<&str, &ChapterInfo> = chapter_index
+        .iter()
+        .map(|info| (info.chapter_id.as_str(), info))
+        .collect();
+
+    let mut seen_pages: std::collections::HashSet<(String, i32)> = std::collections::HashSet::new();
+    let mut groups = Vec::new();
+
+    for text in top_texts {
+        let Some(meta) = meta_by_text.get(text) else {
+            continue;
+        };
+        let (Some(chapter_id), Some(page_number)) = (&meta.chapter_id, meta.page_number) else {
+            continue;
+        };
+        if !seen_pages.insert((chapter_id.clone(), page_number)) {
+            continue;
+        }
+        let Some(info) = index_by_id.get(chapter_id.as_str()) else {
+            continue;
+        };
+
+        let file_paths = state
+            .db
+            .list_page_assets(&info.subject_code, &info.medium, info.chapter_number, page_number)
+            .await
+            .unwrap_or_default();
+        if file_paths.is_empty() {
+            continue;
+        }
+
+        groups.push(PageImageGroup {
+            page_number,
+            subject_name: info.subject_name.clone(),
+            chapter_name: info.chapter_name.clone(),
+            image_urls: file_paths
+                .iter()
+                .map(|path| full_image_url(&state.config.app_url, path))
+                .collect(),
+        });
+    }
+
+    groups
 }

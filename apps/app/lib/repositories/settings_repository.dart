@@ -48,4 +48,8 @@ class SettingKeys {
   // server round trip); only the local file path is persisted, and only
   // this device ever renders it.
   static const String profileAvatarPath = 'profile_avatar_path';
+  // Which account's chats/exams/study plans currently occupy the local
+  // content tables — see AuthService._saveSession, which wipes them when a
+  // different account signs in on this device.
+  static const String localDataOwnerUserId = 'local_data_owner_user_id';
 }

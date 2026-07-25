@@ -32,6 +32,10 @@ class ChatAIStreamEvent {
   // must always be able to fall back to rendering `content` as markdown.
   final List<Map<String, dynamic>>? blocks;
   final List<Map<String, dynamic>> sources;
+  // Every real embedded asset for each unique cited page — see
+  // rag::PageImageGroup on the backend. Already deduped by page there;
+  // never anything the model produced itself.
+  final List<Map<String, dynamic>> pageImages;
   final String? speechText;
   // Set instead of a normal answer when the backend wants confirmation
   // before answering from a beta (not-yet-verified) chapter. When true,
@@ -56,6 +60,7 @@ class ChatAIStreamEvent {
     this.chapterName,
     this.blocks,
     this.sources = const [],
+    this.pageImages = const [],
     this.speechText,
     this.needsBetaConfirmation = false,
     this.betaChapterId,
@@ -175,6 +180,7 @@ class ChatAIService {
           final outputTokens = _estimateTokens(content);
           final cost = await _calculateCost(promptEstimate, outputTokens);
           final backendSources = _asMapList(event.data['sources']);
+          final backendPageImages = _asMapList(event.data['pageImages']);
 
           await _usageRepo.insert(
             UsageLog(
@@ -198,6 +204,7 @@ class ChatAIService {
             chapterId: event.data['chapterId'] as String?,
             chapterName: event.data['chapterName'] as String?,
             sources: backendSources ?? const [],
+            pageImages: backendPageImages ?? const [],
           );
           return;
 
@@ -343,6 +350,10 @@ class ChatAIService {
         return AppException.authentication('Sign in again and retry.');
       }
       if (statusCode == 429) {
+        if (data['code'] == 'LIMIT_EXCEEDED') {
+          final resetAt = DateTime.tryParse(data['resetAt']?.toString() ?? '');
+          return AppException.usageLimitExceeded(message, resetAt);
+        }
         return AppException.rateLimit(message);
       }
       if (statusCode >= 500) {

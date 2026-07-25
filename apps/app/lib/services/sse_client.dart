@@ -66,6 +66,8 @@ class SseClient {
       if (streamedResponse.statusCode != 200) {
         String message =
             'The server returned an error (${streamedResponse.statusCode}).';
+        String? code;
+        String? resetAt;
         try {
           final rawBody = await streamedResponse.stream
               .transform(utf8.decoder)
@@ -73,12 +75,15 @@ class SseClient {
               .timeout(connectTimeout);
           final decoded = jsonDecode(rawBody);
           if (decoded is Map<String, dynamic>) {
+            final error = decoded['error'];
             message =
-                (decoded['error'] is Map
-                    ? (decoded['error']['message'] as String?)
-                    : null) ??
+                (error is Map ? error['message'] as String? : null) ??
                 decoded['message'] as String? ??
                 message;
+            if (error is Map) {
+              code = error['code'] as String?;
+              resetAt = error['resetAt'] as String?;
+            }
           }
         } catch (_) {
           // Non-JSON error body — fall back to the generic message.
@@ -89,6 +94,8 @@ class SseClient {
             'message': message,
             'kind': _kindHttpStatus,
             'statusCode': streamedResponse.statusCode,
+            'code': ?code,
+            'resetAt': ?resetAt,
           },
         );
         return;

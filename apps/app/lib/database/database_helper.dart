@@ -17,7 +17,7 @@ class DatabaseHelper {
     final path = join(dbPath, 'right_answer.db');
     return openDatabase(
       path,
-      version: 13,
+      version: 14,
       onCreate: _onCreate,
       onUpgrade: _onUpgrade,
     );
@@ -85,6 +85,12 @@ class DatabaseHelper {
       // split into volumes (e.g. Maths Part 1/Part 2) tag each chapter with
       // its part label; null for subjects with a single textbook.
       await db.execute('ALTER TABLE chapters ADD COLUMN partLabel TEXT');
+    }
+    if (oldVersion < 14) {
+      // Every real embedded asset per unique cited page (see
+      // rag::PageImageGroup) — distinct from the existing `sources` column,
+      // which is one entry per retrieved chunk and can repeat a page.
+      await db.execute('ALTER TABLE chat_messages ADD COLUMN pageImages TEXT');
     }
   }
 
@@ -207,6 +213,7 @@ class DatabaseHelper {
         sourceChunks TEXT,
         blocks TEXT,
         sources TEXT,
+        pageImages TEXT,
         createdAt TEXT NOT NULL,
         FOREIGN KEY (chatId) REFERENCES chats(id) ON DELETE CASCADE
       )
@@ -348,5 +355,28 @@ class DatabaseHelper {
     await db.delete('usage_logs');
     await db.delete('chapters');
     await db.delete('subjects');
+  }
+
+  /// Wipes only the locally-generated, per-account content (chats, exams,
+  /// study plans, queued/saved generations, local usage history) — never
+  /// the shared textbook catalog (subjects/chapters/chunks). Called when a
+  /// *different* account signs in on this device (see AuthService
+  /// _saveSession), so the new session never sees the previous account's
+  /// local data. Whatever the new user owns re-populates from the server
+  /// via the normal pull-missing sync on next launch.
+  Future<void> clearUserContentTables() async {
+    final db = await database;
+    await db.delete('study_tasks');
+    await db.delete('study_days');
+    await db.delete('study_plans');
+    await db.delete('exam_attempts');
+    await db.delete('exam_messages');
+    await db.delete('exam_questions');
+    await db.delete('exams');
+    await db.delete('chat_messages');
+    await db.delete('chats');
+    await db.delete('request_queue');
+    await db.delete('saved_outputs');
+    await db.delete('usage_logs');
   }
 }

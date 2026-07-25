@@ -33,52 +33,55 @@ class _LanguagePickerSheetState extends State<LanguagePickerSheet> {
         .where((language) => language.toLowerCase().contains(query))
         .toList();
 
-    return Container(
-      decoration: BoxDecoration(
-        color: theme.colorScheme.surface,
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
-      ),
-      child: SafeArea(
-        top: false,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: 42,
-                height: 4,
-                decoration: BoxDecoration(
-                  color: theme.dividerColor,
-                  borderRadius: BorderRadius.circular(999),
-                ),
-              ),
-              const SizedBox(height: 18),
-              Align(
-                alignment: Alignment.centerLeft,
-                child: Text(
-                  widget.title,
-                  style: theme.textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w700,
+    // Fixed size regardless of content/result count — this sheet used to
+    // shrink to fit the filtered list (mainAxisSize.min + shrinkWrap),
+    // which made it visibly resize as the user typed a search query.
+    return SizedBox(
+      width: double.infinity,
+      height: 520,
+      child: Container(
+        decoration: BoxDecoration(
+          color: theme.colorScheme.surface,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+        ),
+        child: SafeArea(
+          top: false,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
+            child: Column(
+              children: [
+                Container(
+                  width: 42,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: theme.dividerColor,
+                    borderRadius: BorderRadius.circular(999),
                   ),
                 ),
-              ),
-              const SizedBox(height: 14),
-              TextField(
-                controller: _searchCtrl,
-                onChanged: (_) => setState(() {}),
-                decoration: InputDecoration(
-                  hintText: 'Search language',
-                  prefixIcon: const Icon(Icons.search_rounded),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(16),
+                const SizedBox(height: 18),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    widget.title,
+                    style: theme.textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
                   ),
                 ),
-              ),
-              const SizedBox(height: 14),
-              Flexible(
-                child: ConstrainedBox(
-                  constraints: const BoxConstraints(maxHeight: 420),
+                const SizedBox(height: 14),
+                TextField(
+                  controller: _searchCtrl,
+                  onChanged: (_) => setState(() {}),
+                  decoration: InputDecoration(
+                    hintText: 'Search language',
+                    prefixIcon: const Icon(Icons.search_rounded),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 14),
+                Expanded(
                   child: filtered.isEmpty
                       ? Center(
                           child: Text(
@@ -92,7 +95,6 @@ class _LanguagePickerSheetState extends State<LanguagePickerSheet> {
                           ),
                         )
                       : ListView.separated(
-                          shrinkWrap: true,
                           itemCount: filtered.length,
                           separatorBuilder: (_, _) =>
                               Divider(height: 1, color: theme.dividerColor),
@@ -112,8 +114,8 @@ class _LanguagePickerSheetState extends State<LanguagePickerSheet> {
                           },
                         ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),

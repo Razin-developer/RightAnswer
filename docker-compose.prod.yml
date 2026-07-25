@@ -97,6 +97,11 @@ services:
       LOG_DIR: /app/logs
     volumes:
       - ./logs/api:/app/logs
+      # Read-only: lets the ingest_page_assets binary read the per-page
+      # asset JSON manifests written alongside each textbook's processed
+      # output. Nginx serves the same directory directly from the host for
+      # normal image requests — this mount is only for that one binary.
+      - ./storage:/app/storage:ro
     ports:
       - "127.0.0.1:4000:4000"
     healthcheck:

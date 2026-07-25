@@ -32,9 +32,9 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   static const _slides = [
     _OnboardingSlide(
       icon: Icons.menu_book_rounded,
-      title: 'Study from your chapters',
+      title: 'Your steady SSLC study partner',
       body:
-          'Import textbook pages, split them into searchable chunks, and keep your study material organized by subject and chapter.',
+          'Right Answer knows your Kerala state syllabus textbooks, chapter by chapter — consistent, reliable help whenever you need it.',
       badges: [
         _SlideBadge(icon: Icons.bookmark_rounded, alignment: Alignment(0.9, -0.85)),
         _SlideBadge(icon: Icons.folder_copy_rounded, alignment: Alignment(-0.95, 0.8)),
@@ -42,9 +42,9 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     ),
     _OnboardingSlide(
       icon: Icons.forum_rounded,
-      title: 'Ask with context',
+      title: 'Ask, and get real chapter answers',
       body:
-          'Questions use your selected textbook content first, then the backend handles caching, reranking, and model routing.',
+          'Pick a chapter and ask anything — answers come straight from your actual textbook, not generic guesses.',
       badges: [
         _SlideBadge(icon: Icons.format_quote_rounded, alignment: Alignment(0.95, -0.7)),
         _SlideBadge(icon: Icons.auto_awesome_rounded, alignment: Alignment(-0.9, 0.85)),
@@ -52,19 +52,19 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     ),
     _OnboardingSlide(
       icon: Icons.fact_check_rounded,
-      title: 'Create practice exams',
+      title: 'Practice with real exams',
       body:
-          'Generate MCQs, short answers, fill blanks, and mixed tests from the chapters you are revising.',
+          'Generate MCQs, short answers, fill-in-the-blanks, and mixed tests from the chapters you are revising — then track your attempts.',
       badges: [
         _SlideBadge(icon: Icons.check_circle_rounded, alignment: Alignment(0.9, -0.8)),
         _SlideBadge(icon: Icons.timer_rounded, alignment: Alignment(-0.95, 0.75)),
       ],
     ),
     _OnboardingSlide(
-      icon: Icons.cloud_sync_rounded,
-      title: 'Sync and share',
+      icon: Icons.calendar_month_rounded,
+      title: 'A study plan, made for you',
       body:
-          'Sign in to sync chats, share study sets, and continue across devices with the same backend.',
+          'Get a day-by-day plan built around your exam date — then sync your chats, exams, and plans across devices, and share them with classmates.',
       badges: [
         _SlideBadge(icon: Icons.devices_rounded, alignment: Alignment(0.95, -0.75)),
         _SlideBadge(icon: Icons.link_rounded, alignment: Alignment(-0.9, 0.85)),

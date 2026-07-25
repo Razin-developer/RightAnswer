@@ -33,7 +33,7 @@ use crate::{
     models::{AiAnswer, AiChatRequest, AuthUser, CachedAnswer, Chat, ChatMessage},
     openrouter::AiGateway,
     qdrant::QdrantGateway,
-    rag::{select_contexts, ContextsOutcome},
+    rag::{select_contexts, ContextMeta, ContextsOutcome, OutOfChapter},
 };
 
 #[derive(Clone)]
@@ -361,10 +361,15 @@ async fn change_password(
 
 /// Public plan catalog — pricing/limits come straight from `PlanConfig`
 /// (env-driven), so the client never hardcodes a price that could drift
-/// from what the server actually charges/enforces.
-async fn list_plans(State(state): State<Arc<AppState>>) -> Json<ApiResponse<serde_json::Value>> {
+/// from what the server actually charges/enforces. Pure config formatting
+/// (no DB call), but still marked cacheable: it was reported slow to load
+/// from the app, and since these values only ever change on a redeploy,
+/// there's no reason every screen visit should re-fetch it — a short
+/// max-age lets the client (and any intermediary) skip the round trip on
+/// repeat views within the window.
+async fn list_plans(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let limits = &state.config.plans;
-    ok(json!({
+    let body = json!({
         "plans": [
             {
                 "id": "hobby",
@@ -394,13 +399,11 @@ async fn list_plans(State(state): State<Arc<AppState>>) -> Json<ApiResponse<serd
                 "studyPlans": true,
             },
         ],
-        // Informational only (model names, not per-token pricing) — shown
-        // in the app's Usage settings so users know what's answering them.
-        "models": {
-            "simple": state.config.simple_model,
-            "reasoning": state.config.reasoning_model,
-        },
-    }))
+    });
+    (
+        [(header::CACHE_CONTROL, "public, max-age=300")],
+        ok(body),
+    )
 }
 
 fn plan_limits(config: &Config, plan: &str) -> (f64, f64) {
@@ -468,14 +471,26 @@ async fn usage_me(
 
 #[derive(Deserialize)]
 struct CheckoutRequest {
+    /// "pro" / "scholar" for a plan upgrade, or "credits" for a standalone
+    /// top-up that doesn't change the user's plan tier.
     plan: String,
+    /// Required (and only meaningful) when `plan == "credits"` — how much
+    /// USD credit to buy. Converted to INR at checkout time via
+    /// `currency::usd_to_minor_units` so the displayed charge always
+    /// matches what completing the payment actually grants.
+    #[serde(rename = "creditsUsd")]
+    credits_usd: Option<f64>,
 }
 
-/// Starts a plan purchase — creates a `pending` payment row and returns
-/// the amount to charge. Deliberately provider-agnostic: today only the
-/// mock payment screen's Success/Failure buttons ever complete this (see
-/// `complete_payment`), but the shape (a pending row a separate step
-/// finalizes) is the same one a real gateway webhook would use.
+const MIN_CREDIT_TOPUP_USD: f64 = 0.5;
+const MAX_CREDIT_TOPUP_USD: f64 = 100.0;
+
+/// Starts a plan purchase (or a standalone credit top-up) — creates a
+/// `pending` payment row and returns the amount to charge. Deliberately
+/// provider-agnostic: today only the mock payment screen's Success/Failure
+/// buttons ever complete this (see `complete_payment`), but the shape (a
+/// pending row a separate step finalizes) is the same one a real gateway
+/// webhook would use.
 async fn plans_checkout(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -491,9 +506,22 @@ async fn plans_checkout(
             state.config.plans.scholar_price_inr,
             state.config.plans.scholar_credits_usd,
         ),
+        "credits" => {
+            let requested = body.credits_usd.unwrap_or(0.0);
+            if !(MIN_CREDIT_TOPUP_USD..=MAX_CREDIT_TOPUP_USD).contains(&requested) {
+                return Err(ApiError::BadRequest(format!(
+                    "creditsUsd must be between ${MIN_CREDIT_TOPUP_USD} and ${MAX_CREDIT_TOPUP_USD}"
+                )));
+            }
+            let amount_inr = crate::currency::usd_to_minor_units(
+                requested,
+                crate::currency::Currency::Inr,
+            );
+            (amount_inr, requested)
+        }
         _ => {
             return Err(ApiError::BadRequest(
-                "plan must be \"pro\" or \"scholar\"".into(),
+                "plan must be \"pro\", \"scholar\", or \"credits\"".into(),
             ))
         }
     };
@@ -533,7 +561,11 @@ async fn complete_payment(
         .ok_or_else(|| ApiError::NotFound("Payment not found, or already completed".into()))?;
 
     if payment.status == "success" {
-        state.db.set_user_plan(user.id, &payment.plan).await?;
+        // A standalone credit top-up ("credits") never changes the user's
+        // plan tier — only a real "pro"/"scholar" purchase does.
+        if payment.plan == "pro" || payment.plan == "scholar" {
+            state.db.set_user_plan(user.id, &payment.plan).await?;
+        }
         state.db.add_credits(user.id, payment.credits_usd).await?;
     }
 
@@ -626,21 +658,50 @@ async fn enforce_plan_limits(state: &AppState, user: Option<&AuthUser>) -> Resul
 
     let spent_today = state.db.sum_cost_today(user.id).await?;
     if spent_today >= daily_credit {
-        return Err(ApiError::LimitExceeded(
-            "You've used today's plan credit. Upgrade your plan or try again tomorrow.".into(),
-        ));
+        return Err(ApiError::LimitExceeded {
+            message: "You've used today's plan credit. Upgrade your plan or try again tomorrow."
+                .into(),
+            reset_at: next_utc_midnight(),
+        });
     }
 
     let spent_this_week = state.db.sum_cost_this_week(user.id).await?;
     let credit_balance = state.db.user_credit_balance(user.id).await?;
     if spent_this_week >= weekly_credit + credit_balance {
-        return Err(ApiError::LimitExceeded(
-            "You've used this week's plan credit. Upgrade your plan or wait for the weekly reset."
-                .into(),
-        ));
+        return Err(ApiError::LimitExceeded {
+            message:
+                "You've used this week's plan credit. Upgrade your plan or wait for the weekly reset."
+                    .into(),
+            reset_at: next_utc_week_start(),
+        });
     }
 
     Ok(())
+}
+
+/// Matches `date_trunc('day', now())` rolled forward one day — the moment
+/// `sum_cost_today` starts counting from zero again.
+fn next_utc_midnight() -> chrono::DateTime<chrono::Utc> {
+    let now = chrono::Utc::now();
+    (now + chrono::Duration::days(1))
+        .date_naive()
+        .and_hms_opt(0, 0, 0)
+        .unwrap()
+        .and_utc()
+}
+
+/// Matches `date_trunc('week', now())` rolled forward one week — Postgres'
+/// week starts Monday, same as `chrono::Weekday::Mon`.
+fn next_utc_week_start() -> chrono::DateTime<chrono::Utc> {
+    use chrono::Datelike;
+    let now = chrono::Utc::now();
+    let days_since_monday = now.weekday().num_days_from_monday() as i64;
+    let this_week_start = (now - chrono::Duration::days(days_since_monday))
+        .date_naive()
+        .and_hms_opt(0, 0, 0)
+        .unwrap()
+        .and_utc();
+    this_week_start + chrono::Duration::days(7)
 }
 
 async fn ai_chat(
@@ -782,6 +843,22 @@ async fn ai_chat(
                 )
             })));
         }
+        ContextsOutcome::OutOfChapter(out_of_chapter) => {
+            // Never sent to the AI — a locally-composed answer, same as a
+            // cache hit (see persist_ai_chat below, which still logs the
+            // interaction at zero tokens/cost).
+            let answer = out_of_chapter_answer(&out_of_chapter);
+            persist_ai_chat(&state, user.as_ref(), &body, question, &answer, &ContextMeta::default()).await?;
+            return Ok(ok(json!({
+                "answer": answer,
+                "content": answer.content,
+                "speechText": answer.speech_text,
+                "blocks": answer.blocks,
+                "servedFrom": answer.served_from,
+                "sourceChunks": answer.source_chunks,
+                "sources": answer.sources,
+            })));
+        }
     };
     let answer = state.ai.chat(&body, &selected.sources).await?;
     let subject_id = selected
@@ -842,6 +919,7 @@ async fn ai_chat(
         "servedFrom": answer.served_from,
         "sourceChunks": answer.source_chunks,
         "sources": answer.sources,
+        "pageImages": selected.page_images,
         "subjectId": subject_id,
         "subjectName": subject_name,
         "chapterId": selected.primary_meta.chapter_id,
@@ -1055,6 +1133,17 @@ async fn ai_chat_stream(
                 Sse::new(Box::pin(stream) as BoxedEventStream).keep_alive(KeepAlive::default())
             );
         }
+        ContextsOutcome::OutOfChapter(out_of_chapter) => {
+            // Never sent to the AI — delivered through the same
+            // chunk/done stream shape a cache hit uses (single_shot_stream),
+            // so the client needs no special-case handling for it.
+            let answer = out_of_chapter_answer(&out_of_chapter);
+            persist_ai_chat(&state, user.as_ref(), &body, &question, &answer, &ContextMeta::default()).await?;
+            return Ok(Sse::new(
+                Box::pin(single_shot_stream(answer, ContextMeta::default())) as BoxedEventStream,
+            )
+            .keep_alive(KeepAlive::default()));
+        }
     };
 
     let (model, text_stream) = state.ai.chat_stream(&body, &selected.sources).await?;
@@ -1065,6 +1154,7 @@ async fn ai_chat_stream(
     let stream_user = user.clone();
     let primary_meta = selected.primary_meta.clone();
     let sources = selected.sources.clone();
+    let page_images = selected.page_images.clone();
     let source_chunks: Vec<String> = sources.iter().map(|s| s.text.clone()).collect();
 
     let sse = async_stream::stream! {
@@ -1128,6 +1218,7 @@ async fn ai_chat_stream(
         yield Ok(Event::default().event("done").data(
             json!({
                 "sources": sources,
+                "pageImages": page_images,
                 "subjectId": subject_id,
                 "subjectName": subject_name,
                 "chapterId": primary_meta.chapter_id,
@@ -1139,6 +1230,30 @@ async fn ai_chat_stream(
     };
 
     Ok(Sse::new(Box::pin(sse) as BoxedEventStream).keep_alive(KeepAlive::default()))
+}
+
+/// Locally-composed answer for `ContextsOutcome::OutOfChapter` — never
+/// touches the AI provider, zero tokens/cost.
+fn out_of_chapter_answer(out_of_chapter: &OutOfChapter) -> AiAnswer {
+    let content = format!(
+        "This doesn't look like it's from \"{}\" ({}). It looks more related to \"{}\" ({}) — try selecting that chapter instead, or clear the chapter selection to search your full syllabus.",
+        out_of_chapter.selected_chapter_name,
+        out_of_chapter.selected_subject_name,
+        out_of_chapter.better_chapter_name,
+        out_of_chapter.better_subject_name,
+    );
+    AiAnswer {
+        content,
+        speech_text: None,
+        blocks: None,
+        served_from: "out_of_chapter".into(),
+        model: "none".into(),
+        provider: "none".into(),
+        input_tokens: 0,
+        output_tokens: 0,
+        source_chunks: Vec::new(),
+        sources: Vec::new(),
+    }
 }
 
 fn single_shot_stream(

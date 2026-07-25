@@ -50,21 +50,6 @@ class UsageSnapshot {
   );
 }
 
-/// Which AI models are currently answering questions — informational only,
-/// no per-token pricing shown (see PlansScreen for why: plan cards and the
-/// usage bar deliberately never surface exact dollar figures).
-class ActiveModels {
-  final String simple;
-  final String reasoning;
-
-  const ActiveModels({required this.simple, required this.reasoning});
-
-  factory ActiveModels.fromJson(Map<String, dynamic> j) => ActiveModels(
-    simple: j['simple'] as String? ?? 'default',
-    reasoning: j['reasoning'] as String? ?? 'default',
-  );
-}
-
 /// A plan purchase in progress/completed — mirrors the `payments` table.
 class PlanPayment {
   final String id;
@@ -126,21 +111,23 @@ class PlanInfo {
 class PlansService {
   PlansService._();
 
-  static Future<List<PlanInfo>> listPlans() async {
+  // The plan catalog only ever changes on a redeploy (env-driven pricing),
+  // so re-fetching it every time the Plans screen opens was the actual
+  // source of the "takes too long to view plans" complaint — cache it for
+  // the life of the app session instead of hitting the network each time.
+  static List<PlanInfo>? _cachedPlans;
+
+  static Future<List<PlanInfo>> listPlans({bool forceRefresh = false}) async {
+    if (!forceRefresh && _cachedPlans != null) return _cachedPlans!;
     final data = await ApiService.instance.get('/api/plans');
     final raw = data['plans'];
-    if (raw is! List) return const [];
-    return raw
+    if (raw is! List) return _cachedPlans ?? const [];
+    final plans = raw
         .whereType<Map>()
         .map((m) => PlanInfo.fromJson(m.map((k, v) => MapEntry(k.toString(), v))))
         .toList();
-  }
-
-  static Future<ActiveModels> getActiveModels() async {
-    final data = await ApiService.instance.get('/api/plans');
-    final raw = data['models'];
-    if (raw is! Map) return const ActiveModels(simple: 'default', reasoning: 'default');
-    return ActiveModels.fromJson(raw.map((k, v) => MapEntry(k.toString(), v)));
+    _cachedPlans = plans;
+    return plans;
   }
 
   static Future<UsageSnapshot> getUsage() async {
@@ -148,12 +135,15 @@ class PlansService {
     return UsageSnapshot.fromJson(data);
   }
 
-  /// Starts a purchase for [plan] ("pro" or "scholar"). Returns the pending
-  /// payment record (amount to charge, credits to be granted) for the mock
-  /// payment screen to display before the user taps Success/Failure.
-  static Future<PlanPayment> checkout(String plan) async {
+  /// Starts a purchase for [plan] ("pro" or "scholar"), or a standalone
+  /// credit top-up (`plan: 'credits'`, with [creditsUsd] set). Returns the
+  /// pending payment record (amount to charge, credits to be granted) for
+  /// the mock payment screen to display before the user taps
+  /// Success/Failure.
+  static Future<PlanPayment> checkout(String plan, {double? creditsUsd}) async {
     final data = await ApiService.instance.post('/api/plans/checkout', {
       'plan': plan,
+      'creditsUsd': ?creditsUsd,
     });
     return PlanPayment.fromJson(data['payment'] as Map<String, dynamic>);
   }

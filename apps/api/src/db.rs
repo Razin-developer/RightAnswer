@@ -126,6 +126,34 @@ impl Database {
         Ok(subjects)
     }
 
+    /// Every embedded illustration/table/graph asset for one (subject,
+    /// medium, chapter, page) — see ingest_page_assets binary for how this
+    /// table is populated from the textbook processing pipeline's manifest
+    /// files. Used to render *all* of a cited page's real assets instead
+    /// of the single image_url a matched Qdrant chunk happens to carry.
+    pub async fn list_page_assets(
+        &self,
+        subject_code: &str,
+        medium: &str,
+        chapter_number: i32,
+        page_number: i32,
+    ) -> Result<Vec<String>, sqlx::Error> {
+        sqlx::query_scalar::<_, String>(
+            r#"
+            SELECT file_path FROM page_assets
+            WHERE subject_code = $1 AND medium = $2
+              AND chapter_number = $3 AND page_number = $4
+            ORDER BY asset_type, file_path
+            "#,
+        )
+        .bind(subject_code)
+        .bind(medium)
+        .bind(chapter_number)
+        .bind(page_number)
+        .fetch_all(&self.pool)
+        .await
+    }
+
     pub async fn create_user(
         &self,
         email: &str,

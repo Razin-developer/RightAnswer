@@ -1,11 +1,15 @@
 //! Temporary content-readiness gating.
 //!
 //! Only English-medium content is considered "ready" for general use right
-//! now, with two exceptions: the two Malayalam-language subjects
-//! (malayalam-at/malayalam-bt) are naturally taught in Malayalam, so their
-//! ml-medium chapters are ready too. Hindi/Urdu/Sanskrit/Arabic subjects
-//! aren't ready in either medium yet. Chapter 0 ("Front Matter") is never
-//! real chapter content and is always excluded.
+//! now, with one exception: the two Malayalam-language subjects
+//! (malayalam-at/malayalam-bt) only ever existed as Malayalam-medium
+//! textbooks — there is no separate English-medium edition of a Malayalam
+//! language textbook — so for these two subjects `ml` is the *only* medium
+//! ever enabled, not `en` in addition to it. (Ingestion still has both an
+//! `en` and `ml` TextbookVersion row for these subjects; enabling both
+//! doubled every chapter in the picker.) Hindi/Urdu/Sanskrit/Arabic
+//! subjects aren't ready in either medium yet. Chapter 0 ("Front Matter")
+//! is never real chapter content and is always excluded.
 //!
 //! This is explicitly a "for now" rule (per product decision), not a
 //! permanent architecture choice — when more content is verified, extend
@@ -31,7 +35,6 @@ pub struct ChapterInfo {
     pub subject_id: String,
     pub subject_name: String,
     pub subject_code: String,
-    #[allow(dead_code)]
     pub medium: String,
     /// e.g. "Part 1" / "Part 2" for subjects (Maths, English, ...) whose
     /// textbook is split into multiple physical volumes; None for subjects
@@ -48,7 +51,7 @@ pub fn is_chapter_enabled(subject_code: &str, medium: &str, chapter_number: i32)
         return false;
     }
     if MALAYALAM_LANGUAGE_SUBJECTS.contains(&subject_code) {
-        return medium == "en" || medium == "ml";
+        return medium == "ml";
     }
     medium == "en"
 }

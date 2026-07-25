@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -28,6 +29,7 @@ import '../widgets/chapter_picker.dart';
 import '../widgets/language_picker_sheet.dart';
 import '../widgets/rich_answer_view.dart';
 import '../widgets/voice_input_sheet.dart';
+import 'plans_screen.dart';
 import 'queue_screen.dart';
 import 'saved_outputs_screen.dart';
 import 'settings_screen.dart';
@@ -39,6 +41,24 @@ class ChatScreen extends StatefulWidget {
 
   @override
   State<ChatScreen> createState() => _ChatScreenState();
+}
+
+/// Everything needed to resend the original request once the user answers
+/// an inline beta-chapter prompt.
+class _PendingBetaConfirm {
+  final String chatId;
+  final String text;
+  final String? imagePath;
+  final List<ChatMessage> historyBeforeSend;
+  final String? chapterId;
+
+  const _PendingBetaConfirm({
+    required this.chatId,
+    required this.text,
+    required this.imagePath,
+    required this.historyBeforeSend,
+    required this.chapterId,
+  });
 }
 
 class _ChatScreenState extends State<ChatScreen> {
@@ -59,6 +79,17 @@ class _ChatScreenState extends State<ChatScreen> {
   bool _isRecording = false;
   bool _isTemporary = false;
   bool _didConsumeInitialChat = false;
+
+  // Beta-chapter confirmations render as an inline Yes/No prompt on the
+  // assistant message itself (not a popup dialog) — keyed by the message
+  // id currently waiting on a response.
+  final Map<String, _PendingBetaConfirm> _pendingBeta = {};
+
+  // Set for an assistant message that turned into a "you've hit your plan
+  // limit" notice instead of a real answer — shows an inline Upgrade
+  // button rather than the normal action bar. Value is when the limit
+  // resets (null if the server didn't say).
+  final Map<String, DateTime?> _limitNotices = {};
 
   String? _selectedImagePath;
   String? _selectedResponseLanguage;
@@ -317,6 +348,7 @@ class _ChatScreenState extends State<ChatScreen> {
                       sourceChunks: event.isDone ? event.sourceChunks : null,
                       blocks: event.isDone ? event.blocks : null,
                       sources: event.isDone ? event.sources : null,
+                      pageImages: event.isDone ? event.pageImages : null,
                     )
                   : message,
             )
@@ -359,51 +391,36 @@ class _ChatScreenState extends State<ChatScreen> {
       }
 
       if (betaConfirmationNeeded) {
-        // Drop the empty placeholder — it never received an answer.
-        setState(() {
-          _messages = _messages
-              .where((message) => message.id != assistantMsg.id)
-              .toList();
-          _isGenerating = false;
-          _streamingMessageId = null;
-        });
-        if (!mounted) return;
         final betaLabel = [
           betaChapterName,
           betaSubjectName,
         ].where((v) => v != null && v.isNotEmpty).join(' from ');
-        final confirmed = await _showBetaConfirmationDialog(
-          betaMessage ??
-              '${betaLabel.isEmpty ? 'That content' : '"$betaLabel"'} is still in beta. Do you want the response anyway?',
-        );
-        if (!mounted || confirmed != true || betaChapterId == null) return;
+        final promptText =
+            betaMessage ??
+            '${betaLabel.isEmpty ? 'That content' : '"$betaLabel"'} is still in beta. Do you want the response anyway?';
 
-        final retryAssistantMsg = ChatMessage(
-          id: const Uuid().v4(),
-          chatId: chatId,
-          role: 'assistant',
-          content: '',
-          responseLanguage: assistantMsg.responseLanguage,
-          responseLength: assistantMsg.responseLength,
-          reasoningLevel: assistantMsg.reasoningLevel,
-          tokenCount: 0,
-          cost: 0,
-          createdAt: DateTime.now(),
-        );
+        // Renders as an inline Yes/No prompt on this same message bubble —
+        // not a popup — resolved by _confirmBeta/_declineBeta below.
+        if (!mounted) return;
         setState(() {
-          _messages = [..._messages, retryAssistantMsg];
-          _isGenerating = true;
-          _streamingMessageId = retryAssistantMsg.id;
+          _messages = _messages
+              .map(
+                (message) => message.id == assistantMsg.id
+                    ? message.copyWith(content: promptText)
+                    : message,
+              )
+              .toList();
+          _isGenerating = false;
+          _streamingMessageId = null;
+          _pendingBeta[assistantMsg.id] = _PendingBetaConfirm(
+            chatId: chatId,
+            text: text,
+            imagePath: imagePath,
+            historyBeforeSend: historyBeforeSend,
+            chapterId: betaChapterId,
+          );
         });
         _scrollToBottom();
-        await _runAssistantTurn(
-          chatId: chatId,
-          text: text,
-          imagePath: imagePath,
-          historyBeforeSend: historyBeforeSend,
-          assistantMsg: retryAssistantMsg,
-          confirmBetaChapterId: betaChapterId,
-        );
         return;
       }
 
@@ -457,6 +474,26 @@ class _ChatScreenState extends State<ChatScreen> {
       _scrollToBottom();
     } catch (e) {
       if (!mounted) return;
+      final appError = AppException.from(e);
+      if (appError.type == AppErrorType.usageLimitExceeded) {
+        // Rendered in-chat (reset time + Upgrade button) instead of a
+        // dismiss-and-forget error toast — the user needs to actually act
+        // on this, not just acknowledge it.
+        setState(() {
+          _messages = _messages
+              .map(
+                (message) => message.id == assistantMsg.id
+                    ? message.copyWith(content: appError.message)
+                    : message,
+              )
+              .toList();
+          _isGenerating = false;
+          _streamingMessageId = null;
+          _limitNotices[assistantMsg.id] = appError.resetAt;
+        });
+        _scrollToBottom();
+        return;
+      }
       setState(() {
         _messages = _messages
             .where((message) => message.id != assistantMsg.id)
@@ -468,27 +505,59 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
-  /// Shows the beta-chapter confirmation prompt sent by the backend when
-  /// the best-matching chapter for a question hasn't been fully verified
-  /// yet. Returns true for "Yes, answer anyway", false/null for "No".
-  Future<bool?> _showBetaConfirmationDialog(String message) {
-    return showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Beta chapter'),
-        content: Text(message),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('No'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Yes'),
-          ),
-        ],
-      ),
+  /// User tapped "Yes" on an inline beta-chapter prompt — resend the exact
+  /// same request with confirmBetaChapterId set, in a fresh placeholder.
+  Future<void> _confirmBeta(String promptMessageId) async {
+    final pending = _pendingBeta[promptMessageId];
+    if (pending == null) return;
+    setState(() => _pendingBeta.remove(promptMessageId));
+
+    final retryAssistantMsg = ChatMessage(
+      id: const Uuid().v4(),
+      chatId: pending.chatId,
+      role: 'assistant',
+      content: '',
+      responseLanguage: effectiveResponseLanguage(_selectedResponseLanguage),
+      responseLength: _responseLength,
+      reasoningLevel: _reasoningLevel,
+      tokenCount: 0,
+      cost: 0,
+      createdAt: DateTime.now(),
     );
+    setState(() {
+      _messages = [
+        ..._messages.where((m) => m.id != promptMessageId),
+        retryAssistantMsg,
+      ];
+      _isGenerating = true;
+      _streamingMessageId = retryAssistantMsg.id;
+    });
+    _scrollToBottom();
+    await _runAssistantTurn(
+      chatId: pending.chatId,
+      text: pending.text,
+      imagePath: pending.imagePath,
+      historyBeforeSend: pending.historyBeforeSend,
+      assistantMsg: retryAssistantMsg,
+      confirmBetaChapterId: pending.chapterId,
+    );
+  }
+
+  /// User tapped "No" — drop the prompt, no answer generated for this turn.
+  void _declineBeta(String promptMessageId) {
+    setState(() {
+      _pendingBeta.remove(promptMessageId);
+      _messages = _messages
+          .map(
+            (message) => message.id == promptMessageId
+                ? message.copyWith(
+                    content:
+                        "No problem — ask me something else, or rephrase and I'll check the verified chapters again.",
+                  )
+                : message,
+          )
+          .toList();
+    });
   }
 
   Future<void> _regenerateStreaming(ChatMessage assistantMsg) async {
@@ -545,6 +614,7 @@ class _ChatScreenState extends State<ChatScreen> {
                       sourceChunks: event.isDone ? event.sourceChunks : null,
                       blocks: event.isDone ? event.blocks : null,
                       sources: event.isDone ? event.sources : null,
+                      pageImages: event.isDone ? event.pageImages : null,
                     )
                   : message,
             )
@@ -885,6 +955,30 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
+  /// "Files" in the attachment menu — opens the real OS file browser (not
+  /// the photo-gallery picker "Photos" already covers) so the user can pick
+  /// an image from anywhere in system storage, e.g. Downloads or a synced
+  /// folder. Still image-only: the AI pipeline only understands images,
+  /// not arbitrary document types.
+  Future<void> _pickImageFile() async {
+    try {
+      final result = await FilePicker.platform.pickFiles(
+        type: FileType.image,
+      );
+      final path = result?.files.single.path;
+      if (path != null && mounted) {
+        setState(() => _selectedImagePath = path);
+      }
+    } catch (e) {
+      if (mounted) {
+        AppFeedback.showToast(
+          context,
+          'Could not access file: ${e.toString()}',
+        );
+      }
+    }
+  }
+
   Future<void> _toggleVoice() async => _openVoiceComposer();
 
   void _scrollToBottom() {
@@ -986,7 +1080,7 @@ class _ChatScreenState extends State<ChatScreen> {
         },
         onFiles: () {
           Navigator.pop(context);
-          _pickImage(ImageSource.gallery);
+          _pickImageFile();
         },
         onSolve: () {
           Navigator.pop(context);
@@ -1175,11 +1269,30 @@ class _ChatScreenState extends State<ChatScreen> {
                     itemCount: _messages.length,
                     itemBuilder: (ctx, i) {
                       final msg = _messages[i];
+                      final pendingBeta = _pendingBeta[msg.id];
+                      final isLimitNotice = _limitNotices.containsKey(msg.id);
                       return _MessageBubble(
                         message: msg,
                         isStreaming: msg.id == _streamingMessageId,
                         onCopy: () => _copyText(msg.content),
                         onRead: () => _toggleRead(msg),
+                        onBetaYes: pendingBeta == null
+                            ? null
+                            : () => _confirmBeta(msg.id),
+                        onBetaNo: pendingBeta == null
+                            ? null
+                            : () => _declineBeta(msg.id),
+                        limitResetAt: isLimitNotice
+                            ? _limitNotices[msg.id]
+                            : null,
+                        onUpgrade: isLimitNotice
+                            ? () => Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (_) => const PlansScreen(),
+                                ),
+                              )
+                            : null,
                         onRegenerate: msg.isUser
                             ? null
                             : () => _regenerate(msg),
@@ -1848,6 +1961,17 @@ class _MessageBubble extends StatelessWidget {
   final VoidCallback? onRegenerate;
   final VoidCallback? onFullscreen;
   final VoidCallback? onSources;
+  // Set only for an assistant message currently waiting on an inline
+  // beta-chapter Yes/No response (see _pendingBeta in _ChatScreenState).
+  final VoidCallback? onBetaYes;
+  final VoidCallback? onBetaNo;
+  // Set only for an assistant message that's actually a "plan limit
+  // reached" notice (see _limitNotices in _ChatScreenState). `limitResetAt`
+  // is nullable independent of whether this is a notice — the server may
+  // not always know the reset time — so `onUpgrade` being non-null is what
+  // actually signals "render the notice UI".
+  final DateTime? limitResetAt;
+  final VoidCallback? onUpgrade;
 
   const _MessageBubble({
     required this.message,
@@ -1857,6 +1981,10 @@ class _MessageBubble extends StatelessWidget {
     this.onRegenerate,
     this.onFullscreen,
     this.onSources,
+    this.onBetaYes,
+    this.onBetaNo,
+    this.limitResetAt,
+    this.onUpgrade,
   });
 
   @override
@@ -1876,6 +2004,10 @@ class _MessageBubble extends StatelessWidget {
       onRead: onRead,
       onFullscreen: onFullscreen,
       onSources: onSources,
+      onBetaYes: onBetaYes,
+      onBetaNo: onBetaNo,
+      limitResetAt: limitResetAt,
+      onUpgrade: onUpgrade,
     );
   }
 }
@@ -1937,6 +2069,10 @@ class _AiMessage extends StatelessWidget {
   final VoidCallback onRead;
   final VoidCallback? onFullscreen;
   final VoidCallback? onSources;
+  final VoidCallback? onBetaYes;
+  final VoidCallback? onBetaNo;
+  final DateTime? limitResetAt;
+  final VoidCallback? onUpgrade;
 
   const _AiMessage({
     required this.message,
@@ -1946,14 +2082,21 @@ class _AiMessage extends StatelessWidget {
     required this.onRead,
     this.onFullscreen,
     this.onSources,
+    this.onBetaYes,
+    this.onBetaNo,
+    this.limitResetAt,
+    this.onUpgrade,
   });
 
   @override
   Widget build(BuildContext context) {
     const coral = Color(0xFFCC785C);
+    final isPendingBeta = onBetaYes != null && onBetaNo != null;
+    final isLimitNotice = onUpgrade != null;
 
     final showContent = message.content.trim().isNotEmpty;
-    final showActions = showContent && !isStreaming;
+    final showActions =
+        showContent && !isStreaming && !isPendingBeta && !isLimitNotice;
 
     return Container(
       margin: const EdgeInsets.only(top: 16, bottom: 4),
@@ -2005,8 +2148,43 @@ class _AiMessage extends StatelessWidget {
             )
           else if (isStreaming)
             _DotsIndicator(color: coral),
-          if (showContent && !isStreaming)
-            _SourceImageStrip(sources: message.sources, isDark: isDark),
+          if (isPendingBeta) ...[
+            const SizedBox(height: 12),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                FilledButton(
+                  onPressed: onBetaYes,
+                  style: FilledButton.styleFrom(backgroundColor: coral),
+                  child: const Text('Yes, answer anyway'),
+                ),
+                const SizedBox(width: 10),
+                OutlinedButton(onPressed: onBetaNo, child: const Text('No')),
+              ],
+            ),
+          ],
+          if (isLimitNotice) ...[
+            const SizedBox(height: 8),
+            if (limitResetAt != null)
+              Text(
+                'Resets ${_formatResetTime(limitResetAt!)}',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: (isDark ? Colors.white : Colors.black).withValues(
+                    alpha: 0.55,
+                  ),
+                ),
+              ),
+            const SizedBox(height: 10),
+            FilledButton.icon(
+              onPressed: onUpgrade,
+              style: FilledButton.styleFrom(backgroundColor: coral),
+              icon: const Icon(Icons.rocket_launch_outlined, size: 16),
+              label: const Text('View Plans'),
+            ),
+          ],
+          if (showContent && !isStreaming && !isPendingBeta && !isLimitNotice)
+            _SourceImageStrip(pageImages: message.pageImages, isDark: isDark),
           // While streaming, only "Read" is offered — tapping it starts
           // speaking the partial content immediately instead of making the
           // user wait for generation to finish (Copy/Full/Sources need the
@@ -2090,25 +2268,29 @@ class _SourcePageImage {
 }
 
 class _SourceImageStrip extends StatelessWidget {
-  final List<Map<String, dynamic>> sources;
+  // One entry per unique cited page (already deduped server-side — see
+  // rag::PageImageGroup), each carrying every real embedded asset ingested
+  // for that page, not just whichever single image a matched chunk
+  // happened to point at.
+  final List<Map<String, dynamic>> pageImages;
   final bool isDark;
 
-  const _SourceImageStrip({required this.sources, required this.isDark});
+  const _SourceImageStrip({required this.pageImages, required this.isDark});
 
   @override
   Widget build(BuildContext context) {
     final images = <_SourcePageImage>[];
     final seenUrls = <String>{};
-    for (final source in sources) {
-      final url = source['imageUrl']?.toString();
-      if (url == null || url.isEmpty || !seenUrls.add(url)) continue;
-      final page = source['pageNumber'];
-      images.add(
-        _SourcePageImage(
-          url: url,
-          pageNumber: page is num ? page.toInt() : null,
-        ),
-      );
+    for (final group in pageImages) {
+      final page = group['pageNumber'];
+      final pageNumber = page is num ? page.toInt() : null;
+      final urls = group['imageUrls'];
+      if (urls is! List) continue;
+      for (final rawUrl in urls) {
+        final url = rawUrl?.toString();
+        if (url == null || url.isEmpty || !seenUrls.add(url)) continue;
+        images.add(_SourcePageImage(url: url, pageNumber: pageNumber));
+      }
     }
     if (images.isEmpty) return const SizedBox.shrink();
 
@@ -2424,6 +2606,36 @@ class _DotsIndicatorState extends State<_DotsIndicator>
       ),
     );
   }
+}
+
+/// Formats a plan-limit reset time (server sends UTC) in the user's local
+/// time, e.g. "today at 12:00 AM" / "tomorrow at 12:00 AM" / "Monday at
+/// 12:00 AM" — no intl dependency needed for this one line.
+String _formatResetTime(DateTime resetAtUtc) {
+  final local = resetAtUtc.toLocal();
+  final now = DateTime.now();
+  final today = DateTime(now.year, now.month, now.day);
+  final resetDay = DateTime(local.year, local.month, local.day);
+  final dayDiff = resetDay.difference(today).inDays;
+
+  final hour12 = local.hour % 12 == 0 ? 12 : local.hour % 12;
+  final minute = local.minute.toString().padLeft(2, '0');
+  final period = local.hour < 12 ? 'AM' : 'PM';
+  final time = '$hour12:$minute $period';
+
+  const weekdays = [
+    'Monday',
+    'Tuesday',
+    'Wednesday',
+    'Thursday',
+    'Friday',
+    'Saturday',
+    'Sunday',
+  ];
+
+  if (dayDiff == 0) return 'today at $time';
+  if (dayDiff == 1) return 'tomorrow at $time';
+  return '${weekdays[local.weekday - 1]} at $time';
 }
 
 // ── Empty State ───────────────────────────────────────────────────────────────

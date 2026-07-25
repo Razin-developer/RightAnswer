@@ -1,5 +1,7 @@
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
+import '../database/database_helper.dart';
+import '../repositories/settings_repository.dart';
 import 'api_service.dart';
 
 class AuthUser {
@@ -140,6 +142,20 @@ class AuthService {
   Future<AuthUser> _saveSession(Map<String, dynamic> data) async {
     final token = data['token'] as String;
     final user = AuthUser.fromJson(data['user'] as Map<String, dynamic>);
+
+    // If a *different* account than whatever last used this device signs
+    // in, wipe the local chats/exams/study-plans tables first — otherwise
+    // they're a single shared SQLite database with no per-user scoping,
+    // and the new session would see the previous account's data. Signing
+    // back into the SAME account is a no-op here (nothing wiped, local
+    // cache preserved).
+    final settingsRepo = SettingsRepository();
+    final previousOwnerId = await settingsRepo.get(SettingKeys.localDataOwnerUserId);
+    if (previousOwnerId != null && previousOwnerId != user.id) {
+      await DatabaseHelper.instance.clearUserContentTables();
+    }
+    await settingsRepo.set(SettingKeys.localDataOwnerUserId, user.id);
+
     await _storage.write(key: _tokenKey, value: token);
     await _storage.write(key: _userIdKey, value: user.id);
     await _storage.write(key: _userEmailKey, value: user.email);

@@ -19,6 +19,11 @@ class ChatMessage {
   // chapterName} entries, richer than the plain-text `sourceChunks` above.
   final List<Map<String, dynamic>>? blocks;
   final List<Map<String, dynamic>> sources;
+  // Every real embedded asset per unique cited page — {pageNumber,
+  // subjectName, chapterName, imageUrls: [...]}, already deduped by page
+  // server-side (see rag::PageImageGroup). Distinct from `sources`, which
+  // is one entry per retrieved chunk and can cite the same page twice.
+  final List<Map<String, dynamic>> pageImages;
   final DateTime createdAt;
 
   const ChatMessage({
@@ -35,6 +40,7 @@ class ChatMessage {
     this.sourceChunks = const [],
     this.blocks,
     this.sources = const [],
+    this.pageImages = const [],
     required this.createdAt,
   });
 
@@ -54,6 +60,7 @@ class ChatMessage {
     List<String>? sourceChunks,
     List<Map<String, dynamic>>? blocks,
     List<Map<String, dynamic>>? sources,
+    List<Map<String, dynamic>>? pageImages,
     DateTime? createdAt,
   }) => ChatMessage(
     id: id ?? this.id,
@@ -69,6 +76,7 @@ class ChatMessage {
     sourceChunks: sourceChunks ?? this.sourceChunks,
     blocks: blocks ?? this.blocks,
     sources: sources ?? this.sources,
+    pageImages: pageImages ?? this.pageImages,
     createdAt: createdAt ?? this.createdAt,
   );
 
@@ -86,6 +94,7 @@ class ChatMessage {
     'sourceChunks': sourceChunks.isEmpty ? null : jsonEncode(sourceChunks),
     'blocks': (blocks == null || blocks!.isEmpty) ? null : jsonEncode(blocks),
     'sources': sources.isEmpty ? null : jsonEncode(sources),
+    'pageImages': pageImages.isEmpty ? null : jsonEncode(pageImages),
     'createdAt': createdAt.toIso8601String(),
   };
 
@@ -105,6 +114,7 @@ class ChatMessage {
         : [],
     blocks: _decodeMaps(m['blocks']),
     sources: _decodeMaps(m['sources']) ?? const [],
+    pageImages: _decodeMaps(m['pageImages']) ?? const [],
     createdAt: DateTime.parse(m['createdAt'] as String),
   );
 

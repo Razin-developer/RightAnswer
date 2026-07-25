@@ -2,6 +2,7 @@ mod admin;
 mod auth;
 mod config;
 mod content_policy;
+mod currency;
 mod db;
 mod error;
 mod models;

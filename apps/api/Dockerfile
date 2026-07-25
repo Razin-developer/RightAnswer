@@ -19,6 +19,7 @@ WORKDIR /app
 COPY --from=build /app/apps/api/target/release/right-answer-api /usr/local/bin/right-answer-api
 COPY --from=build /app/apps/api/target/release/migrate_qdrant /usr/local/bin/migrate_qdrant
 COPY --from=build /app/apps/api/target/release/test_ai_providers /usr/local/bin/test_ai_providers
+COPY --from=build /app/apps/api/target/release/ingest_page_assets /usr/local/bin/ingest_page_assets
 ENV PORT=4000
 EXPOSE 4000
 CMD ["right-answer-api"]

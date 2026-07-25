@@ -6,17 +6,24 @@ enum AppErrorType {
   service,
   validation,
   unknown,
+  // The signed-in user's plan credit is exhausted (daily or weekly) — see
+  // ApiError::LimitExceeded on the backend. Distinct from rateLimit (the
+  // request-pacing governor, a transient "slow down" signal): this means
+  // "come back later or upgrade", and carries when that "later" is.
+  usageLimitExceeded,
 }
 
 class AppException implements Exception {
   final AppErrorType type;
   final String title;
   final String message;
+  final DateTime? resetAt;
 
   const AppException({
     required this.type,
     required this.title,
     required this.message,
+    this.resetAt,
   });
 
   factory AppException.configuration(String message) => AppException(
@@ -60,6 +67,14 @@ class AppException implements Exception {
     title: 'Something Went Wrong',
     message: message,
   );
+
+  factory AppException.usageLimitExceeded(String message, DateTime? resetAt) =>
+      AppException(
+        type: AppErrorType.usageLimitExceeded,
+        title: 'Limit Reached',
+        message: message,
+        resetAt: resetAt,
+      );
 
   static AppException from(Object error) {
     if (error is AppException) return error;

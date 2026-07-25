@@ -10,12 +10,14 @@ class PaymentResultScreen extends StatelessWidget {
   final bool success;
   final String planLabel;
   final int amountInr;
+  final bool isCreditsTopUp;
 
   const PaymentResultScreen({
     super.key,
     required this.success,
     required this.planLabel,
     required this.amountInr,
+    this.isCreditsTopUp = false,
   });
 
   @override
@@ -48,7 +50,9 @@ class PaymentResultScreen extends StatelessWidget {
                 const SizedBox(height: 10),
                 Text(
                   success
-                      ? "You're now on the $planLabel plan. Increased limits are active immediately."
+                      ? (isCreditsTopUp
+                            ? 'Your AI credit has been added and is ready to use immediately.'
+                            : "You're now on the $planLabel plan. Increased limits are active immediately.")
                       : 'Your payment of ₹$amountInr for $planLabel could not be completed. No charge was made.',
                   textAlign: TextAlign.center,
                   style: TextStyle(

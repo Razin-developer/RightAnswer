@@ -15,8 +15,16 @@ import 'payment_result_screen.dart';
 class PaymentScreen extends StatefulWidget {
   final String plan;
   final String planLabel;
+  // Only set (and only meaningful) when plan == 'credits' — a standalone
+  // top-up amount rather than a plan-tier price.
+  final double? creditsUsd;
 
-  const PaymentScreen({super.key, required this.plan, required this.planLabel});
+  const PaymentScreen({
+    super.key,
+    required this.plan,
+    required this.planLabel,
+    this.creditsUsd,
+  });
 
   @override
   State<PaymentScreen> createState() => _PaymentScreenState();
@@ -40,7 +48,10 @@ class _PaymentScreenState extends State<PaymentScreen> {
       _error = null;
     });
     try {
-      final payment = await PlansService.checkout(widget.plan);
+      final payment = await PlansService.checkout(
+        widget.plan,
+        creditsUsd: widget.creditsUsd,
+      );
       if (!mounted) return;
       setState(() {
         _payment = payment;
@@ -76,6 +87,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
             success: status == 'success',
             planLabel: widget.planLabel,
             amountInr: payment.amountInr,
+            isCreditsTopUp: widget.plan == 'credits',
           ),
         ),
       );
@@ -127,55 +139,24 @@ class _PaymentScreenState extends State<PaymentScreen> {
                 : Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Container(
-                        width: double.infinity,
-                        padding: const EdgeInsets.all(20),
-                        decoration: BoxDecoration(
-                          color: theme.colorScheme.surface,
-                          borderRadius: BorderRadius.circular(16),
-                          border: Border.all(color: theme.dividerColor),
-                        ),
-                        child: Column(
-                          children: [
-                            Text(
-                              widget.planLabel,
-                              style: theme.textTheme.titleLarge?.copyWith(
-                                fontWeight: FontWeight.w700,
-                              ),
-                            ),
-                            const SizedBox(height: 6),
-                            Text(
-                              '₹${payment?.amountInr ?? 0}',
-                              style: theme.textTheme.headlineMedium?.copyWith(
-                                fontWeight: FontWeight.w800,
-                                color: theme.colorScheme.primary,
-                              ),
-                            ),
-                            const SizedBox(height: 4),
-                            Text(
-                              'Includes a boost of extra AI credit',
-                              style: TextStyle(
-                                fontSize: 12,
-                                color: theme.colorScheme.onSurface.withValues(
-                                  alpha: 0.55,
-                                ),
-                              ),
-                            ),
-                          ],
+                      Text(
+                        '₹${payment?.amountInr ?? 0}',
+                        style: theme.textTheme.headlineMedium?.copyWith(
+                          fontWeight: FontWeight.w800,
+                          color: theme.colorScheme.primary,
                         ),
                       ),
-                      const SizedBox(height: 16),
+                      const SizedBox(height: 6),
                       Text(
-                        'This is a demo checkout — no real payment is collected.',
+                        widget.planLabel,
                         style: TextStyle(
-                          fontSize: 11,
+                          fontSize: 13,
                           color: theme.colorScheme.onSurface.withValues(
-                            alpha: 0.5,
+                            alpha: 0.6,
                           ),
                         ),
-                        textAlign: TextAlign.center,
                       ),
-                      const SizedBox(height: 20),
+                      const SizedBox(height: 32),
                       SizedBox(
                         width: double.infinity,
                         child: FilledButton.icon(
@@ -190,7 +171,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
                                   ),
                                 )
                               : const Icon(Icons.check_circle_outline),
-                          label: const Text('Simulate Success'),
+                          label: const Text('Success'),
                         ),
                       ),
                       const SizedBox(height: 10),
@@ -199,7 +180,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
                         child: OutlinedButton.icon(
                           onPressed: _submitting ? null : () => _finish('failed'),
                           icon: const Icon(Icons.cancel_outlined),
-                          label: const Text('Simulate Failure'),
+                          label: const Text('Failure'),
                         ),
                       ),
                     ],

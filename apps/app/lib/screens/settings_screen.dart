@@ -38,7 +38,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _loading = true;
   bool _syncing = false;
   UsageSnapshot? _usage;
-  ActiveModels? _models;
 
   bool _notifyOnComplete = true;
   bool _notifyOnQueueProcessed = true;
@@ -77,21 +76,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (AuthService.instance.isLoggedIn) _loadUsage();
   }
 
-  /// Best-effort — the usage bar and model line are a soft nudge, not core
-  /// functionality, so a failed fetch here just leaves that section hidden.
+  /// Best-effort — the usage bar is a soft nudge, not core functionality,
+  /// so a failed fetch here just leaves that section hidden.
   Future<void> _loadUsage() async {
     try {
-      final results = await Future.wait([
-        PlansService.getUsage(),
-        PlansService.getActiveModels(),
-      ]);
+      final usage = await PlansService.getUsage();
       if (!mounted) return;
-      setState(() {
-        _usage = results[0] as UsageSnapshot;
-        _models = results[1] as ActiveModels;
-      });
+      setState(() => _usage = usage);
     } catch (_) {
-      // Leave _usage/_models null — the section just won't render.
+      // Leave _usage null — the section just won't render.
     }
   }
 
@@ -403,25 +396,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 _usageBar(theme, "Today's usage", _usage!.dailyPercent),
                 const SizedBox(height: 14),
                 _usageBar(theme, "This week's usage", _usage!.weeklyPercent),
-                if (_models != null) ...[
+                if (_usage!.creditBalanceUsd > 0) ...[
                   const SizedBox(height: 14),
                   Divider(color: theme.dividerColor),
                   const SizedBox(height: 10),
                   Row(
                     children: [
-                      Icon(
-                        Icons.auto_awesome_outlined,
-                        size: 15,
-                        color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          'Answering with ${_models!.simple} · deep reasoning with ${_models!.reasoning}',
-                          style: TextStyle(
-                            fontSize: 11.5,
-                            color: theme.colorScheme.onSurface.withValues(alpha: 0.55),
-                          ),
+                      Text('Credit balance', style: _labelStyle(theme)),
+                      const Spacer(),
+                      Text(
+                        '\$${_usage!.creditBalanceUsd.toStringAsFixed(2)}',
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w700,
+                          color: theme.colorScheme.primary,
                         ),
                       ),
                     ],
