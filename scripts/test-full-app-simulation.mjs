@@ -635,6 +635,8 @@ await step("mock payment upgrades plan to pro", async () => {
   record("mock payment upgrades plan to pro", true);
 });
 
+await sleep(6000);
+
 await step("paying twice for the same pending payment is idempotent (second call is a no-op)", async () => {
   const checkout = await api("POST", "/api/plans/checkout", { plan: "scholar" });
   const paymentId = checkout.json?.data?.payment?.id;
@@ -656,7 +658,7 @@ await step("paying twice for the same pending payment is idempotent (second call
   record("paying twice for the same pending payment is idempotent (second call is a no-op)", true);
 });
 
-await sleep(8000);
+await sleep(10000);
 
 await step("failed mock payment does not change plan", async () => {
   const checkout = await api("POST", "/api/plans/checkout", { plan: "pro" });
