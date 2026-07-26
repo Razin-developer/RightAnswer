@@ -2483,27 +2483,80 @@ class _ImagePreviewScreenState extends State<_ImagePreviewScreen> {
           ),
         ],
       ),
-      body: PageView.builder(
-        controller: _pageCtrl,
-        itemCount: widget.images.length,
-        onPageChanged: (i) => setState(() => _index = i),
-        itemBuilder: (context, index) {
-          return Center(
-            child: InteractiveViewer(
-              minScale: 0.8,
-              maxScale: 4,
-              child: Image.network(
-                widget.images[index].url,
-                fit: BoxFit.contain,
-                errorBuilder: (_, _, _) => const Icon(
-                  Icons.broken_image_outlined,
-                  size: 48,
-                  color: Colors.white38,
+      body: Stack(
+        children: [
+          PageView.builder(
+            controller: _pageCtrl,
+            itemCount: widget.images.length,
+            onPageChanged: (i) => setState(() => _index = i),
+            itemBuilder: (context, index) {
+              return Center(
+                child: InteractiveViewer(
+                  minScale: 0.8,
+                  maxScale: 4,
+                  child: Image.network(
+                    widget.images[index].url,
+                    fit: BoxFit.contain,
+                    errorBuilder: (_, _, _) => const Icon(
+                      Icons.broken_image_outlined,
+                      size: 48,
+                      color: Colors.white38,
+                    ),
+                  ),
                 ),
+              );
+            },
+          ),
+          if (_index > 0)
+            Positioned(
+              left: 4,
+              top: 0,
+              bottom: 0,
+              child: Center(child: _navArrowButton(Icons.chevron_left, _goPrev)),
+            ),
+          if (_index < widget.images.length - 1)
+            Positioned(
+              right: 4,
+              top: 0,
+              bottom: 0,
+              child: Center(
+                child: _navArrowButton(Icons.chevron_right, _goNext),
               ),
             ),
-          );
-        },
+        ],
+      ),
+    );
+  }
+
+  void _goPrev() {
+    if (_index > 0) {
+      _pageCtrl.previousPage(
+        duration: const Duration(milliseconds: 250),
+        curve: Curves.easeOut,
+      );
+    }
+  }
+
+  void _goNext() {
+    if (_index < widget.images.length - 1) {
+      _pageCtrl.nextPage(
+        duration: const Duration(milliseconds: 250),
+        curve: Curves.easeOut,
+      );
+    }
+  }
+
+  Widget _navArrowButton(IconData icon, VoidCallback onTap) {
+    return Material(
+      color: Colors.black.withValues(alpha: 0.35),
+      shape: const CircleBorder(),
+      child: InkWell(
+        customBorder: const CircleBorder(),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.all(8),
+          child: Icon(icon, color: Colors.white, size: 28),
+        ),
       ),
     );
   }

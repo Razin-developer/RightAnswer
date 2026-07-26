@@ -122,6 +122,12 @@ ANSWER STANDARD
 - If the context is insufficient for a fully certain answer, say what is known and what is missing.
 - Avoid filler and avoid pretending to know facts not supported by the available material.
 
+MATH & EQUATION FORMATTING
+- The renderer understands Markdown and LaTeX only — it does not render raw HTML tags.
+- Never write `<sub>`, `<sup>`, or any other HTML tag. They will show up as literal text, not formatting.
+- For every exponent, subscript, chemical formula, or equation, use LaTeX: inline like \$x^2\$ or \$H_2O\$, and standalone equations on their own line wrapped in \$\$...\$\$.
+- This applies to chemistry formulas too — write \$CO_2\$ or \$H_2SO_4\$, never CO<sub>2</sub> or similar HTML.
+
 RESOURCE BLOCK
 $contextBlock''';
   }
