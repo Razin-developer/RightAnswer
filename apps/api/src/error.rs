@@ -9,6 +9,8 @@ pub enum ApiError {
     #[error("{0}")]
     Unauthorized(String),
     #[error("{0}")]
+    Forbidden(String),
+    #[error("{0}")]
     Upstream(String),
     #[error("{0}")]
     NotFound(String),
@@ -45,6 +47,7 @@ impl IntoResponse for ApiError {
         let (status, code) = match &self {
             ApiError::BadRequest(_) => (StatusCode::BAD_REQUEST, "VALIDATION_ERROR"),
             ApiError::Unauthorized(_) => (StatusCode::UNAUTHORIZED, "AUTH_REQUIRED"),
+            ApiError::Forbidden(_) => (StatusCode::FORBIDDEN, "FORBIDDEN"),
             ApiError::Upstream(_) => (StatusCode::BAD_GATEWAY, "UPSTREAM_ERROR"),
             ApiError::NotFound(_) => (StatusCode::NOT_FOUND, "NOT_FOUND"),
             ApiError::LimitExceeded { .. } => (StatusCode::TOO_MANY_REQUESTS, "LIMIT_EXCEEDED"),

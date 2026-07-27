@@ -208,6 +208,7 @@ pub fn api_router(state: Arc<AppState>) -> Router {
         .route("/share/{token}", get(resolve_share))
         .route("/plans", get(list_plans))
         .route("/admin/metrics", get(admin::metrics))
+        .route("/admin/dashboard", get(admin::dashboard_page))
         .merge(auth_routes)
         .merge(authed_auth_routes)
         .merge(ai_routes)

@@ -79,6 +79,7 @@ class ExamAIService {
         if (chapterIds != null && chapterIds.isNotEmpty)
           'chapterIds': chapterIds,
         'confirmBetaChapterId': ?confirmBetaChapterId,
+        'generationTask': true,
       },
       timeout: const Duration(seconds: 120),
     );
@@ -154,6 +155,7 @@ class ExamAIService {
         'max_tokens': 4000,
         'response_format': {'type': 'json_object'},
         'confirmBetaChapterId': ?confirmBetaChapterId,
+        'generationTask': true,
       },
       timeout: const Duration(seconds: 120),
     );
@@ -216,6 +218,7 @@ $currentJson''';
             'response_format': {'type': 'json_object'},
             if (chapterIds != null && chapterIds.isNotEmpty)
               'chapterIds': chapterIds,
+            'generationTask': true,
           },
           timeout: const Duration(seconds: 120),
         );
@@ -319,8 +322,14 @@ $currentExamJson''';
       // Try to extract JSON block if there's surrounding text
       final match = RegExp(r'\{[\s\S]*\}').firstMatch(raw);
       if (match == null) {
+        // Not JSON at all — most likely a plain-English message from the
+        // backend (e.g. the out-of-chapter notice) rather than a genuine
+        // parse failure. Surface it directly instead of a generic error.
+        final trimmed = raw.trim();
         throw AppException.service(
-          'Could not parse exam response. Please try again.',
+          trimmed.isNotEmpty
+              ? trimmed
+              : 'Could not parse exam response. Please try again.',
         );
       }
       try {

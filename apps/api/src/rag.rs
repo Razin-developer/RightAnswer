@@ -144,12 +144,47 @@ pub async fn select_contexts(
             .iter()
             .any(|prefix| lower.starts_with(prefix))
     };
+    let is_generation_task = request.generation_task.unwrap_or(false);
+    // Exam/study-plan generation sends generic, content-free instruction
+    // text against a chapter the user already explicitly picked via a
+    // picker UI (never inferred from free text), so — same reasoning as
+    // WHOLE_CHAPTER_TOOL_PREFIXES above — there's no legitimate "wrong
+    // chapter" reading to bounce on.
+    let skip_out_of_chapter_check = is_whole_chapter_tool || is_generation_task;
+
+    // Generic, content-free requests (the quick-action prefixes above, or
+    // just a short question) have nothing specific for embedding/rerank to
+    // match against. Rather than only exempting the 5 known prefixes from
+    // the out-of-chapter check, derive a real topical search phrase from
+    // the chapter/subject context and use THAT for retrieval instead of
+    // the raw instruction text — this is what actually improves match
+    // quality, not just what avoids the false-positive bounce. Skipped for
+    // generation tasks: those already bypass the gate above, and spending
+    // an extra AI call on every exam/study-plan request isn't worth it.
+    let should_derive_search_query = !is_generation_task
+        && (is_whole_chapter_tool || question.split_whitespace().count() <= 6);
+
+    let search_query = if should_derive_search_query {
+        let chapter_name = request
+            .chapter_names
+            .as_ref()
+            .and_then(|names| names.first())
+            .map(String::as_str);
+        derive_search_query(state, question, chapter_name, request.subject_name.as_deref()).await
+    } else {
+        question.to_string()
+    };
 
     let owned_embedding;
     let embedding = if let Some(embedding) = question_embedding {
-        embedding
+        if should_derive_search_query {
+            owned_embedding = state.ai.embed(&search_query).await.unwrap_or_default().0;
+            &owned_embedding
+        } else {
+            embedding
+        }
     } else {
-        owned_embedding = state.ai.embed(question).await.unwrap_or_default().0;
+        owned_embedding = state.ai.embed(&search_query).await.unwrap_or_default().0;
         &owned_embedding
     };
 
@@ -247,7 +282,7 @@ pub async fn select_contexts(
                 } else if !explicit_chapter_ids.is_empty()
                     && !explicit_chapter_ids.contains(&info.chapter_id)
                     && dominates_enabled_scope
-                    && !is_whole_chapter_tool
+                    && !skip_out_of_chapter_check
                 {
                     // Ready content exists, but not in the chapter the user
                     // scoped to — the selected chapter just doesn't cover
@@ -272,8 +307,64 @@ pub async fn select_contexts(
     }
 
     Ok(ContextsOutcome::Ready(
-        finalize(direct_sources, enabled_scope_results, question, state, &chapter_index).await,
+        finalize(
+            direct_sources,
+            enabled_scope_results,
+            &search_query,
+            state,
+            &chapter_index,
+        )
+        .await,
     ))
+}
+
+/// Derives a topic-rich search phrase for generic, content-free questions
+/// (quick-action instructions, or just a short question) so embedding/
+/// rerank has something real to match against instead of boilerplate
+/// instruction text. Mirrors the minimal `AiChatRequest` pattern used by
+/// `ai_title` (routes.rs) — a short, cheap completion, not the full
+/// tutoring pipeline. Falls back to the original question on any failure;
+/// retrieval must never hard-fail on this step.
+async fn derive_search_query(
+    state: &AppState,
+    question: &str,
+    chapter_name: Option<&str>,
+    subject_name: Option<&str>,
+) -> String {
+    let context = match (chapter_name, subject_name) {
+        (Some(chapter), Some(subject)) => {
+            format!(" The student is viewing the chapter \"{chapter}\" in the subject \"{subject}\".")
+        }
+        (Some(chapter), None) => format!(" The student is viewing the chapter \"{chapter}\"."),
+        (None, Some(subject)) => format!(" The student is studying \"{subject}\"."),
+        (None, None) => String::new(),
+    };
+    let system_prompt = format!(
+        "You turn a student's request into a search phrase for finding the right textbook \
+         passage.{context} Reply with ONLY a short, specific search phrase (5-15 words) \
+         naming the actual topics/concepts the request is asking about — no preamble, no \
+         quotes. If the request is generic (asking for a summary, key points, learning \
+         objectives, or similar whole-chapter instruction with no topic of its own) name the \
+         chapter's own subject matter instead of repeating the generic instruction."
+    );
+    let request = AiChatRequest {
+        question: Some(question.to_string()),
+        system_prompt: Some(system_prompt),
+        max_tokens: Some(40),
+        temperature: Some(0.2),
+        ..Default::default()
+    };
+    match state.ai.chat(&request, &[]).await {
+        Ok(answer) => {
+            let derived = answer.content.trim();
+            if derived.is_empty() {
+                question.to_string()
+            } else {
+                derived.to_string()
+            }
+        }
+        Err(_) => question.to_string(),
+    }
 }
 
 async fn finalize(

@@ -192,8 +192,46 @@ class _MarkdownAnswer extends StatelessWidget {
         height: 1.65,
         color: isDark ? const Color(0xFFFAF9F5) : const Color(0xFF141413),
       ),
-      child: GptMarkdown(_stripImageSyntax(content)),
+      child: GptMarkdown(_sanitizeHtmlMath(_stripImageSyntax(content))),
     );
+  }
+
+  /// Defensive backstop: the system prompt tells the model to use LaTeX
+  /// (`$x^2$`) instead of raw HTML for exponents/subscripts/chemical
+  /// formulas, but a model can still slip and emit `<sub>`/`<sup>` — the
+  /// renderer understands Markdown/LaTeX only, so those tags would
+  /// otherwise show up as literal text. Converts the common case (digits,
+  /// e.g. `CO<sub>2</sub>`, `x<sup>2</sup>`) to Unicode subscript/
+  /// superscript characters, and otherwise just strips the tags, keeping
+  /// the inner text — never worse than showing the raw tag.
+  static String _sanitizeHtmlMath(String markdown) {
+    const subscriptDigits = {
+      '0': '₀', '1': '₁', '2': '₂', '3': '₃', '4': '₄',
+      '5': '₅', '6': '₆', '7': '₇', '8': '₈', '9': '₉',
+      '+': '₊', '-': '₋', '=': '₌', '(': '₍', ')': '₎',
+    };
+    const superscriptDigits = {
+      '0': '⁰', '1': '¹', '2': '²', '3': '³', '4': '⁴',
+      '5': '⁵', '6': '⁶', '7': '⁷', '8': '⁸', '9': '⁹',
+      '+': '⁺', '-': '⁻', '=': '⁼', '(': '⁽', ')': '⁾',
+    };
+    String convert(String input, Map<String, String> table) {
+      final buffer = StringBuffer();
+      for (final char in input.split('')) {
+        buffer.write(table[char] ?? char);
+      }
+      return buffer.toString();
+    }
+
+    var result = markdown.replaceAllMapped(
+      RegExp(r'<sub>(.*?)</sub>', caseSensitive: false, dotAll: true),
+      (match) => convert(match.group(1) ?? '', subscriptDigits),
+    );
+    result = result.replaceAllMapped(
+      RegExp(r'<sup>(.*?)</sup>', caseSensitive: false, dotAll: true),
+      (match) => convert(match.group(1) ?? '', superscriptDigits),
+    );
+    return result;
   }
 
   /// The model has no real image URLs — any `![alt](url)` it writes into

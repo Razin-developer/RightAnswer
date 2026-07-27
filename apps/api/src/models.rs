@@ -166,6 +166,14 @@ pub struct AiChatRequest {
     /// Set when the client is re-sending a request after the user tapped
     /// "Yes" on the beta-chapter confirmation prompt (see rag::select_contexts).
     pub confirm_beta_chapter_id: Option<String>,
+    /// Set by exam/study-plan generation, never by chat. These send generic,
+    /// content-free instruction text ("Generate 5 questions.") against a
+    /// chapter the user already explicitly picked via a picker UI — unlike
+    /// free-text chat there's no legitimate "wrong chapter" reading to guard
+    /// against, so this skips rag::select_contexts's out-of-chapter bounce
+    /// the same way WHOLE_CHAPTER_TOOL_PREFIXES already does for quick
+    /// actions (the beta-gate/NeedsBetaConfirmation check is unaffected).
+    pub generation_task: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize)]

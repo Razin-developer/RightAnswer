@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import '../database/database_helper.dart';
@@ -47,15 +49,23 @@ class AuthService {
   AuthUser? get currentUser => _currentUser;
   bool get isLoggedIn => _currentUser != null;
 
+  /// Must never block app startup on a network round trip — a cached
+  /// session (if any) is used immediately so `runApp()` isn't held up by a
+  /// slow/flaky `/api/auth/me` call, and the real session is
+  /// revalidated/refreshed in the background afterward via [refreshUser].
+  /// Only falls back to actually awaiting the network when there's a token
+  /// but no cached user at all (fresh install after logging in elsewhere,
+  /// or the cache was cleared) — in that case there's nothing else to show.
   Future<void> init() async {
     final token = await _storage.read(key: _tokenKey);
     if (token == null) return;
-    try {
-      final data = await ApiService.instance.get('/api/auth/me');
-      _currentUser = AuthUser.fromJson(data['user'] as Map<String, dynamic>);
-    } catch (_) {
-      _currentUser = await _readCachedUser();
+    final cached = await _readCachedUser();
+    if (cached != null) {
+      _currentUser = cached;
+      unawaited(refreshUser());
+      return;
     }
+    await refreshUser();
   }
 
   Future<String?> getToken() => _storage.read(key: _tokenKey);
@@ -116,7 +126,8 @@ class AuthService {
     });
   }
 
-  /// Re-fetches the session user from the server — used after a plan
+  /// Re-fetches the session user from the server — used both as the
+  /// background revalidation kicked off by [init] and after a plan
   /// purchase completes so [currentUser] reflects the new plan without
   /// requiring the user to log out/in. Returns the cached user unchanged
   /// on failure (offline, server hiccup) rather than throwing, since

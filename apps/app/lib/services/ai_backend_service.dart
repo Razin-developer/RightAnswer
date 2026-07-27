@@ -258,6 +258,12 @@ class AIBackendService {
         'chapterIds': (payload['chapterIds'] as List)
             .map((e) => e.toString())
             .toList(),
+      // Exam/study-plan generation only — tells the backend this is a
+      // generation task, not free-text chat, so it skips the out-of-chapter
+      // relevance bounce (generic instruction text like "Generate 5
+      // questions." has no topical content to check against a chapter the
+      // user already explicitly picked via a picker UI).
+      if (payload['generationTask'] == true) 'generationTask': true,
     };
   }
 

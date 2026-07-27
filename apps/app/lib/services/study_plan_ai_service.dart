@@ -144,6 +144,7 @@ Return ONLY valid JSON — no markdown, no explanation:
         if (chapterIds != null && chapterIds.isNotEmpty)
           'chapterIds': chapterIds,
         'confirmBetaChapterId': ?confirmBetaChapterId,
+        'generationTask': true,
       },
       timeout: const Duration(seconds: 120),
     );
@@ -197,6 +198,7 @@ ${_draftToJson(current)}''';
         'max_tokens': 6000,
         'response_format': {'type': 'json_object'},
         'confirmBetaChapterId': ?confirmBetaChapterId,
+        'generationTask': true,
       },
       timeout: const Duration(seconds: 120),
     );
@@ -251,6 +253,7 @@ ${_draftToJson(current)}''';
             'response_format': {'type': 'json_object'},
             if (chapterIds != null && chapterIds.isNotEmpty)
               'chapterIds': chapterIds,
+            'generationTask': true,
           },
           timeout: const Duration(seconds: 120),
         );
@@ -274,8 +277,14 @@ ${_draftToJson(current)}''';
     } catch (_) {
       final m = RegExp(r'\{[\s\S]*\}').firstMatch(raw);
       if (m == null) {
+        // Not JSON at all — most likely a plain-English message from the
+        // backend (e.g. the out-of-chapter notice) rather than a genuine
+        // parse failure. Surface it directly instead of a generic error.
+        final trimmed = raw.trim();
         throw AppException.service(
-          'Could not parse study plan. Please try again.',
+          trimmed.isNotEmpty
+              ? trimmed
+              : 'Could not parse study plan. Please try again.',
         );
       }
       json = jsonDecode(m.group(0)!) as Map<String, dynamic>;
