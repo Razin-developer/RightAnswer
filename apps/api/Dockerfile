@@ -4,6 +4,7 @@ COPY apps/api/Cargo.toml apps/api/Cargo.toml
 COPY apps/api/Cargo.lock apps/api/Cargo.lock
 COPY apps/api/src apps/api/src
 COPY apps/api/migrations apps/api/migrations
+COPY apps/api/static apps/api/static
 WORKDIR /app/apps/api
 # Single job, not cargo's default (num_cpus=2) — the VPS this builds on
 # has only 2GB RAM shared with 5 other running containers (postgres,
